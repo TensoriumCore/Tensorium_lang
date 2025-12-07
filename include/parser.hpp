@@ -1,0 +1,345 @@
+#pragma once
+#include "ast.hpp"
+#include "lexer.hpp"
+#include "tokens.hpp"
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include "semantics/indexed_ast.hpp"
+
+class Parser {
+  Lexer &lex;
+  Token cur;
+
+  void advance() { cur = lex.next(); }
+
+  [[noreturn]] void syntaxError(const std::string &msg) {
+    throw std::runtime_error(
+        "Syntax error at line " + std::to_string(cur.line) + ", col " +
+        std::to_string(cur.column) + ": " + msg + " (got '" + cur.text + "')");
+  }
+
+  void expect(TokenType type) {
+    if (cur.type != type) {
+      syntaxError("expected token type " + std::to_string((int)type));
+    }
+    advance();
+  }
+
+  std::unique_ptr<Expr> parseExpr() { return parseAddExpr(); }
+
+  std::unique_ptr<Expr> parseAddExpr() {
+    auto left = parseMulExpr();
+    while (cur.type == TokenType::Plus || cur.type == TokenType::Minus) {
+      char op = cur.text[0];
+      advance();
+      auto right = parseMulExpr();
+      left =
+          std::make_unique<BinaryExpr>(std::move(left), op, std::move(right));
+    }
+    return left;
+  }
+
+  std::unique_ptr<Expr> parseMulExpr() {
+    auto left = parsePowExpr();
+    while (cur.type == TokenType::Star || cur.type == TokenType::Slash) {
+      char op = cur.text[0];
+      advance();
+      auto right = parsePowExpr();
+      left =
+          std::make_unique<BinaryExpr>(std::move(left), op, std::move(right));
+    }
+    return left;
+  }
+
+  std::unique_ptr<Expr> parsePowExpr() {
+    auto base = parseUnaryExpr();
+    if (cur.type == TokenType::Caret) {
+      advance();
+      auto exponent = parsePowExpr(); 
+      return std::make_unique<BinaryExpr>(std::move(base), '^',
+                                          std::move(exponent));
+    }
+    return base;
+  }
+
+  std::unique_ptr<Expr> parseUnaryExpr() {
+    if (cur.type == TokenType::Plus) {
+      advance();
+      return parseUnaryExpr();
+    }
+    if (cur.type == TokenType::Minus) {
+      advance();
+      auto inner = parseUnaryExpr();
+      return std::make_unique<BinaryExpr>(std::make_unique<NumberExpr>(0.0),
+                                          '-', std::move(inner));
+    }
+    return parsePrimary();
+  }
+
+  std::unique_ptr<Expr> parsePrimary() {
+    if (cur.type == TokenType::Number) {
+      double value = std::stod(cur.text);
+      advance();
+      return std::make_unique<NumberExpr>(value);
+    }
+
+    if (cur.type == TokenType::Identifier) {
+      std::string name = cur.text;
+      advance();
+
+      if (cur.type == TokenType::LParen) {
+        advance();
+        auto args = parseExprList();
+        expect(TokenType::RParen);
+
+        auto call = std::make_unique<CallExpr>();
+        call->callee = name;
+        call->args = std::move(args);
+        return call;
+      }
+
+      if (cur.type == TokenType::LBracket) {
+        advance();
+        std::vector<std::string> idx;
+
+        while (cur.type == TokenType::Identifier) {
+          idx.push_back(cur.text);
+          advance();
+          if (cur.type == TokenType::Comma) {
+            advance();
+            continue;
+          }
+          break;
+        }
+
+        expect(TokenType::RBracket);
+
+        return std::make_unique<IndexedVarExpr>(name, std::move(idx));
+      }
+
+      return std::make_unique<VarExpr>(name);
+    }
+
+    if (cur.type == TokenType::LParen) {
+      advance();
+      auto e = parseExpr();
+      expect(TokenType::RParen);
+      return std::make_unique<ParenExpr>(std::move(e));
+    }
+
+    syntaxError("unexpected token in expression");
+  }
+
+  std::vector<std::unique_ptr<Expr>> parseExprList() {
+    std::vector<std::unique_ptr<Expr>> list;
+
+    if (cur.type == TokenType::RParen)
+      return list;
+
+    list.push_back(parseExpr());
+    while (cur.type == TokenType::Comma) {
+      advance();
+      list.push_back(parseExpr());
+    }
+    return list;
+  }
+
+  TensorAccess parseLHS() {
+    TensorAccess lhs;
+
+    if (cur.type != TokenType::Identifier)
+      syntaxError("expected identifier on LHS");
+
+    lhs.base = cur.text;
+    advance();
+
+    if (cur.type == TokenType::LParen) {
+      advance();
+      while (cur.type == TokenType::Identifier) {
+        lhs.indices.push_back(cur.text);
+        advance();
+        if (cur.type == TokenType::Comma)
+          advance();
+        else
+          break;
+      }
+      expect(TokenType::RParen);
+    }
+
+    return lhs;
+  }
+
+  Assignment parseAssignment() {
+    Assignment a;
+    a.lhs = parseLHS();
+    expect(TokenType::Equals);
+    a.rhs = parseExpr();
+    return a;
+  }
+
+  FieldDecl parseFieldDecl() {
+    expect(TokenType::KwField);
+
+    TensorKind kind;
+    if (cur.type == TokenType::KwScalar) {
+      kind = TensorKind::Scalar;
+      advance();
+    } else if (cur.type == TokenType::KwVector) {
+      kind = TensorKind::Vector;
+      advance();
+    } else if (cur.type == TokenType::KwTensor2) {
+      kind = TensorKind::Tensor2;
+      advance();
+    } else {
+      syntaxError("expected 'scalar', 'vector' or 'tensor2' after 'field'");
+    }
+
+    if (cur.type != TokenType::Identifier)
+      syntaxError("expected field name after kind");
+
+    FieldDecl f;
+    f.kind = kind;
+    f.name = cur.text;
+    advance();
+
+    if (cur.type == TokenType::LBracket) {
+      advance();
+      while (cur.type == TokenType::Identifier) {
+        f.indices.push_back(cur.text);
+        advance();
+        if (cur.type == TokenType::Comma) {
+          advance();
+          continue;
+        } else {
+          break;
+        }
+      }
+      expect(TokenType::RBracket);
+    }
+
+    return f;
+  }
+
+  MetricDecl parseMetric() {
+    if (cur.type != TokenType::KwMetric)
+      syntaxError("expected 'metric' keyword");
+
+    advance();
+
+    if (cur.type != TokenType::Identifier)
+      syntaxError("expected metric name");
+
+    MetricDecl decl;
+    decl.name = cur.text;
+    advance();
+
+    expect(TokenType::LParen);
+
+    while (cur.type == TokenType::Identifier) {
+      decl.indices.push_back(cur.text);
+      advance();
+      if (cur.type == TokenType::Comma)
+        advance();
+      else
+        break;
+    }
+
+    expect(TokenType::RParen);
+    expect(TokenType::LBrace);
+
+    while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+      if (cur.type == TokenType::Identifier) {
+        decl.entries.push_back(parseAssignment());
+      } else {
+        syntaxError("unexpected token in metric body");
+      }
+    }
+
+    expect(TokenType::RBrace);
+    return decl;
+  }
+
+  EvolutionEq parseEvolutionEq() {
+    if (cur.type != TokenType::KwDt)
+      syntaxError("expected 'dt' at start of evolution equation");
+    advance();
+
+    if (cur.type != TokenType::Identifier)
+      syntaxError("expected field name after 'dt'");
+
+    EvolutionEq eq;
+    eq.fieldName = cur.text;
+    advance();
+
+    if (cur.type == TokenType::LBracket) {
+      advance();
+      while (cur.type == TokenType::Identifier) {
+        eq.indices.push_back(cur.text);
+        advance();
+        if (cur.type == TokenType::Comma) {
+          advance();
+          continue;
+        } else {
+          break;
+        }
+      }
+      expect(TokenType::RBracket);
+    }
+
+    expect(TokenType::Equals);
+    eq.rhs = parseExpr();
+    return eq;
+  }
+
+  EvolutionDecl parseEvolution() {
+    expect(TokenType::KwEvolution);
+
+    if (cur.type != TokenType::Identifier)
+      syntaxError("expected evolution name (e.g. BSSN)");
+
+    EvolutionDecl evo;
+    evo.name = cur.text;
+    advance();
+
+    expect(TokenType::LBrace);
+
+    while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+      if (cur.type == TokenType::KwDt) {
+        evo.equations.push_back(parseEvolutionEq());
+      } else {
+        syntaxError("expected 'dt' inside evolution block");
+      }
+    }
+
+    expect(TokenType::RBrace);
+    return evo;
+  }
+
+public:
+  explicit Parser(Lexer &l) : lex(l) { advance(); }
+
+  Program parseProgram() {
+    Program prog;
+
+    while (cur.type != TokenType::End) {
+      if (cur.type == TokenType::KwField) {
+        prog.fields.push_back(parseFieldDecl());
+        continue;
+      }
+      if (cur.type == TokenType::KwMetric) {
+        prog.metrics.push_back(parseMetric());
+        continue;
+      }
+      if (cur.type == TokenType::KwEvolution) {
+        prog.evolutions.push_back(parseEvolution());
+        continue;
+      }
+
+      syntaxError("unexpected token at top-level");
+    }
+
+    return prog;
+  }
+};
