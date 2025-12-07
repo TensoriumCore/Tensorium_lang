@@ -21,10 +21,9 @@ public:
     if (!e)
       throw std::runtime_error("null expression in tensor type inference");
 
-    // contract(...) est une boîte noire : on ne regarde PAS l'intérieur
     if (auto call = dynamic_cast<const IndexedCall *>(e)) {
       if (call->callee == "contract") {
-        return TensorType{0, 0}; // pour l'instant: scalaire
+        return TensorType{0, 0}; 
       }
     }
 
@@ -79,7 +78,6 @@ public:
     }
 
     if (auto call = dynamic_cast<const IndexedCall *>(e)) {
-      // Tous les autres appels (non-contract) exigent des scalaires en argument
       for (auto &arg : call->args) {
         TensorType t = infer(arg.get());
         if (!t.isScalar())

@@ -237,7 +237,6 @@ class Parser {
       expect(TokenType::RBracket);
     }
 
-    // NEW: consume optional line break / semicolon-like behavior
     while (cur.type == TokenType::Unknown || cur.text == "\n")
       advance();
 

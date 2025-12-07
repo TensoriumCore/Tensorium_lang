@@ -5,10 +5,11 @@
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
-#include <vector>
 #include <unordered_set>
+#include <vector>
 
-static const std::unordered_set<std::string> SPATIAL_INDICES = {"i", "j", "k", "l", "m", "n"};
+static const std::unordered_set<std::string> SPATIAL_INDICES = {"i", "j", "k",
+                                                                "l", "m", "n"};
 
 class SemanticAnalyzer {
   const Program &prog;
@@ -22,15 +23,12 @@ class SemanticAnalyzer {
 
   void validateSpatialIndex(const std::string &idx) {
     if (!SPATIAL_INDICES.count(idx)) {
-      throw std::runtime_error(
-          "Invalid tensor index '" + idx + "'. Allowed: {i, j, k, l, m, n}.");
+      throw std::runtime_error("Invalid tensor index '" + idx +
+                               "'. Allowed: {i, j, k, l, m, n}.");
     }
   }
 
   int resolveIndex(const std::string &name) {
-    // 🔥 NEW: validate
-    validateSpatialIndex(name);
-
     auto it = coordIndex.find(name);
     if (it == coordIndex.end())
       throw std::runtime_error("Unknown tensor index: " + name);
@@ -43,7 +41,8 @@ class SemanticAnalyzer {
 
     if (auto v = dynamic_cast<const VarExpr *>(e)) {
       if (auto it = coordIndex.find(v->name); it != coordIndex.end()) {
-        auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Coordinate);
+        auto iv =
+            std::make_unique<IndexedVar>(v->name, IndexedVarKind::Coordinate);
         iv->coordIndex = it->second;
         iv->tensorKind = TensorKind::Scalar;
         return iv;
@@ -64,13 +63,15 @@ class SemanticAnalyzer {
         return iv;
       }
 
-      auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Parameter);
+      auto iv =
+          std::make_unique<IndexedVar>(v->name, IndexedVarKind::Parameter);
       iv->tensorKind = TensorKind::Scalar;
       return iv;
     }
 
     if (auto b = dynamic_cast<const BinaryExpr *>(e))
-      return std::make_unique<IndexedBinary>(b->op, transformExpr(b->lhs.get()), transformExpr(b->rhs.get()));
+      return std::make_unique<IndexedBinary>(b->op, transformExpr(b->lhs.get()),
+                                             transformExpr(b->rhs.get()));
 
     if (auto p = dynamic_cast<const ParenExpr *>(e))
       return transformExpr(p->inner.get());
@@ -84,9 +85,9 @@ class SemanticAnalyzer {
       size_t expected = static_cast<size_t>(fd->up + fd->down);
 
       if (iv->indices.size() != expected)
-        throw std::runtime_error(
-            "Tensor '" + iv->base + "' expects " + std::to_string(expected) +
-            " indices, got " + std::to_string(iv->indices.size()));
+        throw std::runtime_error("Tensor '" + iv->base + "' expects " +
+                                 std::to_string(expected) + " indices, got " +
+                                 std::to_string(iv->indices.size()));
 
       auto out = std::make_unique<IndexedVar>(iv->base, IndexedVarKind::Field);
       out->tensorKind = fd->kind;
@@ -94,6 +95,12 @@ class SemanticAnalyzer {
       out->down = fd->down;
 
       for (auto &idx : iv->indices) {
+
+        if (!coordIndex.count(idx)) {
+          validateSpatialIndex(idx);
+          coordIndex[idx] = -2; 
+        }
+
         int off = resolveIndex(idx);
         out->tensorIndices.push_back(off);
         out->tensorIndexNames.push_back(idx);
@@ -110,11 +117,10 @@ class SemanticAnalyzer {
       return out;
     }
 
-    throw std::runtime_error("Unsupported expr type in semantic analysis");
+    throw std::runtime_error("Unsupported expr in semantic analyzer");
   }
 
 public:
-
   explicit SemanticAnalyzer(const Program &p) : prog(p) {
     for (const auto &f : prog.fields) {
       if (fields.count(f.name))
@@ -182,11 +188,23 @@ public:
     out.name = evo.name;
 
     for (const auto &eq : evo.equations)
-      for (const auto &idx : eq.indices)
+      for (const auto &idx : eq.indices) {
+        validateSpatialIndex(idx);
         coordIndex[idx] = -1;
+      }
 
-    for (const auto &tmp : evo.tempAssignments)
+    for (const auto &tmp : evo.tempAssignments) {
+      if (!tmp.lhs.indices.empty()) {
+        continue;
+      }
+
+      if (fields.count(tmp.lhs.base)) {
+        throw std::runtime_error("Cannot redeclare field '" + tmp.lhs.base +
+                                 "' as local");
+      }
+
       locals[tmp.lhs.base] = true;
+    }
 
     TensorTypeChecker checker;
 
@@ -209,7 +227,8 @@ public:
       indexUseCount.clear();
       lhsIndices.clear();
 
-      for (auto &idx : eq.indices) lhsIndices.insert(idx);
+      for (auto &idx : eq.indices)
+        lhsIndices.insert(idx);
 
       IndexedEvolutionEq ie;
       ie.fieldName = eq.fieldName;
@@ -217,19 +236,19 @@ public:
       ie.rhs = transformExpr(eq.rhs.get());
 
       struct IndexCollector {
-        std::unordered_map<std::string,int> &counter;
-        IndexCollector(std::unordered_map<std::string,int> &c) : counter(c) {}
+        std::unordered_map<std::string, int> &counter;
+        IndexCollector(std::unordered_map<std::string, int> &c) : counter(c) {}
 
         void walk(const IndexedExpr *expr) {
-          if (auto v = dynamic_cast<const IndexedVar*>(expr)) {
+          if (auto v = dynamic_cast<const IndexedVar *>(expr)) {
             for (auto &idx : v->tensorIndexNames)
               counter[idx]++;
           }
-          if (auto b = dynamic_cast<const IndexedBinary*>(expr)) {
+          if (auto b = dynamic_cast<const IndexedBinary *>(expr)) {
             walk(b->lhs.get());
             walk(b->rhs.get());
           }
-          if (auto c = dynamic_cast<const IndexedCall*>(expr)) {
+          if (auto c = dynamic_cast<const IndexedCall *>(expr)) {
             for (auto &arg : c->args)
               walk(arg.get());
           }
@@ -239,18 +258,18 @@ public:
       IndexCollector collector(indexUseCount);
       collector.walk(ie.rhs.get());
 
-      for (auto &[idx,count] : indexUseCount) {
+      for (auto &[idx, count] : indexUseCount) {
         validateSpatialIndex(idx);
 
         if (count == 1 && !lhsIndices.count(idx)) {
-          throw std::runtime_error(
-              "Free index '" + idx + "' appears only in RHS and not LHS.");
+          throw std::runtime_error("Free index '" + idx +
+                                   "' appears only in RHS and not LHS.");
         }
 
         if (count > 2) {
-          throw std::runtime_error(
-              "Ambiguous contraction: index '" + idx +
-              "' appears " + std::to_string(count) + " times.");
+          throw std::runtime_error("Ambiguous contraction: index '" + idx +
+                                   "' appears " + std::to_string(count) +
+                                   " times.");
         }
       }
 

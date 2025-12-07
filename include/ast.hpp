@@ -5,8 +5,8 @@
 
 enum class TensorKind {
   Scalar,
-  Vector,   // contravariant 1-tensor
-  Covector, // covariant 1-tensor
+  Vector,
+  Covector,
   CovTensor2,
   ConTensor2,
   MixedTensor

@@ -49,7 +49,6 @@ static void printIndexedExpr(const IndexedExpr *e) {
       break;
     }
 
-    // print tensor variance if relevant
     if (v->up > 0 || v->down > 0) {
       std::cout << ", tensor(up=" << v->up << ",down=" << v->down << ")";
     }
@@ -59,11 +58,7 @@ static void printIndexedExpr(const IndexedExpr *e) {
   }
 
   if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
-    std::cout << "(";
-    printIndexedExpr(b->lhs.get());
-    std::cout << " " << b->op << " ";
-    printIndexedExpr(b->rhs.get());
-    std::cout << ")";
+    printIndexedBinary(b);
     return;
   }
 
