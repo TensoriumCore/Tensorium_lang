@@ -1,12 +1,12 @@
 #pragma once
 #include "ast.hpp"
 #include "lexer.hpp"
+#include "semantics/indexed_ast.hpp"
 #include "tokens.hpp"
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include "semantics/indexed_ast.hpp"
 
 class Parser {
   Lexer &lex;
@@ -57,7 +57,7 @@ class Parser {
     auto base = parseUnaryExpr();
     if (cur.type == TokenType::Caret) {
       advance();
-      auto exponent = parsePowExpr(); 
+      auto exponent = parsePowExpr();
       return std::make_unique<BinaryExpr>(std::move(base), '^',
                                           std::move(exponent));
     }
@@ -155,17 +155,24 @@ class Parser {
     lhs.base = cur.text;
     advance();
 
-    if (cur.type == TokenType::LParen) {
+    TokenType open =
+        (cur.type == TokenType::LBracket || cur.type == TokenType::LParen)
+            ? cur.type
+            : TokenType::Unknown;
+    if (open != TokenType::Unknown) {
+      TokenType close = (open == TokenType::LBracket) ? TokenType::RBracket
+                                                      : TokenType::RParen;
       advance();
       while (cur.type == TokenType::Identifier) {
         lhs.indices.push_back(cur.text);
         advance();
-        if (cur.type == TokenType::Comma)
+        if (cur.type == TokenType::Comma) {
           advance();
-        else
-          break;
+          continue;
+        }
+        break;
       }
-      expect(TokenType::RParen);
+      expect(close);
     }
 
     return lhs;
@@ -183,24 +190,37 @@ class Parser {
     expect(TokenType::KwField);
 
     TensorKind kind;
+    int up = 0, down = 0;
+
     if (cur.type == TokenType::KwScalar) {
       kind = TensorKind::Scalar;
       advance();
     } else if (cur.type == TokenType::KwVector) {
       kind = TensorKind::Vector;
+      up = 1;
       advance();
-    } else if (cur.type == TokenType::KwTensor2) {
-      kind = TensorKind::Tensor2;
+    } else if (cur.type == TokenType::KwCovector) {
+      kind = TensorKind::Covector;
+      down = 1;
       advance();
-    } else {
-      syntaxError("expected 'scalar', 'vector' or 'tensor2' after 'field'");
-    }
+    } else if (cur.type == TokenType::KwCovTensor2) {
+      kind = TensorKind::CovTensor2;
+      down = 2;
+      advance();
+    } else if (cur.type == TokenType::KwConTensor2) {
+      kind = TensorKind::ConTensor2;
+      up = 2;
+      advance();
+    } else
+      syntaxError("expected tensor type after 'field'");
 
     if (cur.type != TokenType::Identifier)
-      syntaxError("expected field name after kind");
+      syntaxError("expected field name after type");
 
     FieldDecl f;
     f.kind = kind;
+    f.up = up;
+    f.down = down;
     f.name = cur.text;
     advance();
 
@@ -209,15 +229,17 @@ class Parser {
       while (cur.type == TokenType::Identifier) {
         f.indices.push_back(cur.text);
         advance();
-        if (cur.type == TokenType::Comma) {
+        if (cur.type == TokenType::Comma)
           advance();
-          continue;
-        } else {
+        else
           break;
-        }
       }
       expect(TokenType::RBracket);
     }
+
+    // NEW: consume optional line break / semicolon-like behavior
+    while (cur.type == TokenType::Unknown || cur.text == "\n")
+      advance();
 
     return f;
   }
@@ -273,7 +295,10 @@ class Parser {
     eq.fieldName = cur.text;
     advance();
 
-    if (cur.type == TokenType::LBracket) {
+    if (cur.type == TokenType::LBracket || cur.type == TokenType::LParen) {
+      TokenType closing = (cur.type == TokenType::LBracket)
+                              ? TokenType::RBracket
+                              : TokenType::RParen;
       advance();
       while (cur.type == TokenType::Identifier) {
         eq.indices.push_back(cur.text);
@@ -281,11 +306,10 @@ class Parser {
         if (cur.type == TokenType::Comma) {
           advance();
           continue;
-        } else {
-          break;
         }
+        break;
       }
-      expect(TokenType::RBracket);
+      expect(closing);
     }
 
     expect(TokenType::Equals);
@@ -306,11 +330,19 @@ class Parser {
     expect(TokenType::LBrace);
 
     while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+
       if (cur.type == TokenType::KwDt) {
         evo.equations.push_back(parseEvolutionEq());
-      } else {
-        syntaxError("expected 'dt' inside evolution block");
+        continue;
       }
+
+      if (cur.type == TokenType::Identifier) {
+        Assignment a = parseAssignment();
+        evo.tempAssignments.push_back(std::move(a));
+        continue;
+      }
+
+      syntaxError("expected 'dt' or assignment inside evolution block");
     }
 
     expect(TokenType::RBrace);

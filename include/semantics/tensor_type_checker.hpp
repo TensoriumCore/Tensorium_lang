@@ -1,37 +1,51 @@
-
 #pragma once
 #include "indexed_ast.hpp"
 #include <stdexcept>
 #include <string>
 
 struct TensorType {
-  int rank;
-  bool isScalar() const { return rank == 0; }
+  int up = 0;
+  int down = 0;
+
+  bool isScalar() const { return up == 0 && down == 0; }
+  int rank() const { return up + down; }
+
+  bool sameVariance(const TensorType &o) const {
+    return up == o.up && down == o.down;
+  }
 };
 
 class TensorTypeChecker {
 public:
   TensorType infer(const IndexedExpr *e) const {
-    if (auto n = dynamic_cast<const IndexedNumber *>(e)) {
-      (void)n;
-      return TensorType{0};
+    if (!e)
+      throw std::runtime_error("null expression in tensor type inference");
+
+    // contract(...) est une boîte noire : on ne regarde PAS l'intérieur
+    if (auto call = dynamic_cast<const IndexedCall *>(e)) {
+      if (call->callee == "contract") {
+        return TensorType{0, 0}; // pour l'instant: scalaire
+      }
+    }
+
+    if (dynamic_cast<const IndexedNumber *>(e)) {
+      return TensorType{0, 0};
     }
 
     if (auto v = dynamic_cast<const IndexedVar *>(e)) {
-      switch (v->kind) {
-      case IndexedVarKind::Coordinate:
-      case IndexedVarKind::Local:
-      case IndexedVarKind::Parameter:
-        return TensorType{0};
-      case IndexedVarKind::Field:
-        switch (v->tensorKind) {
-        case TensorKind::Scalar:
-          return TensorType{0};
-        case TensorKind::Vector:
-          return TensorType{1};
-        case TensorKind::Tensor2:
-          return TensorType{2};
-        }
+      switch (v->tensorKind) {
+      case TensorKind::Scalar:
+        return TensorType{0, 0};
+      case TensorKind::Vector:
+        return TensorType{1, 0};
+      case TensorKind::Covector:
+        return TensorType{0, 1};
+      case TensorKind::CovTensor2:
+        return TensorType{0, 2};
+      case TensorKind::ConTensor2:
+        return TensorType{2, 0};
+      case TensorKind::MixedTensor:
+        return TensorType{v->up, v->down};
       }
     }
 
@@ -40,38 +54,54 @@ public:
       TensorType rt = infer(b->rhs.get());
 
       if (b->op == '+' || b->op == '-') {
-        if (lt.rank != rt.rank)
-          throw std::runtime_error("incompatible tensor ranks for + or -");
+        if (!lt.sameVariance(rt))
+          throw std::runtime_error(
+              "tensor addition/subtraction requires identical variance");
         return lt;
       }
 
       if (b->op == '*') {
-        if (lt.rank != 0 && rt.rank != 0)
-          throw std::runtime_error(
-              "tensor-tensor product not supported yet (both non-scalar)");
-        return (lt.rank != 0) ? lt : rt;
+        if (lt.isScalar())
+          return rt;
+        if (rt.isScalar())
+          return lt;
+        throw std::runtime_error("tensor * tensor requires explicit contraction");
       }
 
       if (b->op == '/') {
-        if (rt.rank != 0)
-          throw std::runtime_error("division by non-scalar tensor");
+        if (!rt.isScalar())
+          throw std::runtime_error(
+              "division by non-scalar tensor is not allowed");
         return lt;
       }
 
       return lt;
     }
 
-    if (auto c = dynamic_cast<const IndexedCall *>(e)) {
-      for (auto &arg : c->args) {
+    if (auto call = dynamic_cast<const IndexedCall *>(e)) {
+      // Tous les autres appels (non-contract) exigent des scalaires en argument
+      for (auto &arg : call->args) {
         TensorType t = infer(arg.get());
         if (!t.isScalar())
-          throw std::runtime_error("function '" + c->callee +
-                                   "' expects scalar arguments");
+          throw std::runtime_error("function '" + call->callee +
+                                   "' expects scalar argument");
       }
-      return TensorType{0};
+      return TensorType{0, 0};
     }
 
     throw std::runtime_error("unsupported expression in tensor type inference");
+  }
+
+  void checkAssignmentVariance(const TensorType &lhs,
+                               const IndexedExpr *rhs) const {
+    TensorType r = infer(rhs);
+    if (!lhs.sameVariance(r)) {
+      throw std::runtime_error("tensor assignment mismatch: LHS(" +
+                               std::to_string(lhs.up) + "," +
+                               std::to_string(lhs.down) + ") vs RHS(" +
+                               std::to_string(r.up) + "," +
+                               std::to_string(r.down) + ")");
+    }
   }
 
   void checkMetricAssignment(const IndexedAssignment &a) const {
@@ -79,7 +109,8 @@ public:
     if (!t.isScalar()) {
       throw std::runtime_error(
           "metric assignment to '" + a.tensor +
-          "' must be scalar (got tensor rank=" + std::to_string(t.rank) + ")");
+          "' must be scalar (got tensor rank=" + std::to_string(t.rank()) +
+          ")");
     }
   }
 };

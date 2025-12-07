@@ -12,9 +12,10 @@ int main() {
   const char *src = R"(
 
 field scalar chi
-field tensor2 gamma[i,j]
-field tensor2 Atilde[i,j]
+field cov_tensor2 gamma[i,j]
+field cov_tensor2 Atilde[i,j]
 field scalar alpha
+
 metric g(t,r,theta,phi) {
     rho2  = r^2 + a^2 * cos(theta)^2
     Delta = r^2 - 2*M*r + a^2
@@ -30,7 +31,9 @@ metric g2(t,r,theta,phi) {
 evolution BSSN {
     dt chi        = -2 * alpha * K
     dt gamma[i,j] = -2 * alpha * Atilde[i,j]
+	Atilde[i,j] = contract(gamma[i,j] * Atilde[i,j])
 }
+
 )";
 
   try {

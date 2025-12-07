@@ -33,6 +33,7 @@ static void printIndexedExpr(const IndexedExpr *e) {
     }
 
     std::cout << "[";
+
     switch (v->kind) {
     case IndexedVarKind::Coordinate:
       std::cout << "coord:" << v->coordIndex;
@@ -47,12 +48,22 @@ static void printIndexedExpr(const IndexedExpr *e) {
       std::cout << "param";
       break;
     }
+
+    // print tensor variance if relevant
+    if (v->up > 0 || v->down > 0) {
+      std::cout << ", tensor(up=" << v->up << ",down=" << v->down << ")";
+    }
+
     std::cout << "]";
     return;
   }
 
   if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
-    printIndexedBinary(b);
+    std::cout << "(";
+    printIndexedExpr(b->lhs.get());
+    std::cout << " " << b->op << " ";
+    printIndexedExpr(b->rhs.get());
+    std::cout << ")";
     return;
   }
 

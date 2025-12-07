@@ -3,7 +3,14 @@
 #include <string>
 #include <vector>
 
-enum class TensorKind { Scalar, Vector, Tensor2 };
+enum class TensorKind {
+  Scalar,
+  Vector,   // contravariant 1-tensor
+  Covector, // covariant 1-tensor
+  CovTensor2,
+  ConTensor2,
+  MixedTensor
+};
 
 struct Expr {
   virtual ~Expr() = default;
@@ -27,7 +34,7 @@ struct VarExpr : Expr {
 struct BinaryExpr : Expr {
   std::unique_ptr<Expr> lhs;
   std::unique_ptr<Expr> rhs;
-  char op; 
+  char op;
   BinaryExpr(std::unique_ptr<Expr> l, char o, std::unique_ptr<Expr> r)
       : lhs(std::move(l)), rhs(std::move(r)), op(o) {}
 };
@@ -46,8 +53,8 @@ struct IndexedVarExpr : Expr {
 };
 
 struct TensorAccess {
-  std::string base; 
-  std::vector<std::string> indices; 
+  std::string base;
+  std::vector<std::string> indices;
 };
 
 struct Assignment {
@@ -64,18 +71,21 @@ struct MetricDecl {
 struct FieldDecl {
   TensorKind kind;
   std::string name;
-  std::vector<std::string> indices; 
+  std::vector<std::string> indices;
+  int up = 0;
+  int down = 0;
 };
 
 struct EvolutionEq {
-  std::string fieldName; 
-  std::vector<std::string> indices;  
+  std::string fieldName;
+  std::vector<std::string> indices;
   std::unique_ptr<Expr> rhs;
 };
 
 struct EvolutionDecl {
-  std::string name;     
-  std::vector<EvolutionEq> equations; 
+  std::string name;
+  std::vector<EvolutionEq> equations;
+  std::vector<Assignment> tempAssignments;
 };
 
 struct Program {

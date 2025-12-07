@@ -127,6 +127,12 @@ public:
         return {TokenType::KwVector, text, line, col};
       if (text == "tensor2")
         return {TokenType::KwTensor2, text, line, col};
+      if (text == "covector")
+        return {TokenType::KwCovector, text, line, col};
+      if (text == "cov_tensor2")
+        return {TokenType::KwCovTensor2, text, line, col};
+      if (text == "con_tensor2")
+        return {TokenType::KwConTensor2, text, line, col};
       if (text == "evolution")
         return {TokenType::KwEvolution, text, line, col};
       if (text == "dt")

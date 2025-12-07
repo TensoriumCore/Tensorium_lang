@@ -59,6 +59,7 @@ static void printExpr(const Expr *e) {
 
 static void printField(const FieldDecl &f) {
   std::cout << "field ";
+
   switch (f.kind) {
   case TensorKind::Scalar:
     std::cout << "scalar ";
@@ -66,11 +67,20 @@ static void printField(const FieldDecl &f) {
   case TensorKind::Vector:
     std::cout << "vector ";
     break;
-  case TensorKind::Tensor2:
-    std::cout << "tensor2 ";
+  case TensorKind::Covector:
+    std::cout << "covector ";
+    break;
+  case TensorKind::CovTensor2:
+    std::cout << "cov_tensor2 ";
+    break;
+  case TensorKind::ConTensor2:
+    std::cout << "con_tensor2 ";
+    break;
+  case TensorKind::MixedTensor:
+    std::cout << "mixed_tensor ";
     break;
   }
-  std::cout << f.name;
+  std::cout << f.name << "  (up=" << f.up << ", down=" << f.down << ")";
   if (!f.indices.empty()) {
     std::cout << "[";
     for (size_t i = 0; i < f.indices.size(); ++i) {
@@ -113,8 +123,10 @@ static void printMetric(const MetricDecl &m, int idx) {
   }
 }
 
+
 static void printEvolution(const EvolutionDecl &evo, int idx) {
   std::cout << "\n=== Evolution #" << idx << " (" << evo.name << ") ===\n";
+
   for (const auto &eq : evo.equations) {
     std::cout << "  dt " << eq.fieldName;
     if (!eq.indices.empty()) {
@@ -129,5 +141,24 @@ static void printEvolution(const EvolutionDecl &evo, int idx) {
     std::cout << " = ";
     printExpr(eq.rhs.get());
     std::cout << "\n";
+  }
+
+  if (!evo.tempAssignments.empty()) {
+    std::cout << "  -- Locals --\n";
+    for (const auto &tmp : evo.tempAssignments) {
+      std::cout << "  " << tmp.lhs.base;
+      if (!tmp.lhs.indices.empty()) {
+        std::cout << "[";
+        for (size_t i = 0; i < tmp.lhs.indices.size(); ++i) {
+          std::cout << tmp.lhs.indices[i];
+          if (i + 1 < tmp.lhs.indices.size())
+            std::cout << ",";
+        }
+        std::cout << "]";
+      }
+      std::cout << " = ";
+      printExpr(tmp.rhs.get());
+      std::cout << "\n";
+    }
   }
 }

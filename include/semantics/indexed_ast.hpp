@@ -2,13 +2,7 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-enum class IndexedVarKind {
-  Coordinate,
-  Local,
-  Parameter,
-  Field,
-};
+#include "../ast.hpp"
 
 struct IndexedExpr {
   virtual ~IndexedExpr() = default;
@@ -19,23 +13,37 @@ struct IndexedNumber : IndexedExpr {
   explicit IndexedNumber(double v) : value(v) {}
 };
 
-struct IndexedVar : IndexedExpr {
-  IndexedVarKind kind;
-  std::string name;
-  int coordIndex; 
-  std::vector<int> tensorIndices;  
-  std::vector<std::string> tensorIndexNames; 
+enum class IndexedVarKind {
+  Coordinate,
+  Local,
+  Field,
+  Parameter
+};
 
-  IndexedVar(std::string n, IndexedVarKind k, int idx = -1)
-      : kind(k), name(std::move(n)), coordIndex(idx) {}
+struct IndexedVar : IndexedExpr {
+  std::string name;
+  IndexedVarKind kind;
+
+  TensorKind tensorKind = TensorKind::Scalar;
+  int up = 0;
+  int down = 0;
+
+  int coordIndex = -1;
+
+  std::vector<int> tensorIndices;
+  std::vector<std::string> tensorIndexNames;
+
+  IndexedVar(std::string n, IndexedVarKind k, int cidx = -1)
+      : name(std::move(n)), kind(k), coordIndex(cidx) {}
 };
 
 struct IndexedBinary : IndexedExpr {
   char op;
-  std::unique_ptr<IndexedExpr> lhs, rhs;
-  IndexedBinary(char o, std::unique_ptr<IndexedExpr> l,
-                std::unique_ptr<IndexedExpr> r)
-      : op(o), lhs(std::move(l)), rhs(std::move(r)) {}
+  std::unique_ptr<IndexedExpr> lhs;
+  std::unique_ptr<IndexedExpr> rhs;
+  IndexedBinary(char o, std::unique_ptr<IndexedExpr> L,
+                std::unique_ptr<IndexedExpr> R)
+      : op(o), lhs(std::move(L)), rhs(std::move(R)) {}
 };
 
 struct IndexedCall : IndexedExpr {
@@ -45,24 +53,25 @@ struct IndexedCall : IndexedExpr {
 
 struct IndexedAssignment {
   std::string tensor;
-  std::vector<int> indexOffsets; 
+  std::vector<int> indexOffsets;
   std::unique_ptr<IndexedExpr> rhs;
 };
 
 struct IndexedMetric {
   std::string name;
-  int rank = 2;
+  int rank;
   std::vector<std::string> coords;
   std::vector<IndexedAssignment> assignments;
 };
 
 struct IndexedEvolutionEq {
   std::string fieldName;
-  std::vector<std::string> indices; 
+  std::vector<std::string> indices;
   std::unique_ptr<IndexedExpr> rhs;
 };
 
 struct IndexedEvolution {
   std::string name;
   std::vector<IndexedEvolutionEq> equations;
+  std::vector<IndexedAssignment> temp;
 };
