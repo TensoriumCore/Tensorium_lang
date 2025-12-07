@@ -213,8 +213,29 @@ int main() {
                 dt T[i,j] = T[i,k]
             }
         )",
-       true}
+       true},
+	{
+    "Partial derivative on scalar -> covector",
+    R"(
+        field scalar phi
+        field covector grad_phi[i]
 
+        evolution Diff {
+            dt grad_phi[i] = d_i(phi)
+        }
+    )",
+	},
+	{
+    "Laplacian expects scalar",
+    R"(
+        field covector v[i]
+
+        evolution BadLap {
+            dt v[i] = laplacian(v[i])
+        }
+    )",
+    true
+},
   };
 
   bool ok = true;

@@ -16,16 +16,20 @@ struct TensorType {
 };
 
 class TensorTypeChecker {
+  bool isPartialDerivative(const std::string &name) const {
+    if (name.size() != 3)
+      return false;
+    if (name[0] != 'd' || name[1] != '_')
+      return false;
+    char c = name[2];
+    return (c == 'i' || c == 'j' || c == 'k' || c == 'l' || c == 'm' ||
+            c == 'n');
+  }
+
 public:
   TensorType infer(const IndexedExpr *e) const {
     if (!e)
       throw std::runtime_error("null expression in tensor type inference");
-
-    if (auto call = dynamic_cast<const IndexedCall *>(e)) {
-      if (call->callee == "contract") {
-        return TensorType{0, 0}; 
-      }
-    }
 
     if (dynamic_cast<const IndexedNumber *>(e)) {
       return TensorType{0, 0};
@@ -64,7 +68,8 @@ public:
           return rt;
         if (rt.isScalar())
           return lt;
-        throw std::runtime_error("tensor * tensor requires explicit contraction");
+        throw std::runtime_error(
+            "tensor * tensor requires explicit contraction");
       }
 
       if (b->op == '/') {
@@ -78,10 +83,34 @@ public:
     }
 
     if (auto call = dynamic_cast<const IndexedCall *>(e)) {
+      const std::string &cal = call->callee;
+
+      if (cal == "contract") {
+        if (call->args.size() != 1)
+          throw std::runtime_error("contract() expects 1 argument");
+        return TensorType{0, 0};
+      }
+
+      if (isPartialDerivative(cal)) {
+        if (call->args.size() != 1)
+          throw std::runtime_error("d_* expects exactly 1 argument");
+        TensorType argT = infer(call->args[0].get());
+        return TensorType{argT.up, argT.down + 1};
+      }
+
+      if (cal == "laplacian") {
+        if (call->args.size() != 1)
+          throw std::runtime_error("laplacian() expects exactly 1 argument");
+        TensorType argT = infer(call->args[0].get());
+        if (!argT.isScalar())
+          throw std::runtime_error("laplacian() expects scalar argument");
+        return TensorType{0, 0};
+      }
+
       for (auto &arg : call->args) {
         TensorType t = infer(arg.get());
         if (!t.isScalar())
-          throw std::runtime_error("function '" + call->callee +
+          throw std::runtime_error("function '" + cal +
                                    "' expects scalar argument");
       }
       return TensorType{0, 0};
@@ -92,23 +121,22 @@ public:
 
   void checkAssignmentVariance(const TensorType &lhs,
                                const IndexedExpr *rhs) const {
-    TensorType r = infer(rhs);
-    if (!lhs.sameVariance(r)) {
-      throw std::runtime_error("tensor assignment mismatch: LHS(" +
-                               std::to_string(lhs.up) + "," +
-                               std::to_string(lhs.down) + ") vs RHS(" +
-                               std::to_string(r.up) + "," +
-                               std::to_string(r.down) + ")");
+    TensorType rhsType = infer(rhs);
+
+    if (!lhs.sameVariance(rhsType)) {
+      throw std::runtime_error(
+          "tensor assignment mismatch: LHS(" + std::to_string(lhs.up) + "," +
+          std::to_string(lhs.down) + ") vs RHS(" + std::to_string(rhsType.up) +
+          "," + std::to_string(rhsType.down) + ")");
     }
   }
 
   void checkMetricAssignment(const IndexedAssignment &a) const {
     TensorType t = infer(a.rhs.get());
     if (!t.isScalar()) {
-      throw std::runtime_error(
-          "metric assignment to '" + a.tensor +
-          "' must be scalar (got tensor rank=" + std::to_string(t.rank()) +
-          ")");
+      throw std::runtime_error("metric assignment to '" + a.tensor +
+                               "' must be scalar (got tensor rank=" +
+                               std::to_string(t.rank()) + ")");
     }
   }
 };
