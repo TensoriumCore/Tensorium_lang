@@ -1,8 +1,10 @@
 #pragma once
+#include "tensorium/AST/AST.hpp"
 #include <memory>
 #include <string>
 #include <vector>
-#include "../ast.hpp"
+
+namespace tensorium {
 
 struct IndexedExpr {
   virtual ~IndexedExpr() = default;
@@ -13,21 +15,14 @@ struct IndexedNumber : IndexedExpr {
   explicit IndexedNumber(double v) : value(v) {}
 };
 
-enum class IndexedVarKind {
-  Coordinate,
-  Local,
-  Field,
-  Parameter
-};
+enum class IndexedVarKind { Coordinate, Local, Field, Parameter };
 
 struct IndexedVar : IndexedExpr {
   std::string name;
   IndexedVarKind kind;
-
   TensorKind tensorKind = TensorKind::Scalar;
   int up = 0;
   int down = 0;
-
   int coordIndex = -1;
 
   std::vector<int> tensorIndices;
@@ -75,3 +70,5 @@ struct IndexedEvolution {
   std::vector<IndexedEvolutionEq> equations;
   std::vector<IndexedAssignment> temp;
 };
+
+} // namespace tensorium

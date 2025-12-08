@@ -1,8 +1,10 @@
 #pragma once
-#include "indexed_ast.hpp"
+#include "tensorium/AST/AST.hpp"
+#include "tensorium/AST/IndexedAST.hpp"
 #include <stdexcept>
 #include <string>
 
+namespace tensorium {
 struct TensorType {
   int up = 0;
   int down = 0;
@@ -140,3 +142,4 @@ public:
     }
   }
 };
+} // namespace tensorium

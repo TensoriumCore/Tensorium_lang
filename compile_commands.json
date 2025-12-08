@@ -1,0 +1,110 @@
+[
+  {
+    "arguments": [
+      "/opt/local/libexec/llvm-20/bin/clang++",
+      "-std=c++20",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Wpedantic",
+      "-Iinclude",
+      "-c",
+      "-o",
+      "lib/Lex/Lexer.o",
+      "lib/Lex/Lexer.cpp"
+    ],
+    "directory": "/Users/at0m/Desktop/Tensorium_lang",
+    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Lex/Lexer.cpp",
+    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/Lex/Lexer.o"
+  },
+  {
+    "arguments": [
+      "/opt/local/libexec/llvm-20/bin/clang++",
+      "-std=c++20",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Wpedantic",
+      "-Iinclude",
+      "-c",
+      "-o",
+      "lib/Parse/Parser.o",
+      "lib/Parse/Parser.cpp"
+    ],
+    "directory": "/Users/at0m/Desktop/Tensorium_lang",
+    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Parse/Parser.cpp",
+    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/Parse/Parser.o"
+  },
+  {
+    "arguments": [
+      "/opt/local/libexec/llvm-20/bin/clang++",
+      "-std=c++20",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Wpedantic",
+      "-Iinclude",
+      "-c",
+      "-o",
+      "lib/Sema/Sema.o",
+      "lib/Sema/Sema.cpp"
+    ],
+    "directory": "/Users/at0m/Desktop/Tensorium_lang",
+    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Sema/Sema.cpp",
+    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/Sema/Sema.o"
+  },
+  {
+    "arguments": [
+      "/opt/local/libexec/llvm-20/bin/clang++",
+      "-std=c++20",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Wpedantic",
+      "-Iinclude",
+      "-c",
+      "-o",
+      "lib/AST/Expr.o",
+      "lib/AST/Expr.cpp"
+    ],
+    "directory": "/Users/at0m/Desktop/Tensorium_lang",
+    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/Expr.cpp",
+    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/Expr.o"
+  },
+  {
+    "arguments": [
+      "/opt/local/libexec/llvm-20/bin/clang++",
+      "-std=c++20",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Wpedantic",
+      "-Iinclude",
+      "-c",
+      "-o",
+      "lib/AST/ASTPrinter.o",
+      "lib/AST/ASTPrinter.cpp"
+    ],
+    "directory": "/Users/at0m/Desktop/Tensorium_lang",
+    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/ASTPrinter.cpp",
+    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/ASTPrinter.o"
+  },
+  {
+    "arguments": [
+      "/opt/local/libexec/llvm-20/bin/clang++",
+      "-std=c++20",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Wpedantic",
+      "-Iinclude",
+      "-c",
+      "-o",
+      "tools/driver/main.o",
+      "tools/driver/main.cpp"
+    ],
+    "directory": "/Users/at0m/Desktop/Tensorium_lang",
+    "file": "/Users/at0m/Desktop/Tensorium_lang/tools/driver/main.cpp",
+    "output": "/Users/at0m/Desktop/Tensorium_lang/tools/driver/main.o"
+  }
+]

@@ -1,11 +1,11 @@
 #pragma once
 #include <string>
 
+namespace tensorium {
 enum class TokenType {
   End,
   Identifier,
   Number,
-
   LParen,
   RParen,
   LBrace,
@@ -19,7 +19,6 @@ enum class TokenType {
   Star,
   Slash,
   Caret,
-
   KwSpacetime,
   KwMetric,
   KwDecompose,
@@ -49,3 +48,4 @@ struct Token {
   int line;
   int column;
 };
+} // namespace tensorium
