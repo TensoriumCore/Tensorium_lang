@@ -38,6 +38,9 @@ public:
     }
 
     if (auto v = dynamic_cast<const IndexedVar *>(e)) {
+      if (!v->tensorIndices.empty()) {
+        return TensorType{0, 0};
+      }
       switch (v->tensorKind) {
       case TensorKind::Scalar:
         return TensorType{0, 0};
@@ -96,8 +99,7 @@ public:
       if (isPartialDerivative(cal)) {
         if (call->args.size() != 1)
           throw std::runtime_error("d_* expects exactly 1 argument");
-        TensorType argT = infer(call->args[0].get());
-        return TensorType{argT.up, argT.down + 1};
+        return TensorType{0, 0};
       }
 
       if (cal == "laplacian") {

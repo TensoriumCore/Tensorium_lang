@@ -405,7 +405,7 @@ int main() {
             field cov_tensor2 Atilde[i,j]
 
             evolution Bad {
-                dt gamma[i,j] = sin(gamma[i,j])
+                dt gamma[i,j] = sin(gamma)
             }
         )",
        true},
@@ -445,7 +445,7 @@ int main() {
         field covector v[i]
 
         evolution BadLap {
-            dt v[i] = laplacian(v[i])
+            dt v[i] = laplacian(v)
         }
     )",
        true},

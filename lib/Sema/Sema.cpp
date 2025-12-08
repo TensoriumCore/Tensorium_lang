@@ -159,7 +159,6 @@ IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
   return out;
 }
 
-// Helper struct moved to CPP to keep it internal
 struct IndexCollector {
   std::unordered_map<std::string, int> &counter;
   IndexCollector(std::unordered_map<std::string, int> &c) : counter(c) {}
@@ -252,7 +251,7 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
       }
     }
 
-    TensorType lhsType{fd->up, fd->down};
+    TensorType lhsType = {0, 0};
     checker.checkAssignmentVariance(lhsType, ie.rhs.get());
 
     out.equations.push_back(std::move(ie));

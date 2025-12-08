@@ -14,7 +14,6 @@ enum class TensorKind {
   MixedTensor
 };
 
-// Forward decls
 struct NumberExpr;
 struct VarExpr;
 struct BinaryExpr;
