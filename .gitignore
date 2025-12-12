@@ -1,0 +1,17 @@
+*.egg-info/
+dist/
+__pycache__/
+
+pybuild/
+build/
+*.o
+*.so
+*.a
+*.csv
+
+# macOS
+*.DS_Store
+
+# clangd
+.cache/
+.idea/
