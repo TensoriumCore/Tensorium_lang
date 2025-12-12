@@ -1,7 +1,7 @@
 CXX      := clang++
-CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude
+CXXFLAGS := -std=c++20 -O3 -mtune=native -Wall -Wextra -Wpedantic -Iinclude
 
-TARGET   := tensorium_cc
+TARGET   := Tensorium_cc
 
 SRC_DIRS := lib tools
 
@@ -12,16 +12,16 @@ OBJS := $(SRCS:.cpp=.o)
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	@echo " Linking executable: $@"
+	@echo "Linking executable: $@"
 	$(CXX) $(CXXFLAGS) $^ -o $@
-	@echo " Build successful! Run with: ./$(TARGET)"
+	@echo "Build successful! Run with: ./$(TARGET)"
 
 %.o: %.cpp
-	@echo " Compiling $<"
+	@echo "Compiling $<"
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	@echo "🧹 Cleaning up..."
+	@echo "Cleaning up..."
 	rm -f $(OBJS) $(TARGET)
 
 .PHONY: all clean
