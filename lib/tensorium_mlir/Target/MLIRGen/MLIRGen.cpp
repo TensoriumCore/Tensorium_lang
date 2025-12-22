@@ -34,6 +34,10 @@ void emitMLIR(const tensorium::backend::ModuleIR & /*module*/,
 
   mlir::PassManager pm(&ctx);
 
+  if (opts.enableAnalysisPass) {
+    pm.addPass(tensorium::mlir::createTensoriumAnalysisPass());
+  }
+
   if (opts.enableNoOpPass) {
     pm.addPass(tensorium::mlir::createTensoriumNoOpPass());
   }

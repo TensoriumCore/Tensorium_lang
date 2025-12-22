@@ -34,6 +34,7 @@ add_library(tensorium_mlir_backend
   tensorium_mlir/Pipeline/Pipeline.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/NoOpPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/Passes.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/AnalysisPass.cpp
 )
 
 add_dependencies(tensorium_mlir_backend

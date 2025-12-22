@@ -6,6 +6,7 @@ namespace mlir {
 
 void registerTensoriumTransformPasses() {
   ::mlir::registerPass([] { return createTensoriumNoOpPass(); });
+  ::mlir::registerPass([] { return createTensoriumAnalysisPass(); });
 }
 
 } // namespace mlir
