@@ -27,15 +27,22 @@ mlir_tablegen(TensoriumPasses.h.inc
 
 add_public_tablegen_target(TensoriumPassesIncGen)
 
+
 add_library(tensorium_mlir_backend
+  tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.cpp
+  tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.cpp
+  tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.cpp
+
+  tensorium_mlir/Dialect/Tensorium/Transforms/AnalysisPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/NoOpPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/Passes.cpp
+
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp
   tensorium_mlir/Init/Registry.cpp
   tensorium_mlir/Init/Passes.cpp
   tensorium_mlir/Pipeline/Pipeline.cpp
-  tensorium_mlir/Dialect/Tensorium/Transforms/NoOpPass.cpp
-  tensorium_mlir/Dialect/Tensorium/Transforms/Passes.cpp
-  tensorium_mlir/Dialect/Tensorium/Transforms/AnalysisPass.cpp
 )
+
 
 add_dependencies(tensorium_mlir_backend
   TensoriumPassesIncGen
