@@ -250,6 +250,105 @@ EvolutionEq Parser::parseEvolutionEq() {
   return eq;
 }
 
+TimeConfig Parser::parseTimeBlock() {
+  expect(TokenType::KwTime);
+  expect(TokenType::LBrace);
+
+  TimeConfig cfg;
+
+  while (cur.type != TokenType::RBrace) {
+
+    if (cur.text == "dt") {
+      advance();
+      expect(TokenType::Equals);
+      if (cur.type != TokenType::Number)
+        syntaxError("dt expects a number");
+      cfg.dt = std::stod(cur.text);
+      advance();
+      continue;
+    }
+
+    if (cur.text == "integrator") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.text == "euler")
+        cfg.integrator = TimeIntegrator::Euler;
+      else if (cur.text == "rk3")
+        cfg.integrator = TimeIntegrator::RK3;
+      else if (cur.text == "rk4")
+        cfg.integrator = TimeIntegrator::RK4;
+      else
+        syntaxError("unknown time integrator");
+
+      advance();
+      continue;
+    }
+
+    syntaxError("unexpected entry in time block");
+  }
+
+  expect(TokenType::RBrace);
+  return cfg;
+}
+
+SpatialConfig Parser::parseSpatialBlock() {
+  expect(TokenType::KwSpatial);
+  expect(TokenType::LBrace);
+
+  SpatialConfig cfg;
+
+  while (cur.type != TokenType::RBrace) {
+
+    if (cur.text == "scheme") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.text == "fd")
+        cfg.scheme = SpatialScheme::FiniteDifference;
+      else if (cur.text == "spectral")
+        cfg.scheme = SpatialScheme::Spectral;
+      else
+        syntaxError("unknown spatial scheme");
+
+      advance();
+      continue;
+    }
+
+    if (cur.text == "derivative") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.text == "centered")
+        cfg.derivative = DerivativeScheme::Centered;
+      else if (cur.text == "upwind")
+        cfg.derivative = DerivativeScheme::Upwind;
+      else
+        syntaxError("unknown derivative scheme");
+
+      advance();
+      continue;
+    }
+
+    if (cur.text == "order") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.type != TokenType::Number)
+        syntaxError("order expects an integer");
+
+      cfg.order = std::stoi(cur.text);
+      advance();
+      continue;
+    }
+
+    syntaxError("unexpected entry in spatial block");
+  }
+
+  expect(TokenType::RBrace);
+  return cfg;
+}
+
 EvolutionDecl Parser::parseEvolution() {
   expect(TokenType::KwEvolution);
   if (cur.type != TokenType::Identifier)
@@ -273,6 +372,75 @@ EvolutionDecl Parser::parseEvolution() {
   return evo;
 }
 
+SimulationConfig Parser::parseSimulation() {
+  expect(TokenType::KwSimulation);
+  expect(TokenType::LBrace);
+
+  SimulationConfig cfg;
+
+  while (cur.type != TokenType::RBrace) {
+
+    if (cur.text == "coordinates") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.text == "cartesian")
+        cfg.coordinates = CoordinateSystem::Cartesian;
+      else if (cur.text == "spherical")
+        cfg.coordinates = CoordinateSystem::Spherical;
+      else if (cur.text == "cylindrical")
+        cfg.coordinates = CoordinateSystem::Cylindrical;
+      else
+        syntaxError("unknown coordinate system");
+
+      advance();
+      continue;
+    }
+
+    if (cur.text == "dimension") {
+      advance();
+      expect(TokenType::Equals);
+      cfg.dimension = std::stoi(cur.text);
+      expect(TokenType::Number);
+      continue;
+    }
+
+    if (cur.text == "resolution") {
+      advance();
+      expect(TokenType::Equals);
+      expect(TokenType::LBracket);
+
+      cfg.resolution.clear();
+      while (cur.type == TokenType::Number) {
+        cfg.resolution.push_back(std::stoi(cur.text));
+        advance();
+        if (cur.type == TokenType::Comma)
+          advance();
+        else
+          break;
+      }
+
+      expect(TokenType::RBracket);
+      continue;
+    }
+
+    if (cur.type == TokenType::KwTime) {
+      cfg.time = parseTimeBlock();
+      continue;
+    }
+
+    if (cur.type == TokenType::KwSpatial) {
+      cfg.spatial = parseSpatialBlock();
+      continue;
+    }
+
+    syntaxError("unexpected entry in simulation block");
+  }
+
+  expect(TokenType::RBrace);
+  return cfg;
+}
+
 Program Parser::parseProgram() {
   Program p;
   while (cur.type != TokenType::End) {
@@ -286,6 +454,12 @@ Program Parser::parseProgram() {
     }
     if (cur.type == TokenType::KwEvolution) {
       p.evolutions.push_back(parseEvolution());
+      continue;
+    }
+    if (cur.type == TokenType::KwSimulation) {
+      if (p.simulation)
+        syntaxError("Multiple simulation blocks not allowed");
+      p.simulation = std::make_unique<SimulationConfig>(parseSimulation());
       continue;
     }
     syntaxError("Unexpected top level");

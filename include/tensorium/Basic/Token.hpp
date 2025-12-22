@@ -39,6 +39,8 @@ enum class TokenType {
   KwEq,
   KwEvolution,
   KwDt,
+  KwSimulation,
+  KwTime,
   Unknown
 };
 

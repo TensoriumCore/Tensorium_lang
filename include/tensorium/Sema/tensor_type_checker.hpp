@@ -5,6 +5,7 @@
 #include <string>
 
 namespace tensorium {
+
 struct TensorType {
   int up = 0;
   int down = 0;
@@ -28,19 +29,63 @@ class TensorTypeChecker {
             c == 'n');
   }
 
+  bool isCovariantDerivative(const std::string &name, bool &contravariant,
+                             char &index) const {
+    if (name.size() == 7 && name.rfind("nabla_", 0) == 0) {
+      index = name[6];
+      contravariant = false;
+      return true;
+    }
+    if (name.size() == 7 && name.rfind("nabla^", 0) == 0) {
+      index = name[6];
+      contravariant = true;
+      return true;
+    }
+    return false;
+  }
+
+  static bool isTensorIndexChar(char c) {
+    return (c == 'i' || c == 'j' || c == 'k' || c == 'l' || c == 'm' ||
+            c == 'n');
+  }
+
+  void collectIndexCounts(const IndexedExpr *e, int counts[256]) const {
+    if (!e)
+      return;
+
+    if (auto v = dynamic_cast<const IndexedVar *>(e)) {
+      for (const auto &name : v->tensorIndexNames) {
+        if (!name.empty()) {
+          char c = name[0];
+          if (isTensorIndexChar(c))
+            counts[(unsigned char)c]++;
+        }
+      }
+      return;
+    }
+
+    if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
+      collectIndexCounts(b->lhs.get(), counts);
+      collectIndexCounts(b->rhs.get(), counts);
+      return;
+    }
+
+    if (auto c = dynamic_cast<const IndexedCall *>(e)) {
+      for (const auto &arg : c->args)
+        collectIndexCounts(arg.get(), counts);
+      return;
+    }
+  }
+
 public:
   TensorType infer(const IndexedExpr *e) const {
     if (!e)
       throw std::runtime_error("null expression in tensor type inference");
 
-    if (dynamic_cast<const IndexedNumber *>(e)) {
+    if (dynamic_cast<const IndexedNumber *>(e))
       return TensorType{0, 0};
-    }
 
     if (auto v = dynamic_cast<const IndexedVar *>(e)) {
-      if (!v->tensorIndices.empty()) {
-        return TensorType{0, 0};
-      }
       switch (v->tensorKind) {
       case TensorKind::Scalar:
         return TensorType{0, 0};
@@ -73,8 +118,7 @@ public:
           return rt;
         if (rt.isScalar())
           return lt;
-        throw std::runtime_error(
-            "tensor * tensor requires explicit contraction");
+        return TensorType{lt.up + rt.up, lt.down + rt.down};
       }
 
       if (b->op == '/') {
@@ -93,13 +137,67 @@ public:
       if (cal == "contract") {
         if (call->args.size() != 1)
           throw std::runtime_error("contract() expects 1 argument");
-        return TensorType{0, 0};
-      }
 
+        const IndexedExpr *arg = call->args[0].get();
+        TensorType t = infer(arg);
+
+        int counts[256] = {0};
+        collectIndexCounts(arg, counts);
+
+        int pairs = 0;
+        for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
+          int c = counts[(unsigned char)idx];
+          if (c < 0)
+            throw std::runtime_error("internal error: negative index count");
+          pairs += (c / 2);
+        }
+
+        if (pairs == 0)
+          throw std::runtime_error(
+              "contract() expects at least one repeated index");
+
+        int remove = 2 * pairs;
+        int r = t.rank();
+        if (r < remove)
+          throw std::runtime_error(
+              "contract() contraction exceeds tensor rank");
+
+        int up = t.up;
+        int down = t.down;
+
+        int rem = remove;
+        int takeDown = (down < rem) ? down : rem;
+        down -= takeDown;
+        rem -= takeDown;
+
+        int takeUp = (up < rem) ? up : rem;
+        up -= takeUp;
+        rem -= takeUp;
+
+        if (rem != 0)
+          throw std::runtime_error(
+              "contract() could not remove requested rank");
+
+        return TensorType{up, down};
+      }
       if (isPartialDerivative(cal)) {
         if (call->args.size() != 1)
           throw std::runtime_error("d_* expects exactly 1 argument");
-        return TensorType{0, 0};
+        TensorType argT = infer(call->args[0].get());
+        if (!argT.isScalar())
+          throw std::runtime_error("d_* expects scalar argument");
+        return TensorType{0, 1};
+      }
+
+      bool contra = false;
+      char idx = 0;
+      if (isCovariantDerivative(cal, contra, idx)) {
+        if (call->args.size() != 1)
+          throw std::runtime_error("nabla expects exactly 1 argument");
+        TensorType t = infer(call->args[0].get());
+        if (contra)
+          return TensorType{t.up + 1, t.down};
+        return TensorType{t.up, t.down + 1};
       }
 
       if (cal == "laplacian") {
@@ -126,7 +224,6 @@ public:
   void checkAssignmentVariance(const TensorType &lhs,
                                const IndexedExpr *rhs) const {
     TensorType rhsType = infer(rhs);
-
     if (!lhs.sameVariance(rhsType)) {
       throw std::runtime_error(
           "tensor assignment mismatch: LHS(" + std::to_string(lhs.up) + "," +
@@ -144,4 +241,5 @@ public:
     }
   }
 };
+
 } // namespace tensorium

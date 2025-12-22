@@ -49,6 +49,75 @@ static void printField(const FieldDecl &f) {
   std::cout << "\n";
 }
 
+static void printSimulation(const SimulationConfig &sim) {
+  std::cout << "\n=== Simulation ===\n";
+
+  std::cout << "Coordinates: ";
+  switch (sim.coordinates) {
+  case CoordinateSystem::Cartesian:
+    std::cout << "cartesian";
+    break;
+  case CoordinateSystem::Spherical:
+    std::cout << "spherical";
+    break;
+  case CoordinateSystem::Cylindrical:
+    std::cout << "cylindrical";
+    break;
+  }
+  std::cout << "\n";
+
+  std::cout << "Dimension: " << sim.dimension << "\n";
+
+  std::cout << "Resolution: [";
+  for (size_t i = 0; i < sim.resolution.size(); ++i) {
+    std::cout << sim.resolution[i];
+    if (i + 1 < sim.resolution.size())
+      std::cout << ",";
+  }
+  std::cout << "]\n";
+
+  std::cout << "Time:\n";
+  std::cout << "  dt = " << sim.time.dt << "\n";
+  std::cout << "  integrator = ";
+  switch (sim.time.integrator) {
+  case TimeIntegrator::Euler:
+    std::cout << "euler";
+    break;
+  case TimeIntegrator::RK3:
+    std::cout << "rk3";
+    break;
+  case TimeIntegrator::RK4:
+    std::cout << "rk4";
+    break;
+  }
+  std::cout << "\n";
+
+  std::cout << "Spatial:\n";
+  std::cout << "  scheme = ";
+  switch (sim.spatial.scheme) {
+  case SpatialScheme::FiniteDifference:
+    std::cout << "fd";
+    break;
+  case SpatialScheme::Spectral:
+    std::cout << "spectral";
+    break;
+  }
+  std::cout << "\n";
+
+  std::cout << "  derivative = ";
+  switch (sim.spatial.derivative) {
+  case DerivativeScheme::Centered:
+    std::cout << "centered";
+    break;
+  case DerivativeScheme::Upwind:
+    std::cout << "upwind";
+    break;
+  }
+  std::cout << "\n";
+
+  std::cout << "  order = " << sim.spatial.order << "\n";
+}
+
 static void printMetric(const MetricDecl &m, int idx) {
   std::cout << "\n=== Metric #" << idx << " ===\n";
   std::cout << "Metric name: " << m.name << "\n";
@@ -258,7 +327,9 @@ bool runTest(const TestCase &t) {
     std::cout << "Fields:\n";
     for (auto &f : prog.fields)
       printField(f);
-
+    if (prog.simulation) {
+      printSimulation(*prog.simulation);
+    }
     for (size_t i = 0; i < prog.metrics.size(); i++) {
       printMetric(prog.metrics[i], (int)i);
       printIndexedMetric(indexedMetrics[i]);
@@ -315,15 +386,16 @@ int main() {
             }
         )"},
 
-      {"Correct nested contraction",
-       R"(
+      {
+          "Correct nested contraction",
+          R"(
 		    field cov_tensor2 A[i,j]
 	
 		    evolution OK {
 				dt A[i,j] = contract(A[i,k] * (A[k,l] * A[l,j]))
 			}
 		)",
-       },
+      },
 
       {"Local temporary reuse OK",
        R"(
@@ -449,6 +521,52 @@ int main() {
         }
     )",
        true},
+      {"Covariant derivative of scalar",
+       R"(
+		field scalar phi
+		field covector dphi[i]
+
+		evolution OK {
+			dt dphi[i] = nabla_i(phi)
+		}
+	)"},
+
+      {"Contravariant covariant derivative without inverse metric",
+       R"(
+    field scalar phi
+    field vector v[i]
+
+    evolution Bad {
+      dt v[i] = nabla^i(phi)
+    }
+  )",
+       true},
+
+      {"Simulation block with time and spatial config",
+       R"(
+    field scalar phi
+
+    simulation {
+      coordinates = cartesian
+      dimension = 3
+      resolution = [64,64,64]
+
+      time {
+        dt = 0.01
+        integrator = rk4
+      }
+
+      spatial {
+        scheme = fd
+        derivative = centered
+        order = 4
+      }
+    }
+
+    evolution Test {
+      dt phi = phi
+    }
+  )"},
   };
 
   bool ok = true;

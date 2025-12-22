@@ -24,6 +24,9 @@ class Parser {
   MetricDecl parseMetric();
   EvolutionEq parseEvolutionEq();
   EvolutionDecl parseEvolution();
+  SimulationConfig parseSimulation();
+  TimeConfig parseTimeBlock();
+  SpatialConfig parseSpatialBlock();
 
 public:
   explicit Parser(Lexer &l);

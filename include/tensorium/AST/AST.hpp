@@ -112,10 +112,37 @@ struct EvolutionDecl {
   std::vector<Assignment> tempAssignments;
 };
 
+enum class CoordinateSystem { Cartesian, Spherical, Cylindrical };
+
+enum class TimeIntegrator { Euler, RK3, RK4 };
+
+enum class SpatialScheme { FiniteDifference, Spectral };
+
+enum class DerivativeScheme { Centered, Upwind };
+
+struct TimeConfig {
+  double dt = 0.0;
+  TimeIntegrator integrator = TimeIntegrator::RK4;
+};
+
+struct SpatialConfig {
+  SpatialScheme scheme = SpatialScheme::FiniteDifference;
+  DerivativeScheme derivative = DerivativeScheme::Centered;
+  int order = 2;
+};
+
+struct SimulationConfig {
+  CoordinateSystem coordinates = CoordinateSystem::Cartesian;
+  int dimension = 3;
+  std::vector<int> resolution;
+  TimeConfig time;
+  SpatialConfig spatial;
+};
+
 struct Program {
   std::vector<FieldDecl> fields;
   std::vector<MetricDecl> metrics;
   std::vector<EvolutionDecl> evolutions;
+  std::unique_ptr<SimulationConfig> simulation;
 };
-
 } // namespace tensorium
