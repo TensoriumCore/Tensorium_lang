@@ -36,7 +36,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
     auto out = std::make_unique<VarIR>(v->name, k);
     out->coordIndex = coord;
     out->tensorIndexNames =
-        v->tensorIndexNames; // optional, but useful for debug
+        v->tensorIndexNames; 
     return out;
   }
 
@@ -55,7 +55,6 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
     return out;
   }
 
-  // fallback: should not happen
   return std::make_unique<CallIR>("<unknown>");
 }
 
@@ -80,7 +79,6 @@ FieldKind BackendBuilder::lowerFieldKind(TensorKind k) {
 static SimulationIR lowerSimulation(const tensorium::SimulationConfig &sim) {
   SimulationIR out;
 
-  // Coordinates
   switch (sim.coordinates) {
   case tensorium::CoordinateSystem::Cartesian:
     out.coords = CoordSystem::Cartesian;
@@ -130,11 +128,9 @@ ModuleIR BackendBuilder::build(const Program &prog,
                                tensorium::SemanticAnalyzer &sem) {
   ModuleIR mod;
 
-  // Simulation (optional)
   if (prog.simulation)
     mod.simulation = lowerSimulation(*prog.simulation);
 
-  // Fields
   mod.fields.reserve(prog.fields.size());
   for (const auto &f : prog.fields) {
     FieldIR out;
@@ -145,7 +141,6 @@ ModuleIR BackendBuilder::build(const Program &prog,
     mod.fields.push_back(std::move(out));
   }
 
-  // Evolutions → Indexed → ExprIR
   mod.evolutions.reserve(prog.evolutions.size());
   for (const auto &evo : prog.evolutions) {
     auto indexed = sem.analyzeEvolution(evo);
