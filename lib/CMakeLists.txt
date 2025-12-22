@@ -8,6 +8,8 @@ target_sources(tensorium
     Parse/Parser.cpp
     Sema/Sema.cpp
     Backend/BackendBuilder.cpp
+	Runtime/Eval.cpp
+	Runtime/CpuRuntime.cpp
 )
 
 target_include_directories(tensorium

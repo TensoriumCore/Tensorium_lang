@@ -6,6 +6,9 @@
 #include "tensorium/Backend/BackendBuilder.hpp"
 #include "tensorium/Backend/IR.hpp"
 #include "tensorium/Backend/IRPrinter.hpp"
+#include "tensorium/Runtime/CpuRuntime.hpp"
+#include "tensorium/Runtime/Eval.hpp"
+
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -73,8 +76,13 @@ static void printIndexedExpr(const IndexedExpr *e) {
 }
 
 int main(int argc, char **argv) {
-  bool dumpAST, dumpIndexed = false;
+  bool dumpAST = false;
+  bool dumpIndexed = false;
   bool dumpBackend, dumpBackendExpr = false;
+  bool runCpu = false;
+  size_t steps = 10;
+  double initScalar = 1.0;
+  double initAlpha = 2.0;
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
     return 1;
@@ -84,15 +92,30 @@ int main(int argc, char **argv) {
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
+
     if (arg == "--dump-ast") {
       dumpAST = true;
     } else if (arg == "--dump-indexed") {
       dumpIndexed = true;
-    } else if (arg == "--dump-backend")
+    } else if (arg == "--dump-backend") {
       dumpBackend = true;
-    else if (arg == "--dump-backend-expr")
+    } else if (arg == "--dump-backend-expr") {
       dumpBackendExpr = true;
-    else {
+    } else if (arg == "--run-cpu") {
+      runCpu = true;
+    } else if (arg == "--steps") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--steps expects an integer");
+      steps = std::stoul(argv[++i]);
+    } else if (arg == "--init") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--init expects a float");
+      initScalar = std::stod(argv[++i]);
+    } else if (arg == "--init-alpha") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--init-alpha expects a float");
+      initAlpha = std::stod(argv[++i]);
+    } else {
       files.push_back(arg);
     }
   }
@@ -185,6 +208,24 @@ int main(int argc, char **argv) {
         std::cout << "\n=== BACKEND IR FULL (" << path << ") ===\n";
         tensorium::backend::printModuleIR(mod);
         std::cout << "==============================\n";
+      }
+      if (runCpu) {
+        auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
+
+        tensorium::runtime::RunOptions opt;
+        opt.steps = steps;
+
+        auto st = tensorium::runtime::initState1D(mod, initScalar, initAlpha);
+
+        tensorium::runtime::runEuler1D(mod, st, opt);
+
+        for (const auto &kv : st.fields) {
+          std::cout << "\n[CPU] Field " << kv.first << " first values: ";
+          for (size_t i = 0; i < kv.second.size() && i < 8; ++i) {
+            std::cout << kv.second[i] << " ";
+          }
+          std::cout << "\n";
+        }
       }
       std::cout << "[Tensorium] OK: " << path << "\n";
     }
