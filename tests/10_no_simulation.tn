@@ -1,0 +1,6 @@
+
+field scalar phi
+
+evolution NoSim {
+  dt phi = phi
+}

@@ -1,0 +1,26 @@
+
+field scalar chi
+field cov_tensor2 gamma[i,j]
+field cov_tensor2 Atilde[i,j]
+field scalar alpha
+
+simulation {
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.01
+    integrator = rk4
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+evolution BSSN {
+  dt chi = -2 * alpha * chi
+  dt gamma[i,j] = -2 * alpha * Atilde[i,j]
+}

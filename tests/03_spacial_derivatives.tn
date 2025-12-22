@@ -1,0 +1,23 @@
+
+field scalar phi
+field covector grad_phi[i]
+
+simulation {
+  dimension = 1
+  resolution = [32]
+
+  time {
+    dt = 0.01
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution DerivativeTest {
+  dt grad_phi[i] = d_i(phi)
+}

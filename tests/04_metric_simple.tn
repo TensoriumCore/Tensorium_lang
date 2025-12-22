@@ -1,0 +1,27 @@
+
+field scalar phi
+
+metric g(t,x) {
+  g(t,t) = -1
+  g(x,x) = 1
+}
+
+simulation {
+  dimension = 1
+  resolution = [16]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution MetricTest {
+  dt phi = phi
+}

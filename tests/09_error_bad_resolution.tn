@@ -1,0 +1,22 @@
+
+field scalar phi
+
+simulation {
+  dimension = 2
+  resolution = [16]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution BadSim {
+  dt phi = phi
+}

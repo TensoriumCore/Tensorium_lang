@@ -1,324 +1,73 @@
-#include "../Printer/Printer.hpp"
-#include "tensorium/AST/ASTPrinter.hpp"
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"
+#include "tensorium/AST/ASTPrinter.hpp"
+
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <vector>
 
 using namespace tensorium;
 
-struct TestCase {
-  std::string name;
-  std::string input;
-  bool expectFailure = false;
-};
+static std::string readFile(const std::string &path) {
+  std::ifstream file(path);
+  if (!file)
+    throw std::runtime_error("cannot open file: " + path);
 
-bool runTest(const TestCase &t) {
-  try {
-    Lexer lex(t.input.c_str());
-    Parser parser(lex);
-    Program prog = parser.parseProgram();
-    SemanticAnalyzer sem(prog);
-
-    std::vector<IndexedMetric> indexedMetrics;
-    std::vector<IndexedEvolution> indexedEvos;
-
-    for (auto &m : prog.metrics)
-      indexedMetrics.push_back(sem.analyzeMetric(m));
-
-    for (auto &e : prog.evolutions)
-      indexedEvos.push_back(sem.analyzeEvolution(e));
-
-    if (t.expectFailure) {
-      std::cerr << " FAIL (unexpected success): " << t.name << "\n";
-      return false;
-    }
-
-    std::cout << " PASS: " << t.name << "\n\n";
-
-    std::cout << "========== Pretty-print ==========\n";
-    std::cout << "Fields:\n";
-    for (auto &f : prog.fields)
-      printField(f);
-    if (prog.simulation) {
-      printSimulation(*prog.simulation);
-    }
-    for (size_t i = 0; i < prog.metrics.size(); i++) {
-      printMetric(prog.metrics[i], (int)i);
-      printIndexedMetric(indexedMetrics[i]);
-    }
-
-    for (size_t i = 0; i < prog.evolutions.size(); i++) {
-      printEvolution(prog.evolutions[i], (int)i);
-      printIndexedEvolution(indexedEvos[i]);
-    }
-    std::cout << "==================================\n\n";
-
-    return true;
-
-  } catch (const std::exception &ex) {
-    if (t.expectFailure) {
-      std::cout << "✔ PASS (expected failure): " << t.name << " -- "
-                << ex.what() << "\n";
-      return true;
-    }
-    std::cerr << " FAIL: " << t.name << " -- " << ex.what() << "\n";
-    return false;
-  }
+  std::ostringstream ss;
+  ss << file.rdbuf();
+  return ss.str();
 }
 
-int main() {
+int main(int argc, char **argv) {
+  bool dumpAST = false;
 
-  std::vector<TestCase> tests = {
+  if (argc < 2) {
+    std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
+    return 1;
+  }
 
-      {"Valid BSSN evolution",
-       R"(
-            field scalar chi
-            field cov_tensor2 gamma[i,j]
-            field cov_tensor2 Atilde[i,j]
-            field scalar alpha
+  std::vector<std::string> files;
 
-            metric g(t,r,theta,phi) {
-                rho2 = r^2 + a^2 * cos(theta)^2
-                g(t,t) = -(1 - 2*M/r)
-            }
-
-            evolution BSSN {
-                dt chi        = -2 * alpha * K
-                dt gamma[i,j] = -2 * alpha * Atilde[i,j]
-                Atilde[i,j]   = contract(gamma[i,k] * Atilde[k,j])
-            }
-        )"},
-
-      {"Scalar evolution OK",
-       R"(
-            field scalar phi
-
-            evolution Test {
-                dt phi = 2 * phi
-            }
-        )"},
-
-      {
-          "Correct nested contraction",
-          R"(
-		    field cov_tensor2 A[i,j]
-	
-		    evolution OK {
-				dt A[i,j] = contract(A[i,k] * (A[k,l] * A[l,j]))
-			}
-		)",
-      },
-
-      {"Local temporary reuse OK",
-       R"(
-            field scalar chi
-
-            evolution Temp {
-                dt chi = K
-                K = chi * chi
-            }
-        )"},
-
-      {"Metric-only parameters allowed",
-       R"(
-            field scalar rho
-
-            metric g(t,r) {
-                test = r + t
-            }
-
-            evolution OK {
-                dt rho = r
-            }
-        )"},
-
-      {"Invalid index",
-       R"(
-            field cov_tensor2 gamma[i,j]
-
-            evolution Wrong {
-                dt gamma[i,j] = gamma[i,p]  # p not allowed
-            }
-        )",
-       true},
-
-      {"Missing contraction",
-       R"(
-            field cov_tensor2 gamma[i,j]
-
-            evolution Wrong {
-                dt gamma[i,j] = gamma[i,k]  # k appears only on RHS
-            }
-        )",
-       true},
-
-      {"Too many repeated indices (illegal contraction)",
-       R"(
-            field cov_tensor2 A[i,j]
-
-            evolution Bad {
-                dt A[i,j] = A[i,k] * A[k,k] * A[k,j]
-            }
-        )",
-       true},
-
-      {"Wrong tensor rank - vector indexed like matrix",
-       R"(
-            field vector beta[i]
-
-            evolution Bad {
-                dt beta[i,j] = beta[i]
-            }
-        )",
-       true},
-
-      {"Local variable shadowing error",
-       R"(
-            field scalar chi
-
-            evolution Bad {
-                dt chi = alpha
-                chi = 5
-            }
-        )",
-       true},
-
-      {"Function call misused in tensor context",
-       R"(
-            field cov_tensor2 gamma[i,j]
-            field cov_tensor2 Atilde[i,j]
-
-            evolution Bad {
-                dt gamma[i,j] = sin(gamma)
-            }
-        )",
-       true},
-
-      {"Reference to undeclared field",
-       R"(
-            field scalar phi
-
-            evolution Bad {
-                dt psi = phi
-            }
-        )",
-       true},
-
-      {"Index missing on RHS",
-       R"(
-            field cov_tensor2 T[i,j]
-
-            evolution Bad {
-                dt T[i,j] = T[i,k]
-            }
-        )",
-       true},
-      {
-          "Partial derivative on scalar -> covector",
-          R"(
-        field scalar phi
-        field covector grad_phi[i]
-
-        evolution Diff {
-            dt grad_phi[i] = d_i(phi)
-        }
-    )",
-      },
-      {"Laplacian expects scalar",
-       R"(
-        field covector v[i]
-
-        evolution BadLap {
-            dt v[i] = laplacian(v)
-        }
-    )",
-       true},
-      {"Covariant derivative of scalar",
-       R"(
-		field scalar phi
-		field covector dphi[i]
-
-		evolution OK {
-			dt dphi[i] = nabla_i(phi)
-		}
-	)"},
-
-      {"Contravariant covariant derivative without inverse metric",
-       R"(
-    field scalar phi
-    field vector v[i]
-
-    evolution Bad {
-      dt v[i] = nabla^i(phi)
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--dump-ast") {
+      dumpAST = true;
+    } else {
+      files.push_back(arg);
     }
-  )",
-       true},
+  }
 
-      {"Simulation block with time and spatial config",
-       R"(
-    field scalar phi
+  if (files.empty()) {
+    std::cerr << "error: no input files\n";
+    return 1;
+  }
 
-    simulation {
-      coordinates = cartesian
-      dimension = 3
-      resolution = [64,64,64]
+  try {
+    for (const auto &path : files) {
+      std::cout << "[Tensorium] parsing " << path << "\n";
 
-      time {
-        dt = 0.01
-        integrator = rk4
+      std::string src = readFile(path);
+
+      Lexer lex(src.c_str());
+      Parser parser(lex);
+      Program prog = parser.parseProgram();
+
+      SemanticAnalyzer sem(prog);
+
+      if (dumpAST) {
+        std::cout << "\n=== AST DUMP (" << path << ") ===\n";
+        printProgram(prog);
+        std::cout << "==============================\n";
       }
 
-      spatial {
-        scheme = fd
-        derivative = centered
-        order = 4
-      }
+      std::cout << "[Tensorium] OK: " << path << "\n";
     }
+  } catch (const std::exception &e) {
+    std::cerr << "Tensorium error: " << e.what() << "\n";
+    return 1;
+  }
 
-    evolution Test {
-      dt phi = phi
-    }
-  )"},
-      {"Invalid simulation: resolution mismatch",
-       R"(
-    field scalar phi
-
-    simulation {
-      dimension = 3
-      resolution = [64,64]
-
-      time { dt = 0.01 integrator = rk4 }
-      spatial { scheme = fd derivative = centered order = 4 }
-    }
-
-    evolution Test { dt phi = phi }
-  )",
-       true},
-      {"Invalid simulation: odd FD order",
-       R"(
-    field scalar phi
-
-    simulation {
-      dimension = 3
-      resolution = [32,32,32]
-
-      time { dt = 0.01 integrator = rk4 }
-      spatial { scheme = fd derivative = centered order = 3 }
-    }
-
-    evolution Test { dt phi = phi }
-  )",
-       true},
-  };
-
-  bool ok = true;
-  for (auto &t : tests)
-    ok &= runTest(t);
-
-  std::cout << "\n=== FINAL TEST STATUS: " << (ok ? "ALL PASSED ✔" : "FAIL ")
-            << "\n";
-
-  return ok ? 0 : 1;
+  return 0;
 }

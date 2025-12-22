@@ -1,0 +1,6 @@
+
+field cov_tensor2 gamma[i,j]
+
+evolution ErrorTest {
+  dt gamma[i,j] = gamma[i,p]
+}

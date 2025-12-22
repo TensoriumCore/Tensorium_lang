@@ -1,0 +1,22 @@
+field scalar phi
+field scalar alpha
+
+simulation {
+  dimension = 1
+  resolution = [16]
+
+  time {
+    dt = 0.05
+    integrator = rk4
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution ParamTest {
+  dt phi = alpha * phi
+}

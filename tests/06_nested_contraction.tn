@@ -1,0 +1,22 @@
+
+field cov_tensor2 A[i,j]
+
+simulation {
+  dimension = 2
+  resolution = [8,8]
+
+  time {
+    dt = 0.01
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution NestedTest {
+  dt A[i,j] = contract(A[i,k] * (A[k,l] * A[l,j]))
+}
