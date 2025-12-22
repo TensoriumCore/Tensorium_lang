@@ -12,13 +12,11 @@ namespace tensorium_mlir {
 
 void emitMLIR(const tensorium::backend::ModuleIR & /*module*/) {
   std::cerr << "[MLIR] emitMLIR called\n";
+
   mlir::MLIRContext ctx;
-
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
-
   mlir::OpBuilder b(&ctx);
   auto loc = b.getUnknownLoc();
-
   mlir::ModuleOp module = mlir::ModuleOp::create(loc);
 
   auto funcTy = b.getFunctionType({}, {});
@@ -29,7 +27,6 @@ void emitMLIR(const tensorium::backend::ModuleIR & /*module*/) {
   b.create<mlir::func::ReturnOp>(loc);
 
   module.push_back(f);
-
   module.print(llvm::outs());
   llvm::outs() << "\n";
 }
