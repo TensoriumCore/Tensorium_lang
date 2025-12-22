@@ -7,7 +7,7 @@ target_sources(tensorium
     Lex/Lexer.cpp
     Parse/Parser.cpp
     Sema/Sema.cpp
-    # Backend/BackendBuilder.cpp
+    Backend/BackendBuilder.cpp
 )
 
 target_include_directories(tensorium
