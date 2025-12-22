@@ -1,0 +1,2299 @@
+
+
+==================== FILE: ./tools/driver/main.cpp ====================
+
+#include "tensorium/AST/ASTPrinter.hpp"
+#include "tensorium/Lex/Lexer.hpp"
+#include "tensorium/Parse/Parser.hpp"
+#include "tensorium/Sema/Sema.hpp"
+#include <iostream>
+#include <vector>
+#include "../Printer/Printer.hpp"
+
+using namespace tensorium;
+
+struct TestCase {
+  std::string name;
+  std::string input;
+  bool expectFailure = false;
+};
+
+bool runTest(const TestCase &t) {
+  try {
+    Lexer lex(t.input.c_str());
+    Parser parser(lex);
+    Program prog = parser.parseProgram();
+    SemanticAnalyzer sem(prog);
+
+    std::vector<IndexedMetric> indexedMetrics;
+    std::vector<IndexedEvolution> indexedEvos;
+
+    for (auto &m : prog.metrics)
+      indexedMetrics.push_back(sem.analyzeMetric(m));
+
+    for (auto &e : prog.evolutions)
+      indexedEvos.push_back(sem.analyzeEvolution(e));
+
+    if (t.expectFailure) {
+      std::cerr << " FAIL (unexpected success): " << t.name << "\n";
+      return false;
+    }
+
+    std::cout << " PASS: " << t.name << "\n\n";
+
+    std::cout << "========== Pretty-print ==========\n";
+    std::cout << "Fields:\n";
+    for (auto &f : prog.fields)
+      printField(f);
+    if (prog.simulation) {
+      printSimulation(*prog.simulation);
+    }
+    for (size_t i = 0; i < prog.metrics.size(); i++) {
+      printMetric(prog.metrics[i], (int)i);
+      printIndexedMetric(indexedMetrics[i]);
+    }
+
+    for (size_t i = 0; i < prog.evolutions.size(); i++) {
+      printEvolution(prog.evolutions[i], (int)i);
+      printIndexedEvolution(indexedEvos[i]);
+    }
+    std::cout << "==================================\n\n";
+
+    return true;
+
+  } catch (const std::exception &ex) {
+    if (t.expectFailure) {
+      std::cout << "✔ PASS (expected failure): " << t.name << " -- "
+                << ex.what() << "\n";
+      return true;
+    }
+    std::cerr << " FAIL: " << t.name << " -- " << ex.what() << "\n";
+    return false;
+  }
+}
+
+int main() {
+
+  std::vector<TestCase> tests = {
+
+      {"Valid BSSN evolution",
+       R"(
+            field scalar chi
+            field cov_tensor2 gamma[i,j]
+            field cov_tensor2 Atilde[i,j]
+            field scalar alpha
+
+            metric g(t,r,theta,phi) {
+                rho2 = r^2 + a^2 * cos(theta)^2
+                g(t,t) = -(1 - 2*M/r)
+            }
+
+            evolution BSSN {
+                dt chi        = -2 * alpha * K
+                dt gamma[i,j] = -2 * alpha * Atilde[i,j]
+                Atilde[i,j]   = contract(gamma[i,k] * Atilde[k,j])
+            }
+        )"},
+
+      {"Scalar evolution OK",
+       R"(
+            field scalar phi
+
+            evolution Test {
+                dt phi = 2 * phi
+            }
+        )"},
+
+      {
+          "Correct nested contraction",
+          R"(
+		    field cov_tensor2 A[i,j]
+	
+		    evolution OK {
+				dt A[i,j] = contract(A[i,k] * (A[k,l] * A[l,j]))
+			}
+		)",
+      },
+
+      {"Local temporary reuse OK",
+       R"(
+            field scalar chi
+
+            evolution Temp {
+                dt chi = K
+                K = chi * chi
+            }
+        )"},
+
+      {"Metric-only parameters allowed",
+       R"(
+            field scalar rho
+
+            metric g(t,r) {
+                test = r + t
+            }
+
+            evolution OK {
+                dt rho = r
+            }
+        )"},
+
+      {"Invalid index",
+       R"(
+            field cov_tensor2 gamma[i,j]
+
+            evolution Wrong {
+                dt gamma[i,j] = gamma[i,p]  # p not allowed
+            }
+        )",
+       true},
+
+      {"Missing contraction",
+       R"(
+            field cov_tensor2 gamma[i,j]
+
+            evolution Wrong {
+                dt gamma[i,j] = gamma[i,k]  # k appears only on RHS
+            }
+        )",
+       true},
+
+      {"Too many repeated indices (illegal contraction)",
+       R"(
+            field cov_tensor2 A[i,j]
+
+            evolution Bad {
+                dt A[i,j] = A[i,k] * A[k,k] * A[k,j]
+            }
+        )",
+       true},
+
+      {"Wrong tensor rank - vector indexed like matrix",
+       R"(
+            field vector beta[i]
+
+            evolution Bad {
+                dt beta[i,j] = beta[i]
+            }
+        )",
+       true},
+
+      {"Local variable shadowing error",
+       R"(
+            field scalar chi
+
+            evolution Bad {
+                dt chi = alpha
+                chi = 5
+            }
+        )",
+       true},
+
+      {"Function call misused in tensor context",
+       R"(
+            field cov_tensor2 gamma[i,j]
+            field cov_tensor2 Atilde[i,j]
+
+            evolution Bad {
+                dt gamma[i,j] = sin(gamma)
+            }
+        )",
+       true},
+
+      {"Reference to undeclared field",
+       R"(
+            field scalar phi
+
+            evolution Bad {
+                dt psi = phi
+            }
+        )",
+       true},
+
+      {"Index missing on RHS",
+       R"(
+            field cov_tensor2 T[i,j]
+
+            evolution Bad {
+                dt T[i,j] = T[i,k]
+            }
+        )",
+       true},
+      {
+          "Partial derivative on scalar -> covector",
+          R"(
+        field scalar phi
+        field covector grad_phi[i]
+
+        evolution Diff {
+            dt grad_phi[i] = d_i(phi)
+        }
+    )",
+      },
+      {"Laplacian expects scalar",
+       R"(
+        field covector v[i]
+
+        evolution BadLap {
+            dt v[i] = laplacian(v)
+        }
+    )",
+       true},
+      {"Covariant derivative of scalar",
+       R"(
+		field scalar phi
+		field covector dphi[i]
+
+		evolution OK {
+			dt dphi[i] = nabla_i(phi)
+		}
+	)"},
+
+      {"Contravariant covariant derivative without inverse metric",
+       R"(
+    field scalar phi
+    field vector v[i]
+
+    evolution Bad {
+      dt v[i] = nabla^i(phi)
+    }
+  )",
+       true},
+
+      {"Simulation block with time and spatial config",
+       R"(
+    field scalar phi
+
+    simulation {
+      coordinates = cartesian
+      dimension = 3
+      resolution = [64,64,64]
+
+      time {
+        dt = 0.01
+        integrator = rk4
+      }
+
+      spatial {
+        scheme = fd
+        derivative = centered
+        order = 4
+      }
+    }
+
+    evolution Test {
+      dt phi = phi
+    }
+  )"},
+  };
+
+  bool ok = true;
+  for (auto &t : tests)
+    ok &= runTest(t);
+
+  std::cout << "\n=== FINAL TEST STATUS: " << (ok ? "ALL PASSED ✔" : "FAIL ")
+            << "\n";
+
+  return ok ? 0 : 1;
+}
+
+
+==================== FILE: ./tools/Printer/Printer.cpp ====================
+
+#include "tensorium/AST/ASTPrinter.hpp"
+#include "tensorium/Lex/Lexer.hpp"
+#include "tensorium/Parse/Parser.hpp"
+#include "tensorium/Sema/Sema.hpp"
+#include <iostream>
+#include <vector>
+
+using namespace tensorium;
+
+
+
+static void printField(const FieldDecl &f) {
+  std::cout << "field ";
+
+  switch (f.kind) {
+  case TensorKind::Scalar:
+    std::cout << "scalar ";
+    break;
+  case TensorKind::Vector:
+    std::cout << "vector ";
+    break;
+  case TensorKind::Covector:
+    std::cout << "covector ";
+    break;
+  case TensorKind::CovTensor2:
+    std::cout << "cov_tensor2 ";
+    break;
+  case TensorKind::ConTensor2:
+    std::cout << "con_tensor2 ";
+    break;
+  case TensorKind::MixedTensor:
+    std::cout << "mixed_tensor ";
+    break;
+  }
+  std::cout << f.name << "  (up=" << f.up << ", down=" << f.down << ")";
+  if (!f.indices.empty()) {
+    std::cout << "[";
+    for (size_t i = 0; i < f.indices.size(); ++i) {
+      std::cout << f.indices[i];
+      if (i + 1 < f.indices.size())
+        std::cout << ",";
+    }
+    std::cout << "]";
+  }
+  std::cout << "\n";
+}
+
+static void printSimulation(const SimulationConfig &sim) {
+  std::cout << "\n=== Simulation ===\n";
+
+  std::cout << "Coordinates: ";
+  switch (sim.coordinates) {
+  case CoordinateSystem::Cartesian:
+    std::cout << "cartesian";
+    break;
+  case CoordinateSystem::Spherical:
+    std::cout << "spherical";
+    break;
+  case CoordinateSystem::Cylindrical:
+    std::cout << "cylindrical";
+    break;
+  }
+  std::cout << "\n";
+
+  std::cout << "Dimension: " << sim.dimension << "\n";
+
+  std::cout << "Resolution: [";
+  for (size_t i = 0; i < sim.resolution.size(); ++i) {
+    std::cout << sim.resolution[i];
+    if (i + 1 < sim.resolution.size())
+      std::cout << ",";
+  }
+  std::cout << "]\n";
+
+  std::cout << "Time:\n";
+  std::cout << "  dt = " << sim.time.dt << "\n";
+  std::cout << "  integrator = ";
+  switch (sim.time.integrator) {
+  case TimeIntegrator::Euler:
+    std::cout << "euler";
+    break;
+  case TimeIntegrator::RK3:
+    std::cout << "rk3";
+    break;
+  case TimeIntegrator::RK4:
+    std::cout << "rk4";
+    break;
+  }
+  std::cout << "\n";
+
+  std::cout << "Spatial:\n";
+  std::cout << "  scheme = ";
+  switch (sim.spatial.scheme) {
+  case SpatialScheme::FiniteDifference:
+    std::cout << "fd";
+    break;
+  case SpatialScheme::Spectral:
+    std::cout << "spectral";
+    break;
+  }
+  std::cout << "\n";
+
+  std::cout << "  derivative = ";
+  switch (sim.spatial.derivative) {
+  case DerivativeScheme::Centered:
+    std::cout << "centered";
+    break;
+  case DerivativeScheme::Upwind:
+    std::cout << "upwind";
+    break;
+  }
+  std::cout << "\n";
+
+  std::cout << "  order = " << sim.spatial.order << "\n";
+}
+
+static void printMetric(const MetricDecl &m, int idx) {
+  std::cout << "\n=== Metric #" << idx << " ===\n";
+  std::cout << "Metric name: " << m.name << "\n";
+  std::cout << "Header indices: ";
+  for (const auto &id : m.indices)
+    std::cout << id << " ";
+  std::cout << "\n";
+
+  std::cout << "Number of entries: " << m.entries.size() << "\n";
+  for (const auto &e : m.entries) {
+    std::cout << "  ";
+    std::cout << e.lhs.base;
+    if (!e.lhs.indices.empty()) {
+      std::cout << "(";
+      for (size_t i = 0; i < e.lhs.indices.size(); ++i) {
+        std::cout << e.lhs.indices[i];
+        if (i + 1 < e.lhs.indices.size())
+          std::cout << ",";
+      }
+      std::cout << ")";
+    }
+    std::cout << " = ";
+    if (e.rhs)
+      printExpr(e.rhs.get());
+    else
+      std::cout << "<null>";
+    std::cout << "\n";
+  }
+}
+
+static void printIndexedExpr(const IndexedExpr *e);
+static void printIndexedBinary(const IndexedBinary *b) {
+  std::cout << "(";
+  printIndexedExpr(b->lhs.get());
+  std::cout << " " << b->op << " ";
+  printIndexedExpr(b->rhs.get());
+  std::cout << ")";
+}
+
+static void printIndexedExpr(const IndexedExpr *e) {
+  if (auto n = dynamic_cast<const IndexedNumber *>(e)) {
+    std::cout << n->value;
+    return;
+  }
+
+  if (auto v = dynamic_cast<const IndexedVar *>(e)) {
+    std::cout << v->name;
+
+    if (!v->tensorIndexNames.empty()) {
+      std::cout << "[";
+      for (size_t i = 0; i < v->tensorIndexNames.size(); ++i) {
+        std::cout << v->tensorIndexNames[i];
+        if (i + 1 < v->tensorIndexNames.size())
+          std::cout << ",";
+      }
+      std::cout << "]";
+      return;
+    }
+
+    std::cout << "[";
+
+    switch (v->kind) {
+    case IndexedVarKind::Coordinate:
+      std::cout << "coord:" << v->coordIndex;
+      break;
+    case IndexedVarKind::Local:
+      std::cout << "local";
+      break;
+    case IndexedVarKind::Field:
+      std::cout << "field";
+      break;
+    case IndexedVarKind::Parameter:
+      std::cout << "param";
+      break;
+    }
+
+    if (v->up > 0 || v->down > 0) {
+      std::cout << ", tensor(up=" << v->up << ",down=" << v->down << ")";
+    }
+
+    std::cout << "]";
+    return;
+  }
+
+  if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
+    printIndexedBinary(b);
+    return;
+  }
+
+  if (auto c = dynamic_cast<const IndexedCall *>(e)) {
+    std::cout << c->callee << "(";
+    for (size_t i = 0; i < c->args.size(); ++i) {
+      printIndexedExpr(c->args[i].get());
+      if (i + 1 < c->args.size())
+        std::cout << ", ";
+    }
+    std::cout << ")";
+    return;
+  }
+
+  std::cout << "<unknown>";
+}
+
+static void printIndexedMetric(const IndexedMetric &m) {
+  std::cout << "\n=== Indexed Metric ===\n";
+  std::cout << m.name << " (rank=" << m.rank << ")\n";
+
+  for (const auto &a : m.assignments) {
+    std::cout << "  " << a.tensor;
+    if (!a.indexOffsets.empty()) {
+      std::cout << "(";
+      for (size_t i = 0; i < a.indexOffsets.size(); ++i) {
+        std::cout << a.indexOffsets[i];
+        if (i + 1 < a.indexOffsets.size())
+          std::cout << ",";
+      }
+      std::cout << ")";
+    }
+    std::cout << " = ";
+    printIndexedExpr(a.rhs.get());
+    std::cout << "\n";
+  }
+}
+
+static void printIndexedEvolution(const IndexedEvolution &evo) {
+  std::cout << "\n=== Indexed Evolution (" << evo.name << ") ===\n";
+  for (const auto &eq : evo.equations) {
+    std::cout << "  dt " << eq.fieldName;
+    if (!eq.indices.empty()) {
+      std::cout << "[";
+      for (size_t i = 0; i < eq.indices.size(); ++i) {
+        std::cout << eq.indices[i];
+        if (i + 1 < eq.indices.size())
+          std::cout << ",";
+      }
+      std::cout << "]";
+    }
+    std::cout << " = ";
+    printIndexedExpr(eq.rhs.get());
+    std::cout << "\n";
+  }
+}
+
+static void printEvolution(const EvolutionDecl &evo, int idx) {
+  std::cout << "\n=== Evolution #" << idx << " (" << evo.name << ") ===\n";
+
+  for (const auto &eq : evo.equations) {
+    std::cout << "  dt " << eq.fieldName;
+    if (!eq.indices.empty()) {
+      std::cout << "[";
+      for (size_t i = 0; i < eq.indices.size(); ++i) {
+        std::cout << eq.indices[i];
+        if (i + 1 < eq.indices.size())
+          std::cout << ",";
+      }
+      std::cout << "]";
+    }
+    std::cout << " = ";
+    printExpr(eq.rhs.get());
+    std::cout << "\n";
+  }
+
+  if (!evo.tempAssignments.empty()) {
+    std::cout << "  -- Locals --\n";
+    for (const auto &tmp : evo.tempAssignments) {
+      std::cout << "  " << tmp.lhs.base;
+      if (!tmp.lhs.indices.empty()) {
+        std::cout << "[";
+        for (size_t i = 0; i < tmp.lhs.indices.size(); ++i) {
+          std::cout << tmp.lhs.indices[i];
+          if (i + 1 < tmp.lhs.indices.size())
+            std::cout << ",";
+        }
+        std::cout << "]";
+      }
+      std::cout << " = ";
+      printExpr(tmp.rhs.get());
+      std::cout << "\n";
+    }
+  }
+}
+
+
+
+==================== FILE: ./tools/Printer/Printer.hpp ====================
+
+#pragma once
+
+#include "tensorium/AST/AST.hpp"
+#include "tensorium/AST/IndexedAST.hpp"
+#include <iostream>
+
+namespace tensorium {
+
+void printField(const FieldDecl &f);
+
+void printSimulation(const SimulationConfig &sim);
+
+void printMetric(const MetricDecl &m, int idx);
+void printIndexedMetric(const IndexedMetric &m);
+
+void printEvolution(const EvolutionDecl &evo, int idx);
+void printIndexedEvolution(const IndexedEvolution &evo);
+
+void printIndexedExpr(const IndexedExpr *e);
+
+} // namespace tensorium
+
+
+==================== FILE: ./Makefile ====================
+
+CXX      := clang++
+CXXFLAGS := -std=c++20 -O3 -mtune=native -Wall -Wextra -Wpedantic -Iinclude
+
+TARGET   := Tensorium_cc
+
+SRC_DIRS := lib tools tools/Printer
+
+SRCS := $(shell find $(SRC_DIRS) -name "*.cpp")
+
+OBJS := $(SRCS:.cpp=.o)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	@echo "Linking executable: $@"
+	$(CXX) $(CXXFLAGS) $^ -o $@
+	@echo "Build successful! Run with: ./$(TARGET)"
+
+%.o: %.cpp
+	@echo "Compiling $<"
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	@echo "Cleaning up..."
+	rm -f $(OBJS) $(TARGET)
+
+.PHONY: all clean
+
+
+==================== FILE: ./include/tensorium/Lex/Lexer.hpp ====================
+
+#pragma once
+#include "tensorium/Basic/Token.hpp"
+
+namespace tensorium {
+class Lexer {
+  const char *src;
+  int line = 1;
+  int col = 1;
+  void advanceChar();
+public:
+  explicit Lexer(const char *input);
+  Token next();
+};
+}
+
+
+==================== FILE: ./include/tensorium/Parse/Parser.hpp ====================
+
+#pragma once
+#include "tensorium/AST/AST.hpp"
+#include "tensorium/Lex/Lexer.hpp"
+
+namespace tensorium {
+class Parser {
+  Lexer &lex;
+  Token cur;
+  void advance();
+  void expect(TokenType type);
+  [[noreturn]] void syntaxError(const std::string &msg);
+
+  std::unique_ptr<Expr> parseExpr();
+  std::unique_ptr<Expr> parseAddExpr();
+  std::unique_ptr<Expr> parseMulExpr();
+  std::unique_ptr<Expr> parsePowExpr();
+  std::unique_ptr<Expr> parseUnaryExpr();
+  std::unique_ptr<Expr> parsePrimary();
+  std::vector<std::unique_ptr<Expr>> parseExprList();
+
+  TensorAccess parseLHS();
+  Assignment parseAssignment();
+  FieldDecl parseFieldDecl();
+  MetricDecl parseMetric();
+  EvolutionEq parseEvolutionEq();
+  EvolutionDecl parseEvolution();
+  SimulationConfig parseSimulation();
+  TimeConfig parseTimeBlock();
+  SpatialConfig parseSpatialBlock();
+
+public:
+  explicit Parser(Lexer &l);
+  Program parseProgram();
+};
+} // namespace tensorium
+
+
+==================== FILE: ./include/tensorium/Basic/Token.hpp ====================
+
+#pragma once
+#include <string>
+
+namespace tensorium {
+enum class TokenType {
+  End,
+  Identifier,
+  Number,
+  LParen,
+  RParen,
+  LBrace,
+  RBrace,
+  LBracket,
+  RBracket,
+  Comma,
+  Equals,
+  Plus,
+  Minus,
+  Star,
+  Slash,
+  Caret,
+  KwSpacetime,
+  KwMetric,
+  KwDecompose,
+  KwCoords,
+  KwParams,
+  KwSignature,
+  KwLapse,
+  KwShift,
+  KwSpatial,
+  KwExtrinsic,
+  KwField,
+  KwScalar,
+  KwVector,
+  KwTensor2,
+  KwCovector,
+  KwCovTensor2,
+  KwConTensor2,
+  KwEq,
+  KwEvolution,
+  KwDt,
+  KwSimulation,
+  KwTime,
+  Unknown
+};
+
+struct Token {
+  TokenType type;
+  std::string text;
+  int line;
+  int column;
+};
+} // namespace tensorium
+
+
+==================== FILE: ./include/tensorium/Sema/Sema.hpp ====================
+
+#pragma once
+#include "tensorium/AST/AST.hpp"
+#include "tensorium/AST/IndexedAST.hpp" // Inclusion du fichier complet
+#include <deque>
+#include <memory>
+#include <unordered_map>
+#include <unordered_set>
+
+static const std::unordered_set<std::string> SPATIAL_INDICES = {"i", "j", "k",
+                                                                "l", "m", "n"};
+namespace tensorium {
+
+class SemanticAnalyzer {
+  const Program &prog;
+  std::unordered_map<std::string, int> coordIndex;
+  std::unordered_map<std::string, bool> locals;
+  std::unordered_map<std::string, const FieldDecl *> fields;
+  std::vector<FieldDecl> syntheticMetricFields;
+  std::unordered_map<std::string, int> indexUseCount;
+  std::unordered_set<std::string> lhsIndices;
+
+  void validateSpatialIndex(const std::string &idx);
+  int resolveIndex(const std::string &name);
+  std::unique_ptr<IndexedExpr> transformExpr(const Expr *e);
+
+public:
+  explicit SemanticAnalyzer(const Program &p);
+  IndexedMetric analyzeMetric(const MetricDecl &decl);
+  IndexedEvolution analyzeEvolution(const EvolutionDecl &evo);
+};} // namespace tensorium
+
+
+==================== FILE: ./include/tensorium/Sema/tensor_type_checker.hpp ====================
+
+#pragma once
+#include "tensorium/AST/AST.hpp"
+#include "tensorium/AST/IndexedAST.hpp"
+#include <stdexcept>
+#include <string>
+
+namespace tensorium {
+
+struct TensorType {
+  int up = 0;
+  int down = 0;
+
+  bool isScalar() const { return up == 0 && down == 0; }
+  int rank() const { return up + down; }
+
+  bool sameVariance(const TensorType &o) const {
+    return up == o.up && down == o.down;
+  }
+};
+
+class TensorTypeChecker {
+  bool isPartialDerivative(const std::string &name) const {
+    if (name.size() != 3)
+      return false;
+    if (name[0] != 'd' || name[1] != '_')
+      return false;
+    char c = name[2];
+    return (c == 'i' || c == 'j' || c == 'k' || c == 'l' || c == 'm' ||
+            c == 'n');
+  }
+
+  bool isCovariantDerivative(const std::string &name, bool &contravariant,
+                             char &index) const {
+    if (name.size() == 7 && name.rfind("nabla_", 0) == 0) {
+      index = name[6];
+      contravariant = false;
+      return true;
+    }
+    if (name.size() == 7 && name.rfind("nabla^", 0) == 0) {
+      index = name[6];
+      contravariant = true;
+      return true;
+    }
+    return false;
+  }
+
+  static bool isTensorIndexChar(char c) {
+    return (c == 'i' || c == 'j' || c == 'k' || c == 'l' || c == 'm' ||
+            c == 'n');
+  }
+
+  void collectIndexCounts(const IndexedExpr *e, int counts[256]) const {
+    if (!e)
+      return;
+
+    if (auto v = dynamic_cast<const IndexedVar *>(e)) {
+      for (const auto &name : v->tensorIndexNames) {
+        if (!name.empty()) {
+          char c = name[0];
+          if (isTensorIndexChar(c))
+            counts[(unsigned char)c]++;
+        }
+      }
+      return;
+    }
+
+    if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
+      collectIndexCounts(b->lhs.get(), counts);
+      collectIndexCounts(b->rhs.get(), counts);
+      return;
+    }
+
+    if (auto c = dynamic_cast<const IndexedCall *>(e)) {
+      for (const auto &arg : c->args)
+        collectIndexCounts(arg.get(), counts);
+      return;
+    }
+  }
+
+public:
+  TensorType infer(const IndexedExpr *e) const {
+    if (!e)
+      throw std::runtime_error("null expression in tensor type inference");
+
+    if (dynamic_cast<const IndexedNumber *>(e))
+      return TensorType{0, 0};
+
+    if (auto v = dynamic_cast<const IndexedVar *>(e)) {
+      switch (v->tensorKind) {
+      case TensorKind::Scalar:
+        return TensorType{0, 0};
+      case TensorKind::Vector:
+        return TensorType{1, 0};
+      case TensorKind::Covector:
+        return TensorType{0, 1};
+      case TensorKind::CovTensor2:
+        return TensorType{0, 2};
+      case TensorKind::ConTensor2:
+        return TensorType{2, 0};
+      case TensorKind::MixedTensor:
+        return TensorType{v->up, v->down};
+      }
+    }
+
+    if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
+      TensorType lt = infer(b->lhs.get());
+      TensorType rt = infer(b->rhs.get());
+
+      if (b->op == '+' || b->op == '-') {
+        if (!lt.sameVariance(rt))
+          throw std::runtime_error(
+              "tensor addition/subtraction requires identical variance");
+        return lt;
+      }
+
+      if (b->op == '*') {
+        if (lt.isScalar())
+          return rt;
+        if (rt.isScalar())
+          return lt;
+        return TensorType{lt.up + rt.up, lt.down + rt.down};
+      }
+
+      if (b->op == '/') {
+        if (!rt.isScalar())
+          throw std::runtime_error(
+              "division by non-scalar tensor is not allowed");
+        return lt;
+      }
+
+      return lt;
+    }
+
+    if (auto call = dynamic_cast<const IndexedCall *>(e)) {
+      const std::string &cal = call->callee;
+
+      if (cal == "contract") {
+        if (call->args.size() != 1)
+          throw std::runtime_error("contract() expects 1 argument");
+
+        const IndexedExpr *arg = call->args[0].get();
+        TensorType t = infer(arg);
+
+        int counts[256] = {0};
+        collectIndexCounts(arg, counts);
+
+        int pairs = 0;
+        for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
+          int c = counts[(unsigned char)idx];
+          if (c < 0)
+            throw std::runtime_error("internal error: negative index count");
+          pairs += (c / 2);
+        }
+
+        if (pairs == 0)
+          throw std::runtime_error(
+              "contract() expects at least one repeated index");
+
+        int remove = 2 * pairs;
+        int r = t.rank();
+        if (r < remove)
+          throw std::runtime_error(
+              "contract() contraction exceeds tensor rank");
+
+        int up = t.up;
+        int down = t.down;
+
+        int rem = remove;
+        int takeDown = (down < rem) ? down : rem;
+        down -= takeDown;
+        rem -= takeDown;
+
+        int takeUp = (up < rem) ? up : rem;
+        up -= takeUp;
+        rem -= takeUp;
+
+        if (rem != 0)
+          throw std::runtime_error(
+              "contract() could not remove requested rank");
+
+        return TensorType{up, down};
+      }
+      if (isPartialDerivative(cal)) {
+        if (call->args.size() != 1)
+          throw std::runtime_error("d_* expects exactly 1 argument");
+        TensorType argT = infer(call->args[0].get());
+        if (!argT.isScalar())
+          throw std::runtime_error("d_* expects scalar argument");
+        return TensorType{0, 1};
+      }
+
+      bool contra = false;
+      char idx = 0;
+      if (isCovariantDerivative(cal, contra, idx)) {
+        if (call->args.size() != 1)
+          throw std::runtime_error("nabla expects exactly 1 argument");
+        TensorType t = infer(call->args[0].get());
+        if (contra)
+          return TensorType{t.up + 1, t.down};
+        return TensorType{t.up, t.down + 1};
+      }
+
+      if (cal == "laplacian") {
+        if (call->args.size() != 1)
+          throw std::runtime_error("laplacian() expects exactly 1 argument");
+        TensorType argT = infer(call->args[0].get());
+        if (!argT.isScalar())
+          throw std::runtime_error("laplacian() expects scalar argument");
+        return TensorType{0, 0};
+      }
+
+      for (auto &arg : call->args) {
+        TensorType t = infer(arg.get());
+        if (!t.isScalar())
+          throw std::runtime_error("function '" + cal +
+                                   "' expects scalar argument");
+      }
+      return TensorType{0, 0};
+    }
+
+    throw std::runtime_error("unsupported expression in tensor type inference");
+  }
+
+  void checkAssignmentVariance(const TensorType &lhs,
+                               const IndexedExpr *rhs) const {
+    TensorType rhsType = infer(rhs);
+    if (!lhs.sameVariance(rhsType)) {
+      throw std::runtime_error(
+          "tensor assignment mismatch: LHS(" + std::to_string(lhs.up) + "," +
+          std::to_string(lhs.down) + ") vs RHS(" + std::to_string(rhsType.up) +
+          "," + std::to_string(rhsType.down) + ")");
+    }
+  }
+
+  void checkMetricAssignment(const IndexedAssignment &a) const {
+    TensorType t = infer(a.rhs.get());
+    if (!t.isScalar()) {
+      throw std::runtime_error("metric assignment to '" + a.tensor +
+                               "' must be scalar (got tensor rank=" +
+                               std::to_string(t.rank()) + ")");
+    }
+  }
+};
+
+} // namespace tensorium
+
+
+==================== FILE: ./include/tensorium/AST/Visitor.hpp ====================
+
+#pragma once
+
+namespace tensorium {
+
+struct NumberExpr;
+struct VarExpr;
+struct BinaryExpr;
+struct CallExpr;
+struct ParenExpr;
+struct IndexedVarExpr;
+
+// class ExprVisitor {
+// public:
+//   virtual ~ExprVisitor() = default;
+//   virtual void visit(const NumberExpr &E) = 0;
+//   virtual void visit(const VarExpr &E) = 0;
+//   virtual void visit(const BinaryExpr &E) = 0;
+//   virtual void visit(const CallExpr &E) = 0;
+//   virtual void visit(const ParenExpr &E) = 0;
+//   virtual void visit(const IndexedVarExpr &E) = 0;
+// };
+
+} // namespace tensorium
+
+
+==================== FILE: ./include/tensorium/AST/IndexedAST.hpp ====================
+
+#pragma once
+#include "tensorium/AST/AST.hpp"
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace tensorium {
+
+struct IndexedExpr {
+  virtual ~IndexedExpr() = default;
+};
+
+struct IndexedNumber : IndexedExpr {
+  double value;
+  explicit IndexedNumber(double v) : value(v) {}
+};
+
+enum class IndexedVarKind { Coordinate, Local, Field, Parameter };
+
+struct IndexedVar : IndexedExpr {
+  std::string name;
+  IndexedVarKind kind;
+  TensorKind tensorKind = TensorKind::Scalar;
+  int up = 0;
+  int down = 0;
+  int coordIndex = -1;
+
+  std::vector<int> tensorIndices;
+  std::vector<std::string> tensorIndexNames;
+
+  IndexedVar(std::string n, IndexedVarKind k, int cidx = -1)
+      : name(std::move(n)), kind(k), coordIndex(cidx) {}
+};
+
+struct IndexedBinary : IndexedExpr {
+  char op;
+  std::unique_ptr<IndexedExpr> lhs;
+  std::unique_ptr<IndexedExpr> rhs;
+  IndexedBinary(char o, std::unique_ptr<IndexedExpr> L,
+                std::unique_ptr<IndexedExpr> R)
+      : op(o), lhs(std::move(L)), rhs(std::move(R)) {}
+};
+
+struct IndexedCall : IndexedExpr {
+  std::string callee;
+  std::vector<std::unique_ptr<IndexedExpr>> args;
+};
+
+struct IndexedAssignment {
+  std::string tensor;
+  std::vector<int> indexOffsets;
+  std::unique_ptr<IndexedExpr> rhs;
+};
+
+struct IndexedMetric {
+  std::string name;
+  int rank;
+  std::vector<std::string> coords;
+  std::vector<IndexedAssignment> assignments;
+};
+
+struct IndexedEvolutionEq {
+  std::string fieldName;
+  std::vector<std::string> indices;
+  std::unique_ptr<IndexedExpr> rhs;
+};
+
+struct IndexedEvolution {
+  std::string name;
+  std::vector<IndexedEvolutionEq> equations;
+  std::vector<IndexedAssignment> temp;
+};
+
+} // namespace tensorium
+
+
+==================== FILE: ./include/tensorium/AST/ASTPrinter.hpp ====================
+
+#pragma once
+#include "tensorium/AST/AST.hpp"
+
+namespace tensorium {
+    void printProgram(const Program &prog);
+    void printExpr(const Expr *e);
+}
+
+
+==================== FILE: ./include/tensorium/AST/AST.hpp ====================
+
+#pragma once
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace tensorium {
+
+enum class TensorKind {
+  Scalar,
+  Vector,
+  Covector,
+  CovTensor2,
+  ConTensor2,
+  MixedTensor
+};
+
+struct NumberExpr;
+struct VarExpr;
+struct BinaryExpr;
+struct CallExpr;
+struct ParenExpr;
+struct IndexedVarExpr;
+
+struct ExprVisitor {
+  virtual ~ExprVisitor() = default;
+  virtual void visit(const NumberExpr &) = 0;
+  virtual void visit(const VarExpr &) = 0;
+  virtual void visit(const BinaryExpr &) = 0;
+  virtual void visit(const CallExpr &) = 0;
+  virtual void visit(const ParenExpr &) = 0;
+  virtual void visit(const IndexedVarExpr &) = 0;
+};
+
+struct Expr {
+  virtual ~Expr() = default;
+  virtual void accept(ExprVisitor &v) const = 0;
+};
+
+struct NumberExpr : Expr {
+  double value;
+  explicit NumberExpr(double v) : value(v) {}
+  void accept(ExprVisitor &v) const override { v.visit(*this); }
+};
+
+struct VarExpr : Expr {
+  std::string name;
+  explicit VarExpr(std::string n) : name(std::move(n)) {}
+  void accept(ExprVisitor &v) const override { v.visit(*this); }
+};
+
+struct BinaryExpr : Expr {
+  std::unique_ptr<Expr> lhs, rhs;
+  char op;
+  BinaryExpr(std::unique_ptr<Expr> l, char o, std::unique_ptr<Expr> r)
+      : lhs(std::move(l)), rhs(std::move(r)), op(o) {}
+  void accept(ExprVisitor &v) const override { v.visit(*this); }
+};
+
+struct ParenExpr : Expr {
+  std::unique_ptr<Expr> inner;
+  explicit ParenExpr(std::unique_ptr<Expr> e) : inner(std::move(e)) {}
+  void accept(ExprVisitor &v) const override { v.visit(*this); }
+};
+
+struct CallExpr : Expr {
+  std::string callee;
+  std::vector<std::unique_ptr<Expr>> args;
+  void accept(ExprVisitor &v) const override { v.visit(*this); }
+};
+
+struct IndexedVarExpr : Expr {
+  std::string base;
+  std::vector<std::string> indices;
+  IndexedVarExpr(std::string b, std::vector<std::string> idx)
+      : base(std::move(b)), indices(std::move(idx)) {}
+  void accept(ExprVisitor &v) const override { v.visit(*this); }
+};
+
+// Structures Top-Level
+struct TensorAccess {
+  std::string base;
+  std::vector<std::string> indices;
+};
+struct Assignment {
+  TensorAccess lhs;
+  std::unique_ptr<Expr> rhs;
+};
+
+struct FieldDecl {
+  TensorKind kind;
+  std::string name;
+  std::vector<std::string> indices;
+  int up = 0;
+  int down = 0;
+};
+
+struct MetricDecl {
+  std::string name;
+  std::vector<std::string> indices;
+  std::vector<Assignment> entries;
+};
+
+struct EvolutionEq {
+  std::string fieldName;
+  std::vector<std::string> indices;
+  std::unique_ptr<Expr> rhs;
+};
+
+struct EvolutionDecl {
+  std::string name;
+  std::vector<EvolutionEq> equations;
+  std::vector<Assignment> tempAssignments;
+};
+
+enum class CoordinateSystem { Cartesian, Spherical, Cylindrical };
+
+enum class TimeIntegrator { Euler, RK3, RK4 };
+
+enum class SpatialScheme { FiniteDifference, Spectral };
+
+enum class DerivativeScheme { Centered, Upwind };
+
+struct TimeConfig {
+  double dt = 0.0;
+  TimeIntegrator integrator = TimeIntegrator::RK4;
+};
+
+struct SpatialConfig {
+  SpatialScheme scheme = SpatialScheme::FiniteDifference;
+  DerivativeScheme derivative = DerivativeScheme::Centered;
+  int order = 2;
+};
+
+struct SimulationConfig {
+  CoordinateSystem coordinates = CoordinateSystem::Cartesian;
+  int dimension = 3;
+  std::vector<int> resolution;
+  TimeConfig time;
+  SpatialConfig spatial;
+};
+
+struct Program {
+  std::vector<FieldDecl> fields;
+  std::vector<MetricDecl> metrics;
+  std::vector<EvolutionDecl> evolutions;
+  std::unique_ptr<SimulationConfig> simulation;
+};
+} // namespace tensorium
+
+
+==================== FILE: ./lib/Lex/Lexer.cpp ====================
+
+#include "tensorium/Lex/Lexer.hpp"
+#include <cctype>
+
+namespace tensorium {
+Lexer::Lexer(const char *input) : src(input) {}
+
+void Lexer::advanceChar() {
+  if (*src == '\n') {
+    ++line;
+    col = 1;
+  } else {
+    ++col;
+  }
+  ++src;
+}
+
+Token Lexer::next() {
+  while (*src) {
+    if (std::isspace((unsigned char)*src)) {
+      advanceChar();
+      continue;
+    }
+    if (*src == '#') {
+      while (*src && *src != '\n')
+        ++src;
+      continue;
+    }
+    break;
+  }
+  if (!*src)
+    return {TokenType::End, "", line, col};
+
+  char c = *src;
+  switch (c) {
+  case '(':
+    advanceChar();
+    return {TokenType::LParen, "(", line, col - 1};
+  case ')':
+    advanceChar();
+    return {TokenType::RParen, ")", line, col - 1};
+  case '{':
+    advanceChar();
+    return {TokenType::LBrace, "{", line, col - 1};
+  case '}':
+    advanceChar();
+    return {TokenType::RBrace, "}", line, col - 1};
+  case '[':
+    advanceChar();
+    return {TokenType::LBracket, "[", line, col - 1};
+  case ']':
+    advanceChar();
+    return {TokenType::RBracket, "]", line, col - 1};
+  case ',':
+    advanceChar();
+    return {TokenType::Comma, ",", line, col - 1};
+  case '=':
+    advanceChar();
+    return {TokenType::Equals, "=", line, col - 1};
+  case '+':
+    advanceChar();
+    return {TokenType::Plus, "+", line, col - 1};
+  case '-':
+    advanceChar();
+    return {TokenType::Minus, "-", line, col - 1};
+  case '*':
+    advanceChar();
+    return {TokenType::Star, "*", line, col - 1};
+  case '/':
+    advanceChar();
+    return {TokenType::Slash, "/", line, col - 1};
+  case '^':
+    advanceChar();
+    return {TokenType::Caret, "^", line, col - 1};
+  }
+
+  if (isdigit((unsigned char)c) ||
+      (c == '.' && isdigit((unsigned char)*(src + 1)))) {
+    const char *s = src;
+    while (isdigit((unsigned char)*src) || *src == '.')
+      ++src;
+    return {TokenType::Number, std::string(s, src), line, col};
+  }
+
+  if (isalpha((unsigned char)c)) {
+    const char *s = src;
+    while (isalnum((unsigned char)*src) || *src == '_')
+      ++src;
+    std::string t(s, src);
+    if (t == "spacetime")
+      return {TokenType::KwSpacetime, t, line, col};
+    if (t == "metric")
+      return {TokenType::KwMetric, t, line, col};
+    if (t == "evolution")
+      return {TokenType::KwEvolution, t, line, col};
+    if (t == "dt")
+      return {TokenType::KwDt, t, line, col};
+    if (t == "field")
+      return {TokenType::KwField, t, line, col};
+    if (t == "scalar")
+      return {TokenType::KwScalar, t, line, col};
+    if (t == "vector")
+      return {TokenType::KwVector, t, line, col};
+    if (t == "covector")
+      return {TokenType::KwCovector, t, line, col};
+    if (t == "cov_tensor2")
+      return {TokenType::KwCovTensor2, t, line, col};
+    if (t == "con_tensor2")
+      return {TokenType::KwConTensor2, t, line, col};
+    if (t == "simulation")
+      return {TokenType::KwSimulation, t, line, col};
+    if (t == "time")
+      return {TokenType::KwTime, t, line, col};
+    if (t == "spatial")
+      return {TokenType::KwSpatial, t, line, col};
+    return {TokenType::Identifier, t, line, col};
+  }
+  std::string u(1, c);
+  advanceChar();
+  return {TokenType::Unknown, u, line, col - 1};
+}
+} // namespace tensorium
+
+
+==================== FILE: ./lib/Parse/Parser.cpp ====================
+
+#include "tensorium/Parse/Parser.hpp"
+#include <stdexcept>
+
+namespace tensorium {
+Parser::Parser(Lexer &l) : lex(l) { advance(); }
+void Parser::advance() { cur = lex.next(); }
+void Parser::expect(TokenType type) {
+  if (cur.type != type)
+    syntaxError("Expected " + std::to_string((int)type));
+  advance();
+}
+void Parser::syntaxError(const std::string &msg) {
+  throw std::runtime_error("Syntax: " + msg + " at " +
+                           std::to_string(cur.line));
+}
+
+std::unique_ptr<Expr> Parser::parseExpr() { return parseAddExpr(); }
+std::unique_ptr<Expr> Parser::parseAddExpr() {
+  auto left = parseMulExpr();
+  while (cur.type == TokenType::Plus || cur.type == TokenType::Minus) {
+    char op = cur.text[0];
+    advance();
+    left = std::make_unique<BinaryExpr>(std::move(left), op, parseMulExpr());
+  }
+  return left;
+}
+std::unique_ptr<Expr> Parser::parseMulExpr() {
+  auto left = parsePowExpr();
+  while (cur.type == TokenType::Star || cur.type == TokenType::Slash) {
+    char op = cur.text[0];
+    advance();
+    left = std::make_unique<BinaryExpr>(std::move(left), op, parsePowExpr());
+  }
+  return left;
+}
+std::unique_ptr<Expr> Parser::parsePowExpr() {
+  auto base = parseUnaryExpr();
+  if (cur.type == TokenType::Caret) {
+    advance();
+    return std::make_unique<BinaryExpr>(std::move(base), '^', parsePowExpr());
+  }
+  return base;
+}
+std::unique_ptr<Expr> Parser::parseUnaryExpr() {
+  if (cur.type == TokenType::Plus) {
+    advance();
+    return parseUnaryExpr();
+  }
+  if (cur.type == TokenType::Minus) {
+    advance();
+    return std::make_unique<BinaryExpr>(std::make_unique<NumberExpr>(0.0), '-',
+                                        parseUnaryExpr());
+  }
+  return parsePrimary();
+}
+std::unique_ptr<Expr> Parser::parsePrimary() {
+  if (cur.type == TokenType::Number) {
+    double v = std::stod(cur.text);
+    advance();
+    return std::make_unique<NumberExpr>(v);
+  }
+  if (cur.type == TokenType::Identifier) {
+    std::string n = cur.text;
+    advance();
+    if (cur.type == TokenType::LParen) {
+      advance();
+      auto args = parseExprList();
+      expect(TokenType::RParen);
+      auto c = std::make_unique<CallExpr>();
+      c->callee = n;
+      c->args = std::move(args);
+      return c;
+    }
+    if (cur.type == TokenType::LBracket) {
+      advance();
+      std::vector<std::string> idx;
+      while (cur.type == TokenType::Identifier) {
+        idx.push_back(cur.text);
+        advance();
+        if (cur.type == TokenType::Comma) {
+          advance();
+          continue;
+        }
+        break;
+      }
+      expect(TokenType::RBracket);
+      return std::make_unique<IndexedVarExpr>(n, std::move(idx));
+    }
+    return std::make_unique<VarExpr>(n);
+  }
+  if (cur.type == TokenType::LParen) {
+    advance();
+    auto e = parseExpr();
+    expect(TokenType::RParen);
+    return std::make_unique<ParenExpr>(std::move(e));
+  }
+  syntaxError("Unexpected token in expr");
+}
+std::vector<std::unique_ptr<Expr>> Parser::parseExprList() {
+  std::vector<std::unique_ptr<Expr>> l;
+  if (cur.type == TokenType::RParen)
+    return l;
+  l.push_back(parseExpr());
+  while (cur.type == TokenType::Comma) {
+    advance();
+    l.push_back(parseExpr());
+  }
+  return l;
+}
+
+// LHS Handling with Parens (Fix requested)
+TensorAccess Parser::parseLHS() {
+  TensorAccess lhs;
+  if (cur.type != TokenType::Identifier)
+    syntaxError("Expected ID on LHS");
+  lhs.base = cur.text;
+  advance();
+
+  TokenType close = TokenType::Unknown;
+  if (cur.type == TokenType::LBracket)
+    close = TokenType::RBracket;
+  else if (cur.type == TokenType::LParen)
+    close = TokenType::RParen;
+
+  if (close != TokenType::Unknown) {
+    advance();
+    while (cur.type == TokenType::Identifier) {
+      lhs.indices.push_back(cur.text);
+      advance();
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      break;
+    }
+    expect(close);
+  }
+  return lhs;
+}
+
+Assignment Parser::parseAssignment() {
+  Assignment a;
+  a.lhs = parseLHS();
+  expect(TokenType::Equals);
+  a.rhs = parseExpr();
+  return a;
+}
+
+FieldDecl Parser::parseFieldDecl() {
+  expect(TokenType::KwField);
+  TensorKind k = TensorKind::Scalar;
+  int u = 0, d = 0;
+  if (cur.type == TokenType::KwScalar)
+    k = TensorKind::Scalar;
+  else if (cur.type == TokenType::KwVector) {
+    k = TensorKind::Vector;
+    u = 1;
+  } else if (cur.type == TokenType::KwCovector) {
+    k = TensorKind::Covector;
+    d = 1;
+  } else if (cur.type == TokenType::KwCovTensor2) {
+    k = TensorKind::CovTensor2;
+    d = 2;
+  } else if (cur.type == TokenType::KwConTensor2) {
+    k = TensorKind::ConTensor2;
+    u = 2;
+  }
+  advance();
+
+  if (cur.type != TokenType::Identifier)
+    syntaxError("Expected field name");
+  FieldDecl f;
+  f.kind = k;
+  f.up = u;
+  f.down = d;
+  f.name = cur.text;
+  advance();
+  if (cur.type == TokenType::LBracket) {
+    advance();
+    while (cur.type == TokenType::Identifier) {
+      f.indices.push_back(cur.text);
+      advance();
+      if (cur.type == TokenType::Comma)
+        advance();
+      else
+        break;
+    }
+    expect(TokenType::RBracket);
+  }
+  return f;
+}
+
+MetricDecl Parser::parseMetric() {
+  expect(TokenType::KwMetric);
+  if (cur.type != TokenType::Identifier)
+    syntaxError("Metric name");
+  MetricDecl m;
+  m.name = cur.text;
+  advance();
+  expect(TokenType::LParen);
+  while (cur.type == TokenType::Identifier) {
+    m.indices.push_back(cur.text);
+    advance();
+    if (cur.type == TokenType::Comma)
+      advance();
+    else
+      break;
+  }
+  expect(TokenType::RParen);
+  expect(TokenType::LBrace);
+  while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+    if (cur.type == TokenType::Identifier)
+      m.entries.push_back(parseAssignment());
+    else
+      syntaxError("Unexpected in metric");
+  }
+  expect(TokenType::RBrace);
+  return m;
+}
+
+EvolutionEq Parser::parseEvolutionEq() {
+  expect(TokenType::KwDt);
+  if (cur.type != TokenType::Identifier)
+    syntaxError("Field name after dt");
+  EvolutionEq eq;
+  eq.fieldName = cur.text;
+  advance();
+
+  TokenType close = TokenType::Unknown;
+  if (cur.type == TokenType::LBracket)
+    close = TokenType::RBracket;
+  else if (cur.type == TokenType::LParen)
+    close = TokenType::RParen;
+
+  if (close != TokenType::Unknown) {
+    advance();
+    while (cur.type == TokenType::Identifier) {
+      eq.indices.push_back(cur.text);
+      advance();
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      break;
+    }
+    expect(close);
+  }
+  expect(TokenType::Equals);
+  eq.rhs = parseExpr();
+  return eq;
+}
+
+TimeConfig Parser::parseTimeBlock() {
+  expect(TokenType::KwTime);
+  expect(TokenType::LBrace);
+
+  TimeConfig cfg;
+
+  while (cur.type != TokenType::RBrace) {
+
+    if (cur.text == "dt") {
+      advance();
+      expect(TokenType::Equals);
+      if (cur.type != TokenType::Number)
+        syntaxError("dt expects a number");
+      cfg.dt = std::stod(cur.text);
+      advance();
+      continue;
+    }
+
+    if (cur.text == "integrator") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.text == "euler")
+        cfg.integrator = TimeIntegrator::Euler;
+      else if (cur.text == "rk3")
+        cfg.integrator = TimeIntegrator::RK3;
+      else if (cur.text == "rk4")
+        cfg.integrator = TimeIntegrator::RK4;
+      else
+        syntaxError("unknown time integrator");
+
+      advance();
+      continue;
+    }
+
+    syntaxError("unexpected entry in time block");
+  }
+
+  expect(TokenType::RBrace);
+  return cfg;
+}
+
+SpatialConfig Parser::parseSpatialBlock() {
+  expect(TokenType::KwSpatial);
+  expect(TokenType::LBrace);
+
+  SpatialConfig cfg;
+
+  while (cur.type != TokenType::RBrace) {
+
+    if (cur.text == "scheme") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.text == "fd")
+        cfg.scheme = SpatialScheme::FiniteDifference;
+      else if (cur.text == "spectral")
+        cfg.scheme = SpatialScheme::Spectral;
+      else
+        syntaxError("unknown spatial scheme");
+
+      advance();
+      continue;
+    }
+
+    if (cur.text == "derivative") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.text == "centered")
+        cfg.derivative = DerivativeScheme::Centered;
+      else if (cur.text == "upwind")
+        cfg.derivative = DerivativeScheme::Upwind;
+      else
+        syntaxError("unknown derivative scheme");
+
+      advance();
+      continue;
+    }
+
+    if (cur.text == "order") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.type != TokenType::Number)
+        syntaxError("order expects an integer");
+
+      cfg.order = std::stoi(cur.text);
+      advance();
+      continue;
+    }
+
+    syntaxError("unexpected entry in spatial block");
+  }
+
+  expect(TokenType::RBrace);
+  return cfg;
+}
+
+EvolutionDecl Parser::parseEvolution() {
+  expect(TokenType::KwEvolution);
+  if (cur.type != TokenType::Identifier)
+    syntaxError("Evo name");
+  EvolutionDecl evo;
+  evo.name = cur.text;
+  advance();
+  expect(TokenType::LBrace);
+  while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+    if (cur.type == TokenType::KwDt) {
+      evo.equations.push_back(parseEvolutionEq());
+      continue;
+    }
+    if (cur.type == TokenType::Identifier) {
+      evo.tempAssignments.push_back(parseAssignment());
+      continue;
+    }
+    syntaxError("Expected dt or assign");
+  }
+  expect(TokenType::RBrace);
+  return evo;
+}
+
+SimulationConfig Parser::parseSimulation() {
+  expect(TokenType::KwSimulation);
+  expect(TokenType::LBrace);
+
+  SimulationConfig cfg;
+
+  while (cur.type != TokenType::RBrace) {
+
+    if (cur.text == "coordinates") {
+      advance();
+      expect(TokenType::Equals);
+
+      if (cur.text == "cartesian")
+        cfg.coordinates = CoordinateSystem::Cartesian;
+      else if (cur.text == "spherical")
+        cfg.coordinates = CoordinateSystem::Spherical;
+      else if (cur.text == "cylindrical")
+        cfg.coordinates = CoordinateSystem::Cylindrical;
+      else
+        syntaxError("unknown coordinate system");
+
+      advance();
+      continue;
+    }
+
+    if (cur.text == "dimension") {
+      advance();
+      expect(TokenType::Equals);
+      cfg.dimension = std::stoi(cur.text);
+      expect(TokenType::Number);
+      continue;
+    }
+
+    if (cur.text == "resolution") {
+      advance();
+      expect(TokenType::Equals);
+      expect(TokenType::LBracket);
+
+      cfg.resolution.clear();
+      while (cur.type == TokenType::Number) {
+        cfg.resolution.push_back(std::stoi(cur.text));
+        advance();
+        if (cur.type == TokenType::Comma)
+          advance();
+        else
+          break;
+      }
+
+      expect(TokenType::RBracket);
+      continue;
+    }
+
+    if (cur.type == TokenType::KwTime) {
+      cfg.time = parseTimeBlock();
+      continue;
+    }
+
+    if (cur.type == TokenType::KwSpatial) {
+      cfg.spatial = parseSpatialBlock();
+      continue;
+    }
+
+    syntaxError("unexpected entry in simulation block");
+  }
+
+  expect(TokenType::RBrace);
+  return cfg;
+}
+
+Program Parser::parseProgram() {
+  Program p;
+  while (cur.type != TokenType::End) {
+    if (cur.type == TokenType::KwField) {
+      p.fields.push_back(parseFieldDecl());
+      continue;
+    }
+    if (cur.type == TokenType::KwMetric) {
+      p.metrics.push_back(parseMetric());
+      continue;
+    }
+    if (cur.type == TokenType::KwEvolution) {
+      p.evolutions.push_back(parseEvolution());
+      continue;
+    }
+    if (cur.type == TokenType::KwSimulation) {
+      if (p.simulation)
+        syntaxError("Multiple simulation blocks not allowed");
+      p.simulation = std::make_unique<SimulationConfig>(parseSimulation());
+      continue;
+    }
+    syntaxError("Unexpected top level");
+  }
+  return p;
+}
+} // namespace tensorium
+
+
+==================== FILE: ./lib/Sema/Sema.cpp ====================
+
+#include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Sema/tensor_type_checker.hpp"
+#include <algorithm>
+#include <iostream>
+#include <stdexcept>
+
+namespace tensorium {
+
+void SemanticAnalyzer::validateSpatialIndex(const std::string &idx) {
+  if (!SPATIAL_INDICES.count(idx)) {
+    throw std::runtime_error("Invalid tensor index '" + idx +
+                             "'. Allowed: {i, j, k, l, m, n}.");
+  }
+}
+
+int SemanticAnalyzer::resolveIndex(const std::string &name) {
+  auto it = coordIndex.find(name);
+  if (it == coordIndex.end())
+    throw std::runtime_error("Unknown tensor index: " + name);
+  return it->second;
+}
+
+std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
+  if (auto n = dynamic_cast<const NumberExpr *>(e))
+    return std::make_unique<IndexedNumber>(n->value);
+
+  if (auto v = dynamic_cast<const VarExpr *>(e)) {
+    if (auto it = coordIndex.find(v->name); it != coordIndex.end()) {
+      auto iv =
+          std::make_unique<IndexedVar>(v->name, IndexedVarKind::Coordinate);
+      iv->coordIndex = it->second;
+      iv->tensorKind = TensorKind::Scalar;
+      return iv;
+    }
+
+    if (locals.count(v->name)) {
+      auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Local);
+      iv->tensorKind = TensorKind::Scalar;
+      return iv;
+    }
+
+    if (auto itf = fields.find(v->name); itf != fields.end()) {
+      const FieldDecl *fd = itf->second;
+      auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Field);
+      iv->tensorKind = fd->kind;
+      iv->up = fd->up;
+      iv->down = fd->down;
+      return iv;
+    }
+
+    auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Parameter);
+    iv->tensorKind = TensorKind::Scalar;
+    return iv;
+  }
+
+  if (auto b = dynamic_cast<const BinaryExpr *>(e))
+    return std::make_unique<IndexedBinary>(b->op, transformExpr(b->lhs.get()),
+                                           transformExpr(b->rhs.get()));
+
+  if (auto p = dynamic_cast<const ParenExpr *>(e))
+    return transformExpr(p->inner.get());
+
+  if (auto iv = dynamic_cast<const IndexedVarExpr *>(e)) {
+    auto it = fields.find(iv->base);
+    if (it == fields.end())
+      throw std::runtime_error("Unknown indexed tensor: " + iv->base);
+
+    const FieldDecl *fd = it->second;
+    size_t expected = static_cast<size_t>(fd->up + fd->down);
+
+    if (iv->indices.size() != expected)
+      throw std::runtime_error("Tensor '" + iv->base + "' expects " +
+                               std::to_string(expected) + " indices, got " +
+                               std::to_string(iv->indices.size()));
+
+    auto out = std::make_unique<IndexedVar>(iv->base, IndexedVarKind::Field);
+    out->tensorKind = fd->kind;
+    out->up = fd->up;
+    out->down = fd->down;
+
+    for (auto &idx : iv->indices) {
+      if (!coordIndex.count(idx)) {
+        validateSpatialIndex(idx);
+        coordIndex[idx] = -2;
+      }
+      int off = resolveIndex(idx);
+      out->tensorIndices.push_back(off);
+      out->tensorIndexNames.push_back(idx);
+    }
+    return out;
+  }
+
+  if (auto c = dynamic_cast<const CallExpr *>(e)) {
+    auto out = std::make_unique<IndexedCall>();
+    out->callee = c->callee;
+    for (auto &arg : c->args)
+      out->args.push_back(transformExpr(arg.get()));
+    return out;
+  }
+
+  throw std::runtime_error("Unsupported expr in semantic analyzer");
+}
+
+SemanticAnalyzer::SemanticAnalyzer(const Program &p) : prog(p) {
+  for (const auto &f : prog.fields) {
+    if (fields.count(f.name))
+      throw std::runtime_error("Field redeclared: " + f.name);
+    fields[f.name] = &f;
+  }
+
+  for (const auto &m : prog.metrics) {
+    for (const auto &entry : m.entries) {
+      if (entry.lhs.indices.empty())
+        locals[entry.lhs.base] = true;
+    }
+  }
+  for (const auto &m : prog.metrics) {
+    FieldDecl fd;
+    fd.kind = TensorKind::CovTensor2;
+    fd.name = m.name;
+    fd.up = 0;
+    fd.down = 2;
+    syntheticMetricFields.push_back(fd);
+    fields[m.name] = &syntheticMetricFields.back();
+  }
+}
+
+IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
+  coordIndex.clear();
+
+  IndexedMetric out;
+  out.name = decl.name;
+  out.rank = 2;
+  out.coords = decl.indices;
+
+  for (size_t i = 0; i < decl.indices.size(); ++i)
+    coordIndex[decl.indices[i]] = static_cast<int>(i);
+
+  TensorTypeChecker checker;
+
+  for (const auto &entry : decl.entries) {
+    IndexedAssignment a;
+    a.tensor = entry.lhs.base;
+
+    if (!entry.lhs.indices.empty()) {
+      if (entry.lhs.indices.size() != 2)
+        throw std::runtime_error(
+            "Metric tensor '" + entry.lhs.base + "' must have 2 indices (got " +
+            std::to_string(entry.lhs.indices.size()) + ")");
+      for (const auto &idx : entry.lhs.indices)
+        a.indexOffsets.push_back(resolveIndex(idx));
+    }
+
+    a.rhs = transformExpr(entry.rhs.get());
+    checker.checkMetricAssignment(a);
+    out.assignments.push_back(std::move(a));
+  }
+
+  return out;
+}
+
+struct IndexCollector {
+  std::unordered_map<std::string, int> &counter;
+  IndexCollector(std::unordered_map<std::string, int> &c) : counter(c) {}
+
+  void walk(const IndexedExpr *expr) {
+    if (auto v = dynamic_cast<const IndexedVar *>(expr)) {
+      for (auto &idx : v->tensorIndexNames)
+        counter[idx]++;
+    }
+    if (auto b = dynamic_cast<const IndexedBinary *>(expr)) {
+      walk(b->lhs.get());
+      walk(b->rhs.get());
+    }
+    if (auto c = dynamic_cast<const IndexedCall *>(expr)) {
+      for (auto &arg : c->args)
+        walk(arg.get());
+    }
+  }
+};
+
+IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
+  coordIndex.clear();
+
+  IndexedEvolution out;
+  out.name = evo.name;
+
+  for (const auto &eq : evo.equations)
+    for (const auto &idx : eq.indices) {
+      validateSpatialIndex(idx);
+      coordIndex[idx] = -1;
+    }
+
+  for (const auto &tmp : evo.tempAssignments) {
+    if (!tmp.lhs.indices.empty()) {
+      continue;
+    }
+
+    if (fields.count(tmp.lhs.base)) {
+      throw std::runtime_error("Cannot redeclare field '" + tmp.lhs.base +
+                               "' as local");
+    }
+
+    locals[tmp.lhs.base] = true;
+  }
+
+  TensorTypeChecker checker;
+
+  for (const auto &eq : evo.equations) {
+
+    auto it = fields.find(eq.fieldName);
+    if (it == fields.end())
+      throw std::runtime_error("Unknown field in evolution: " + eq.fieldName);
+
+    const FieldDecl *fd = it->second;
+    size_t expectedRank = static_cast<size_t>(fd->up + fd->down);
+
+    if (eq.indices.size() != expectedRank) {
+      throw std::runtime_error(
+          "Wrong number of indices in evolution for field '" + eq.fieldName +
+          "': expected " + std::to_string(expectedRank) + ", got " +
+          std::to_string(eq.indices.size()));
+    }
+
+    indexUseCount.clear();
+    lhsIndices.clear();
+
+    for (auto &idx : eq.indices)
+      lhsIndices.insert(idx);
+
+    IndexedEvolutionEq ie;
+    ie.fieldName = eq.fieldName;
+    ie.indices = eq.indices;
+    ie.rhs = transformExpr(eq.rhs.get());
+
+    IndexCollector collector(indexUseCount);
+    collector.walk(ie.rhs.get());
+
+    for (auto &[idx, count] : indexUseCount) {
+      validateSpatialIndex(idx);
+
+      if (count == 1 && !lhsIndices.count(idx)) {
+        throw std::runtime_error("Free index '" + idx +
+                                 "' appears only in RHS and not LHS.");
+      }
+
+      if (count > 2) {
+        throw std::runtime_error("Ambiguous contraction: index '" + idx +
+                                 "' appears " + std::to_string(count) +
+                                 " times.");
+      }
+    }
+
+    TensorType lhsType = {fd->up, fd->down};
+    checker.checkAssignmentVariance(lhsType, ie.rhs.get());
+
+    out.equations.push_back(std::move(ie));
+  }
+
+  for (const auto &tmp : evo.tempAssignments) {
+    IndexedAssignment ia;
+    ia.tensor = tmp.lhs.base;
+    for (auto &idx : tmp.lhs.indices)
+      ia.indexOffsets.push_back(resolveIndex(idx));
+    ia.rhs = transformExpr(tmp.rhs.get());
+    out.temp.push_back(std::move(ia));
+  }
+
+  return out;
+}
+
+} // namespace tensorium
+
+
+==================== FILE: ./lib/AST/Expr.cpp ====================
+
+#include "tensorium/AST/AST.hpp"
+
+namespace tensorium {
+//
+// NumberExpr::NumberExpr(double v) : value(v) {}
+// void NumberExpr::accept(ExprVisitor &V) const { V.visit(*this); }
+//
+// VarExpr::VarExpr(std::string n) : name(std::move(n)) {}
+// void VarExpr::accept(ExprVisitor &V) const { V.visit(*this); }
+//
+// BinaryExpr::BinaryExpr(std::unique_ptr<Expr> L, char Op,
+//                        std::unique_ptr<Expr> R)
+//     : lhs(std::move(L)), rhs(std::move(R)), op(Op) {}
+// void BinaryExpr::accept(ExprVisitor &V) const { V.visit(*this); }
+//
+// ParenExpr::ParenExpr(std::unique_ptr<Expr> e) : inner(std::move(e)) {}
+// void ParenExpr::accept(ExprVisitor &V) const { V.visit(*this); }
+//
+// void CallExpr::accept(ExprVisitor &V) const { V.visit(*this); }
+//
+// IndexedVarExpr::IndexedVarExpr(std::string b, std::vector<std::string> idx)
+//     : base(std::move(b)), indices(std::move(idx)) {}
+// void IndexedVarExpr::accept(ExprVisitor &V) const { V.visit(*this); }
+//
+} // namespace tensorium
+
+
+==================== FILE: ./lib/AST/ASTPrinter.cpp ====================
+
+#include "tensorium/AST/ASTPrinter.hpp"
+#include "tensorium/AST/Visitor.hpp"
+#include <iostream>
+
+namespace tensorium {
+
+class ASTPrinter : public ExprVisitor {
+public:
+  void visit(const NumberExpr &E) override { std::cout << E.value; }
+  
+  void visit(const VarExpr &E) override { std::cout << E.name; }
+  
+  void visit(const BinaryExpr &E) override {
+	std::cout << "(";
+	E.lhs->accept(*this);
+	std::cout << " " << E.op << " ";
+	E.rhs->accept(*this);
+	std::cout << ")";
+  }
+  
+  void visit(const ParenExpr &E) override {
+	std::cout << "(";
+	E.inner->accept(*this);
+	std::cout << ")";
+  }
+  
+  void visit(const CallExpr &E) override {
+	std::cout << E.callee << "(";
+	for(size_t i=0; i<E.args.size(); ++i) {
+		E.args[i]->accept(*this);
+		if(i+1 < E.args.size()) std::cout << ", ";
+	}
+	std::cout << ")";
+  }
+  
+  void visit(const IndexedVarExpr &E) override {
+	std::cout << E.base << "[";
+	for(size_t i=0; i<E.indices.size(); ++i) {
+		std::cout << E.indices[i];
+		if(i+1 < E.indices.size()) std::cout << ",";
+	}
+	std::cout << "]";
+  }
+};
+
+void printExpr(const Expr *e) {
+	if(!e) return;
+	ASTPrinter P;
+	e->accept(P);
+}
+
+void printProgram(const Program &prog) {
+	std::cout << "=== Program AST ===\n";
+	for(const auto &evo : prog.evolutions) {
+		std::cout << "Evolution " << evo.name << " {\n";
+		for(const auto &eq : evo.equations) {
+			std::cout << "  dt " << eq.fieldName;
+			if(!eq.indices.empty()) {
+				std::cout << "[";
+				for(auto &idx : eq.indices) std::cout << idx << ","; // simplifié
+				std::cout << "]";
+			}
+			std::cout << " = ";
+			printExpr(eq.rhs.get());
+			std::cout << "\n";
+		}
+		std::cout << "}\n";
+	}
+}
+
+} // namespace tensorium

@@ -3,7 +3,7 @@ CXXFLAGS := -std=c++20 -O3 -mtune=native -Wall -Wextra -Wpedantic -Iinclude
 
 TARGET   := Tensorium_cc
 
-SRC_DIRS := lib tools
+SRC_DIRS := lib tools tools/Printer
 
 SRCS := $(shell find $(SRC_DIRS) -name "*.cpp")
 

@@ -22,9 +22,11 @@ class SemanticAnalyzer {
   void validateSpatialIndex(const std::string &idx);
   int resolveIndex(const std::string &name);
   std::unique_ptr<IndexedExpr> transformExpr(const Expr *e);
+  void validateSimulation(const SimulationConfig &sim);
 
 public:
   explicit SemanticAnalyzer(const Program &p);
   IndexedMetric analyzeMetric(const MetricDecl &decl);
   IndexedEvolution analyzeEvolution(const EvolutionDecl &evo);
-};} // namespace tensorium
+};
+} // namespace tensorium
