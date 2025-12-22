@@ -1,12 +1,15 @@
 
 #pragma once
-#include "tensorium/Backend/IR.hpp"
+#include "tensorium/Backend/DomainIR.hpp"
 #include <iostream>
 
 namespace tensorium::backend {
 
 inline void printExprIR(const ExprIR *e) {
-  if (!e) { std::cout << "<null>"; return; }
+  if (!e) {
+    std::cout << "<null>";
+    return;
+  }
 
   switch (e->kind) {
   case ExprIR::Kind::Number: {
@@ -18,17 +21,26 @@ inline void printExprIR(const ExprIR *e) {
     auto *v = static_cast<const VarIR *>(e);
     std::cout << v->name << "[";
     switch (v->vkind) {
-    case VarKind::Field: std::cout << "field"; break;
-    case VarKind::Param: std::cout << "param"; break;
-    case VarKind::Local: std::cout << "local"; break;
-    case VarKind::Coord: std::cout << "coord:" << v->coordIndex; break;
+    case VarKind::Field:
+      std::cout << "field";
+      break;
+    case VarKind::Param:
+      std::cout << "param";
+      break;
+    case VarKind::Local:
+      std::cout << "local";
+      break;
+    case VarKind::Coord:
+      std::cout << "coord:" << v->coordIndex;
+      break;
     }
     std::cout << "]";
     if (!v->tensorIndexNames.empty()) {
       std::cout << "{";
       for (size_t i = 0; i < v->tensorIndexNames.size(); ++i) {
         std::cout << v->tensorIndexNames[i];
-        if (i + 1 < v->tensorIndexNames.size()) std::cout << ",";
+        if (i + 1 < v->tensorIndexNames.size())
+          std::cout << ",";
       }
       std::cout << "}";
     }
@@ -48,7 +60,8 @@ inline void printExprIR(const ExprIR *e) {
     std::cout << c->callee << "(";
     for (size_t i = 0; i < c->args.size(); ++i) {
       printExprIR(c->args[i].get());
-      if (i + 1 < c->args.size()) std::cout << ", ";
+      if (i + 1 < c->args.size())
+        std::cout << ", ";
     }
     std::cout << ")";
     return;
@@ -67,7 +80,8 @@ inline void printModuleIR(const ModuleIR &m) {
 
   std::cout << "  Fields:\n";
   for (const auto &f : m.fields) {
-    std::cout << "    " << f.name << " (up=" << f.up << ",down=" << f.down << ")\n";
+    std::cout << "    " << f.name << " (up=" << f.up << ",down=" << f.down
+              << ")\n";
   }
 
   std::cout << "  Evolutions:\n";
@@ -79,7 +93,8 @@ inline void printModuleIR(const ModuleIR &m) {
         std::cout << "[";
         for (size_t i = 0; i < eq.indices.size(); ++i) {
           std::cout << eq.indices[i];
-          if (i + 1 < eq.indices.size()) std::cout << ",";
+          if (i + 1 < eq.indices.size())
+            std::cout << ",";
         }
         std::cout << "]";
       }

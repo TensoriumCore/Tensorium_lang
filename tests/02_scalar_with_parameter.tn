@@ -7,7 +7,7 @@ simulation {
 
   time {
     dt = 0.05
-    integrator = rk4
+    integrator = euler
   }
 
   spatial {

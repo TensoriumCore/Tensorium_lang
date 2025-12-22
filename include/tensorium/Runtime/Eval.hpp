@@ -1,6 +1,6 @@
 
 #pragma once
-#include "tensorium/Backend/IR.hpp"
+#include "tensorium/Backend/DomainIR.hpp"
 #include <unordered_map>
 #include <stdexcept>
 

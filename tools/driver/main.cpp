@@ -4,10 +4,11 @@
 #include "tensorium/Sema/Sema.hpp"
 
 #include "tensorium/Backend/BackendBuilder.hpp"
-#include "tensorium/Backend/IR.hpp"
+#include "tensorium/Backend/DomainIR.hpp"
 #include "tensorium/Backend/IRPrinter.hpp"
 #include "tensorium/Runtime/CpuRuntime.hpp"
 #include "tensorium/Runtime/Eval.hpp"
+#include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 
 #include <fstream>
 #include <iostream>
@@ -83,6 +84,7 @@ int main(int argc, char **argv) {
   size_t steps = 10;
   double initScalar = 1.0;
   double initAlpha = 2.0;
+  bool dumpMLIR = false;
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
     return 1;
@@ -103,6 +105,8 @@ int main(int argc, char **argv) {
       dumpBackendExpr = true;
     } else if (arg == "--run-cpu") {
       runCpu = true;
+    } else if (arg == "--dump-mlir") {
+      dumpMLIR = true;
     } else if (arg == "--steps") {
       if (i + 1 >= argc)
         throw std::runtime_error("--steps expects an integer");
@@ -207,6 +211,13 @@ int main(int argc, char **argv) {
 
         std::cout << "\n=== BACKEND IR FULL (" << path << ") ===\n";
         tensorium::backend::printModuleIR(mod);
+        std::cout << "==============================\n";
+      }
+      if (dumpMLIR) {
+        auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
+
+        std::cout << "\n=== MLIR DUMP (" << path << ") ===\n";
+        tensorium_mlir::emitMLIR(mod);
         std::cout << "==============================\n";
       }
       if (runCpu) {
