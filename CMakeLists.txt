@@ -9,14 +9,21 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(TENSORIUM_WARNINGS "Enable warnings" ON)
 
+
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
 
 message(STATUS "LLVM_DIR: ${LLVM_DIR}")
 message(STATUS "MLIR_DIR: ${MLIR_DIR}")
 
-include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
-include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+
+include(TableGen)
+include(AddLLVM)
+include(AddMLIR)
+
+
 add_definitions(${LLVM_DEFINITIONS})
 add_definitions(${MLIR_DEFINITIONS})
 if (TENSORIUM_WARNINGS)

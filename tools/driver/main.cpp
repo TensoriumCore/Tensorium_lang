@@ -85,6 +85,7 @@ int main(int argc, char **argv) {
   double initScalar = 1.0;
   double initAlpha = 2.0;
   bool dumpMLIR = false;
+  bool enableNoOpPass = false;
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
     return 1;
@@ -103,6 +104,8 @@ int main(int argc, char **argv) {
       dumpBackend = true;
     } else if (arg == "--dump-backend-expr") {
       dumpBackendExpr = true;
+    } else if (arg == "--tensorium-noop") {
+      enableNoOpPass = true;
     } else if (arg == "--run-cpu") {
       runCpu = true;
     } else if (arg == "--dump-mlir") {
@@ -217,7 +220,10 @@ int main(int argc, char **argv) {
         auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
 
         std::cout << "\n=== MLIR DUMP (" << path << ") ===\n";
-        tensorium_mlir::emitMLIR(mod);
+        tensorium_mlir::MLIRGenOptions opts;
+        opts.enableNoOpPass = enableNoOpPass;
+
+        tensorium_mlir::emitMLIR(mod, opts);
         std::cout << "==============================\n";
       }
       if (runCpu) {

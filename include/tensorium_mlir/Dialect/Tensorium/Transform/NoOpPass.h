@@ -6,10 +6,6 @@ namespace tensorium {
 namespace mlir {
 
 std::unique_ptr<::mlir::Pass> createTensoriumNoOpPass();
-void registerTensoriumTransformPasses();
 
 } // namespace mlir
 } // namespace tensorium
-
-#include "TensoriumPasses.h.inc"
-

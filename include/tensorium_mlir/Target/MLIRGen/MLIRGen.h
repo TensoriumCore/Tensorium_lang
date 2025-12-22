@@ -3,5 +3,11 @@
 #include "tensorium/Backend/DomainIR.hpp"
 
 namespace tensorium_mlir {
-void emitMLIR(const tensorium::backend::ModuleIR &module);
+
+struct MLIRGenOptions {
+  bool enableNoOpPass = false;
+};
+
+void emitMLIR(const tensorium::backend::ModuleIR &module,
+              const MLIRGenOptions &opts = {});
 } // namespace tensorium_mlir
