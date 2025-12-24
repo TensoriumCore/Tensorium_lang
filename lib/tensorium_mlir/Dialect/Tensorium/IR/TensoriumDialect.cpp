@@ -20,10 +20,10 @@ Type TensoriumDialect::parseType(DialectAsmParser &parser) const {
   if (failed(parser.parseKeyword(&tag)))
     return Type();
 
-  if (tag != "field")
-    return (parser.emitError(parser.getNameLoc(), "unknown tensorium type: ")
-                << tag,
-            Type());
+  if (tag != "field") {
+    parser.emitError(parser.getNameLoc(), "unknown tensorium type: ") << tag;
+    return Type();
+  }
 
   if (failed(parser.parseLess()))
     return Type();
@@ -39,10 +39,31 @@ Type TensoriumDialect::parseType(DialectAsmParser &parser) const {
   if (failed(parser.parseInteger(rank)))
     return Type();
 
+  if (failed(parser.parseComma()))
+    return Type();
+
+  StringRef varTag;
+  if (failed(parser.parseKeyword(&varTag)))
+    return Type();
+
+  Variance variance;
+  if (varTag == "scalar")
+    variance = Variance::Scalar;
+  else if (varTag == "cov")
+    variance = Variance::Covariant;
+  else if (varTag == "con")
+    variance = Variance::Contravariant;
+  else if (varTag == "mixed")
+    variance = Variance::Mixed;
+  else {
+    parser.emitError(parser.getNameLoc(), "unknown variance: ") << varTag;
+    return Type();
+  }
+
   if (failed(parser.parseGreater()))
     return Type();
 
-  return FieldType::get(getContext(), elementType, rank);
+  return FieldType::get(getContext(), elementType, rank, variance);
 }
 
 void TensoriumDialect::printType(Type type, DialectAsmPrinter &printer) const {
@@ -50,7 +71,24 @@ void TensoriumDialect::printType(Type type, DialectAsmPrinter &printer) const {
       .Case<FieldType>([&](FieldType t) {
         printer << "field<";
         printer.printType(t.getElementType());
-        printer << ", " << t.getRank() << ">";
+        printer << ", " << t.getRank() << ", ";
+
+        switch (t.getVariance()) {
+        case Variance::Scalar:
+          printer << "scalar";
+          break;
+        case Variance::Covariant:
+          printer << "cov";
+          break;
+        case Variance::Contravariant:
+          printer << "con";
+          break;
+        case Variance::Mixed:
+          printer << "mixed";
+          break;
+        }
+
+        printer << ">";
       })
       .Default([&](Type) { llvm_unreachable("unexpected 'tensorium' type"); });
 }

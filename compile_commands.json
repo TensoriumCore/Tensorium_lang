@@ -1,110 +1,128 @@
 [
-  {
-    "arguments": [
-      "/opt/local/libexec/llvm-20/bin/clang++",
-      "-std=c++20",
-      "-O2",
-      "-Wall",
-      "-Wextra",
-      "-Wpedantic",
-      "-Iinclude",
-      "-c",
-      "-o",
-      "lib/Lex/Lexer.o",
-      "lib/Lex/Lexer.cpp"
-    ],
-    "directory": "/Users/at0m/Desktop/Tensorium_lang",
-    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Lex/Lexer.cpp",
-    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/Lex/Lexer.o"
-  },
-  {
-    "arguments": [
-      "/opt/local/libexec/llvm-20/bin/clang++",
-      "-std=c++20",
-      "-O2",
-      "-Wall",
-      "-Wextra",
-      "-Wpedantic",
-      "-Iinclude",
-      "-c",
-      "-o",
-      "lib/Parse/Parser.o",
-      "lib/Parse/Parser.cpp"
-    ],
-    "directory": "/Users/at0m/Desktop/Tensorium_lang",
-    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Parse/Parser.cpp",
-    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/Parse/Parser.o"
-  },
-  {
-    "arguments": [
-      "/opt/local/libexec/llvm-20/bin/clang++",
-      "-std=c++20",
-      "-O2",
-      "-Wall",
-      "-Wextra",
-      "-Wpedantic",
-      "-Iinclude",
-      "-c",
-      "-o",
-      "lib/Sema/Sema.o",
-      "lib/Sema/Sema.cpp"
-    ],
-    "directory": "/Users/at0m/Desktop/Tensorium_lang",
-    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Sema/Sema.cpp",
-    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/Sema/Sema.o"
-  },
-  {
-    "arguments": [
-      "/opt/local/libexec/llvm-20/bin/clang++",
-      "-std=c++20",
-      "-O2",
-      "-Wall",
-      "-Wextra",
-      "-Wpedantic",
-      "-Iinclude",
-      "-c",
-      "-o",
-      "lib/AST/Expr.o",
-      "lib/AST/Expr.cpp"
-    ],
-    "directory": "/Users/at0m/Desktop/Tensorium_lang",
-    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/Expr.cpp",
-    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/Expr.o"
-  },
-  {
-    "arguments": [
-      "/opt/local/libexec/llvm-20/bin/clang++",
-      "-std=c++20",
-      "-O2",
-      "-Wall",
-      "-Wextra",
-      "-Wpedantic",
-      "-Iinclude",
-      "-c",
-      "-o",
-      "lib/AST/ASTPrinter.o",
-      "lib/AST/ASTPrinter.cpp"
-    ],
-    "directory": "/Users/at0m/Desktop/Tensorium_lang",
-    "file": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/ASTPrinter.cpp",
-    "output": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/ASTPrinter.o"
-  },
-  {
-    "arguments": [
-      "/opt/local/libexec/llvm-20/bin/clang++",
-      "-std=c++20",
-      "-O2",
-      "-Wall",
-      "-Wextra",
-      "-Wpedantic",
-      "-Iinclude",
-      "-c",
-      "-o",
-      "tools/driver/main.o",
-      "tools/driver/main.cpp"
-    ],
-    "directory": "/Users/at0m/Desktop/Tensorium_lang",
-    "file": "/Users/at0m/Desktop/Tensorium_lang/tools/driver/main.cpp",
-    "output": "/Users/at0m/Desktop/Tensorium_lang/tools/driver/main.o"
-  }
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium.dir/AST/ASTPrinter.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/AST/ASTPrinter.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/ASTPrinter.cpp",
+  "output": "lib/CMakeFiles/tensorium.dir/AST/ASTPrinter.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium.dir/AST/Expr.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/AST/Expr.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/AST/Expr.cpp",
+  "output": "lib/CMakeFiles/tensorium.dir/AST/Expr.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium.dir/Backend/BackendBuilder.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/Backend/BackendBuilder.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Backend/BackendBuilder.cpp",
+  "output": "lib/CMakeFiles/tensorium.dir/Backend/BackendBuilder.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium.dir/Lex/Lexer.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/Lex/Lexer.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Lex/Lexer.cpp",
+  "output": "lib/CMakeFiles/tensorium.dir/Lex/Lexer.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium.dir/Parse/Parser.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/Parse/Parser.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Parse/Parser.cpp",
+  "output": "lib/CMakeFiles/tensorium.dir/Parse/Parser.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium.dir/Runtime/CpuRuntime.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/Runtime/CpuRuntime.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Runtime/CpuRuntime.cpp",
+  "output": "lib/CMakeFiles/tensorium.dir/Runtime/CpuRuntime.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium.dir/Runtime/Eval.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/Runtime/Eval.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Runtime/Eval.cpp",
+  "output": "lib/CMakeFiles/tensorium.dir/Runtime/Eval.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium.dir/Sema/Sema.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/Sema/Sema.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/Sema/Sema.cpp",
+  "output": "lib/CMakeFiles/tensorium.dir/Sema/Sema.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/Transforms/AnalysisPass.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/Transforms/AnalysisPass.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/Transforms/AnalysisPass.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/Transforms/AnalysisPass.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/Transforms/NoOpPass.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/Transforms/NoOpPass.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/Transforms/NoOpPass.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/Transforms/NoOpPass.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/Transforms/Passes.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/Transforms/Passes.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Dialect/Tensorium/Transforms/Passes.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Dialect/Tensorium/Transforms/Passes.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Init/Registry.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Init/Registry.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Init/Registry.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Init/Registry.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Init/Passes.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Init/Passes.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Init/Passes.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Init/Passes.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/lib",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -isystem /opt/local/libexec/llvm-20/include -isystem /opt/homebrew/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fPIC   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Pipeline/Pipeline.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Pipeline/Pipeline.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/lib/tensorium_mlir/Pipeline/Pipeline.cpp",
+  "output": "lib/CMakeFiles/tensorium_mlir_backend.dir/tensorium_mlir/Pipeline/Pipeline.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/tools/Tester",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/Tensorium_tester.dir/main.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/tools/Tester/main.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/tools/Tester/main.cpp",
+  "output": "tools/Tester/CMakeFiles/Tensorium_tester.dir/main.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/tools/Tester",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/Tensorium_tester.dir/Printer/Printer.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/tools/Tester/Printer/Printer.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/tools/Tester/Printer/Printer.cpp",
+  "output": "tools/Tester/CMakeFiles/Tensorium_tester.dir/Printer/Printer.cpp.o"
+},
+{
+  "directory": "/Users/at0m/Desktop/Tensorium_lang/build/tools/driver",
+  "command": "/usr/bin/c++  -I/Users/at0m/Desktop/Tensorium_lang/include -I/Users/at0m/Desktop/Tensorium_lang/build/lib -O0 -g -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk   -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Wall -Wextra -Wpedantic -o CMakeFiles/Tensorium_cc.dir/main.cpp.o -c /Users/at0m/Desktop/Tensorium_lang/tools/driver/main.cpp",
+  "file": "/Users/at0m/Desktop/Tensorium_lang/tools/driver/main.cpp",
+  "output": "tools/driver/CMakeFiles/Tensorium_cc.dir/main.cpp.o"
+}
 ]

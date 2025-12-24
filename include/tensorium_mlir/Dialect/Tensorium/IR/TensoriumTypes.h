@@ -1,33 +1,37 @@
-
 #pragma once
 
 #include "mlir/IR/Dialect.h"
+#include "mlir/IR/TypeSupport.h"
 #include "mlir/IR/Types.h"
 #include "llvm/ADT/StringRef.h"
+
+#include <cstdint>
+#include <tuple>
 
 namespace tensorium {
 namespace mlir {
 
-class TensoriumDialect;
+enum class Variance : uint8_t { Scalar, Contravariant, Covariant, Mixed };
 
 struct FieldTypeStorage : public ::mlir::TypeStorage {
-  using KeyTy = std::pair<::mlir::Type, unsigned>;
+  using KeyTy = std::tuple<::mlir::Type, unsigned, Variance>;
 
-  FieldTypeStorage(::mlir::Type elementType, unsigned rank)
-      : elementType(elementType), rank(rank) {}
+  FieldTypeStorage(::mlir::Type elementType, unsigned rank, Variance variance)
+      : elementType(elementType), rank(rank), variance(variance) {}
 
   bool operator==(const KeyTy &key) const {
-    return key.first == elementType && key.second == rank;
+    return key == KeyTy(elementType, rank, variance);
   }
 
   static FieldTypeStorage *construct(::mlir::TypeStorageAllocator &alloc,
                                      const KeyTy &key) {
     return new (alloc.allocate<FieldTypeStorage>())
-        FieldTypeStorage(key.first, key.second);
+        FieldTypeStorage(std::get<0>(key), std::get<1>(key), std::get<2>(key));
   }
 
   ::mlir::Type elementType;
   unsigned rank;
+  Variance variance;
 };
 
 class FieldType
@@ -38,10 +42,11 @@ public:
   static constexpr ::llvm::StringLiteral name = "tensorium.field";
 
   static FieldType get(::mlir::MLIRContext *ctx, ::mlir::Type elementType,
-                       unsigned rank);
+                       unsigned rank, Variance variance);
 
   ::mlir::Type getElementType() const;
   unsigned getRank() const;
+  Variance getVariance() const;
 };
 
 } // namespace mlir
