@@ -1,8 +1,8 @@
 
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
-#include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
-
 #include "mlir/IR/DialectImplementation.h"
+#include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
+#include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -13,6 +13,10 @@ namespace mlir {
 TensoriumDialect::TensoriumDialect(MLIRContext *ctx)
     : Dialect(getDialectNamespace(), ctx, TypeID::get<TensoriumDialect>()) {
   addTypes<FieldType>();
+  addOperations<
+#define GET_OP_LIST
+#include "TensoriumOps.cpp.inc"
+      >();
 }
 
 Type TensoriumDialect::parseType(DialectAsmParser &parser) const {

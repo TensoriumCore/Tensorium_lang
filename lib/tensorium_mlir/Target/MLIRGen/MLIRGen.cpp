@@ -72,8 +72,7 @@ concept HasVarianceMember = requires(const F &f) { f.variance; };
 template <class F>
 concept HasGetVariance = requires(const F &f) { f.getVariance(); };
 
-template <class F>
-static unsigned getUpCount(const F &f) {
+template <class F> static unsigned getUpCount(const F &f) {
   if constexpr (HasUpMember<F>) {
     return static_cast<unsigned>(f.up);
   } else if constexpr (HasGetUp<F>) {
@@ -83,8 +82,7 @@ static unsigned getUpCount(const F &f) {
   }
 }
 
-template <class F>
-static unsigned getDownCount(const F &f) {
+template <class F> static unsigned getDownCount(const F &f) {
   if constexpr (HasDownMember<F>) {
     return static_cast<unsigned>(f.down);
   } else if constexpr (HasGetDown<F>) {
@@ -94,13 +92,13 @@ static unsigned getDownCount(const F &f) {
   }
 }
 
-template <class F>
-static unsigned getRankFromAny(const F &f) {
+template <class F> static unsigned getRankFromAny(const F &f) {
   if constexpr (HasRankMember<F>) {
     return static_cast<unsigned>(f.rank);
   } else if constexpr (HasGetRank<F>) {
     return static_cast<unsigned>(f.getRank());
-  } else if constexpr (HasUpMember<F> || HasGetUp<F> || HasDownMember<F> || HasGetDown<F>) {
+  } else if constexpr (HasUpMember<F> || HasGetUp<F> || HasDownMember<F> ||
+                       HasGetDown<F>) {
     return getUpCount(f) + getDownCount(f);
   } else if constexpr (HasIndicesMember<F>) {
     return static_cast<unsigned>(f.indices.size());
@@ -117,7 +115,8 @@ static tensorium::mlir::Variance getVarianceFromAny(const F &f) {
     return f.variance;
   } else if constexpr (HasGetVariance<F>) {
     return f.getVariance();
-  } else if constexpr (HasUpMember<F> || HasGetUp<F> || HasDownMember<F> || HasGetDown<F>) {
+  } else if constexpr (HasUpMember<F> || HasGetUp<F> || HasDownMember<F> ||
+                       HasGetDown<F>) {
     unsigned up = getUpCount(f);
     unsigned down = getDownCount(f);
     if (up == 0 && down == 0)
@@ -132,8 +131,7 @@ static tensorium::mlir::Variance getVarianceFromAny(const F &f) {
   }
 }
 
-template <class M>
-static auto getFieldRange(const M &module) {
+template <class M> static auto getFieldRange(const M &module) {
   if constexpr (HasFieldsMember<M>) {
     return module.fields;
   } else if constexpr (HasGetFields<M>) {
@@ -143,8 +141,7 @@ static auto getFieldRange(const M &module) {
   }
 }
 
-template <class F>
-static std::string getFieldName(const F &f) {
+template <class F> static std::string getFieldName(const F &f) {
   if constexpr (HasNameMember<F>) {
     return std::string(f.name);
   } else if constexpr (HasGetName<F>) {
@@ -208,9 +205,7 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
 
   const auto fields = extractFields(module);
   for (const auto &fd : fields) {
-    auto ty = tensorium::mlir::FieldType::get(&ctx,
-                                              b.getF64Type(),
-                                              fd.rank,
+    auto ty = tensorium::mlir::FieldType::get(&ctx, b.getF64Type(), fd.rank,
                                               fd.variance);
     argTypes.push_back(ty);
     llvm::errs() << "[MLIRGen] field '" << fd.name << "' -> " << ty
