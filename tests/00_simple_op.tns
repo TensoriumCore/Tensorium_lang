@@ -1,0 +1,23 @@
+field scalar a
+field scalar b
+field scalar c
+
+simulation {
+  dimension = 1
+  resolution = [8]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution ScalarTest {
+  dt c = a + b
+}

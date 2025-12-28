@@ -7,6 +7,9 @@ namespace tensorium_mlir {
 struct MLIRGenOptions {
   bool enableNoOpPass = false;
   bool enableAnalysisPass = false;
+  bool enableEinsteinLoweringPass = false;
+  bool enableIndexRoleAnalysisPass = false;
+  bool enableEinsteinValidityPass = false;
 };
 
 void emitMLIR(const tensorium::backend::ModuleIR &module,

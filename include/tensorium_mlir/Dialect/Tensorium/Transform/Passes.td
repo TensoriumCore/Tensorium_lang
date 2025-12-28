@@ -10,4 +10,8 @@ def TensoriumNoOpPass : Pass<"tensorium-noop", "mlir::ModuleOp"> {
   }];
 }
 
+def TensoriumEinsteinLowering : Pass<"tensorium-einstein-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower tensorium.contract into tensorium.einsum (Einstein symbolic lowering)";
+  let constructor = "tensorium::mlir::createTensoriumEinsteinLoweringPass()";
+}
 #endif // TENSORIUM_TRANSFORM_PASSES_TD

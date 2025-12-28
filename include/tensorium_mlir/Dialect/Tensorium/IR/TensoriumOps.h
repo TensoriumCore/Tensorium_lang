@@ -8,6 +8,8 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Attributes.h" 
 #include "mlir/Interfaces/InferTypeOpInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 
 namespace tensorium::mlir {
   using Attribute = ::mlir::Attribute; 

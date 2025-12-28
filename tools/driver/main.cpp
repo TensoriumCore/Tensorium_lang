@@ -8,6 +8,7 @@
 #include "tensorium/Backend/IRPrinter.hpp"
 #include "tensorium/Runtime/CpuRuntime.hpp"
 #include "tensorium/Runtime/Eval.hpp"
+#include "tensorium/Sema/ProgramValidator.hpp"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 
 #include <fstream>
@@ -87,6 +88,11 @@ int main(int argc, char **argv) {
   bool dumpMLIR = false;
   bool enableNoOpPass = false;
   bool enableAnalysisPass = false;
+  bool validateOnly = false;
+  bool enableEinsteinLoweringPass = false;
+  bool enableIndexRoleAnalysisPass = false;
+  bool enableEinsteinValidityPass = false;
+
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
     return 1;
@@ -111,8 +117,16 @@ int main(int argc, char **argv) {
       enableAnalysisPass = true;
     } else if (arg == "--run-cpu") {
       runCpu = true;
+    } else if (arg == "--tensorium-einstein-lower") {
+      enableEinsteinLoweringPass = true;
+    } else if (arg == "--tensorium-index-analyze") {
+      enableIndexRoleAnalysisPass = true;
+    } else if (arg == "--tensorium-einstein-validate") {
+      enableEinsteinValidityPass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
+    } else if (arg == "--validate") {
+      validateOnly = true;
     } else if (arg == "--steps") {
       if (i + 1 >= argc)
         throw std::runtime_error("--steps expects an integer");
@@ -146,7 +160,6 @@ int main(int argc, char **argv) {
       Program prog = parser.parseProgram();
 
       SemanticAnalyzer sem(prog);
-
       std::vector<IndexedEvolution> indexedEvos;
 
       if (dumpIndexed) {
@@ -189,9 +202,24 @@ int main(int argc, char **argv) {
 
         std::cout << "==============================\n";
       }
-      if (dumpBackend) {
-        auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
+      auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
+      if (validateOnly) {
+        auto result = tensorium::sema::validateProgram(mod);
 
+        for (const auto &d : result.diags) {
+          std::cerr << (d.kind == tensorium::sema::Diagnostic::Kind::Error
+                            ? "error: "
+                            : "warning: ")
+                    << d.message << "\n";
+        }
+
+        if (!result.ok())
+          return 1;
+
+        std::cout << "[Tensorium] validation OK: " << path << "\n";
+        continue;
+      }
+      if (dumpBackend) {
         std::cout << "\n=== BACKEND IR (" << path << ") ===\n";
         if (mod.simulation) {
           std::cout << "Simulation:\n";
@@ -213,33 +241,29 @@ int main(int argc, char **argv) {
         std::cout << "==============================\n";
       }
       if (dumpBackendExpr) {
-        auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
-
         std::cout << "\n=== BACKEND IR FULL (" << path << ") ===\n";
         tensorium::backend::printModuleIR(mod);
         std::cout << "==============================\n";
       }
       if (dumpMLIR) {
-        auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
-
         std::cout << "\n=== MLIR DUMP (" << path << ") ===\n";
 
         tensorium_mlir::MLIRGenOptions opts;
         opts.enableNoOpPass = enableNoOpPass;
         opts.enableAnalysisPass = enableAnalysisPass;
 
-        tensorium_mlir::emitMLIR(mod, opts);
+        opts.enableEinsteinLoweringPass = enableEinsteinLoweringPass;
+        opts.enableIndexRoleAnalysisPass = enableIndexRoleAnalysisPass;
+        opts.enableEinsteinValidityPass = enableEinsteinValidityPass;
 
+        tensorium_mlir::emitMLIR(mod, opts);
         std::cout << "==============================\n";
       }
       if (runCpu) {
-        auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
-
         tensorium::runtime::RunOptions opt;
         opt.steps = steps;
 
         auto st = tensorium::runtime::initState1D(mod, initScalar, initAlpha);
-
         tensorium::runtime::runEuler1D(mod, st, opt);
 
         for (const auto &kv : st.fields) {

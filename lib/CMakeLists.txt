@@ -7,6 +7,7 @@ add_library(tensorium
   Runtime/CpuRuntime.cpp
   Runtime/Eval.cpp
   Sema/Sema.cpp
+  Sema/ProgramValidator.cpp
 )
 
 target_include_directories(tensorium PUBLIC
@@ -58,6 +59,9 @@ add_library(tensorium_mlir_backend
   tensorium_mlir/Init/Registry.cpp
   tensorium_mlir/Init/Passes.cpp
   tensorium_mlir/Pipeline/Pipeline.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinLoweringPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/IndexRoleAnalysisPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinValidityPass.cpp
 )
 
 add_dependencies(tensorium_mlir_backend

@@ -8,11 +8,15 @@
 #include "mlir/Pass/PassManager.h"
 
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
+#include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/Passes.h"
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -72,6 +76,19 @@ concept HasVarianceMember = requires(const F &f) { f.variance; };
 template <class F>
 concept HasGetVariance = requires(const F &f) { f.getVariance(); };
 
+static ::mlir::ArrayAttr
+makeIndexArrayAttr(::mlir::OpBuilder &b, const std::vector<std::string> &idx) {
+  llvm::SmallVector<::mlir::Attribute, 4> names;
+  names.reserve(idx.size());
+  for (auto &s : idx)
+    names.push_back(b.getStringAttr(s));
+  return b.getArrayAttr(names);
+}
+
+static bool startsWith(const std::string &s, const char *prefix) {
+  size_t n = std::char_traits<char>::length(prefix);
+  return s.size() >= n && s.compare(0, n, prefix) == 0;
+}
 template <class F> static unsigned getUpCount(const F &f) {
   if constexpr (HasUpMember<F>) {
     return static_cast<unsigned>(f.up);
@@ -186,6 +203,123 @@ static const char *varianceTag(tensorium::mlir::Variance v) {
   return "scalar";
 }
 
+static ::mlir::Value
+emitExpr(::mlir::OpBuilder &b, ::mlir::Location loc, ::mlir::Type f64,
+         const tensorium::backend::ExprIR *e,
+         const llvm::DenseMap<llvm::StringRef, ::mlir::Value> &fieldArg) {
+  using namespace tensorium::backend;
+
+  if (!e)
+    return {};
+
+  switch (e->kind) {
+  case ExprIR::Kind::Number: {
+    auto *n = static_cast<const NumberIR *>(e);
+    auto c = b.create<tensorium::mlir::ConstOp>(loc, f64,
+                                                b.getF64FloatAttr(n->value));
+    return c.getResult();
+  }
+
+  case ExprIR::Kind::Var: {
+    auto *v = static_cast<const VarIR *>(e);
+
+    auto it = fieldArg.find(v->name);
+    if (it == fieldArg.end()) {
+      llvm::errs() << "[MLIRGen][error] unknown var: " << v->name << "\n";
+      return {};
+    }
+
+    auto kindAttr = b.getStringAttr("field");
+    auto r = b.create<tensorium::mlir::RefOp>(loc, f64, it->second, kindAttr);
+
+    if (!v->tensorIndexNames.empty()) {
+      llvm::SmallVector<::mlir::Attribute, 4> idxAttr;
+      idxAttr.reserve(v->tensorIndexNames.size());
+      for (auto &s : v->tensorIndexNames)
+        idxAttr.push_back(b.getStringAttr(s));
+      r->setAttr("indices", b.getArrayAttr(idxAttr));
+    }
+
+    return r.getResult();
+  }
+
+  case ExprIR::Kind::Binary: {
+    auto *bin = static_cast<const BinaryIR *>(e);
+    auto L = emitExpr(b, loc, f64, bin->lhs.get(), fieldArg);
+    auto R = emitExpr(b, loc, f64, bin->rhs.get(), fieldArg);
+    if (!L || !R)
+      return {};
+
+    if (bin->op == "+") {
+      auto op = b.create<tensorium::mlir::AddOp>(loc, f64, L, R);
+      return op.getResult();
+    }
+    if (bin->op == "*") {
+      auto op = b.create<tensorium::mlir::MulOp>(loc, f64, L, R);
+      return op.getResult();
+    }
+
+    if (bin->op == "-") {
+      if (auto *Ln = dynamic_cast<const NumberIR *>(bin->lhs.get())) {
+        if (Ln->value == 0.0) {
+          if (auto *Rn = dynamic_cast<const NumberIR *>(bin->rhs.get())) {
+            auto c = b.create<tensorium::mlir::ConstOp>(
+                loc, f64, b.getF64FloatAttr(-Rn->value));
+            return c.getResult();
+          }
+        }
+      }
+      auto op = b.create<tensorium::mlir::SubOp>(loc, f64, L, R);
+      return op.getResult();
+    }
+    if (bin->op == "/") {
+      llvm::errs() << "[MLIRGen][error] '/' not supported yet\n";
+      return {};
+    }
+
+    llvm::errs() << "[MLIRGen][error] unknown binary op: " << bin->op << "\n";
+    return {};
+  }
+
+  case ExprIR::Kind::Call: {
+    auto *c = static_cast<const CallIR *>(e);
+
+    if (startsWith(c->callee, "d_") && c->callee.size() == 3) {
+      std::string idxName(1, c->callee[2]);
+
+      ::mlir::Value arg0 =
+          c->args.empty() ? ::mlir::Value()
+                          : emitExpr(b, loc, f64, c->args[0].get(), fieldArg);
+      if (!arg0)
+        return {};
+
+      auto deriv = b.create<tensorium::mlir::DerivOp>(loc, f64, arg0);
+      deriv->setAttr("index", b.getStringAttr(idxName));
+      return deriv.getResult();
+    }
+
+    if (c->callee == "contract") {
+      if (c->args.size() != 1) {
+        llvm::errs()
+            << "[MLIRGen][error] contract() expects exactly one argument\n";
+        return {};
+      }
+
+      ::mlir::Value arg0 = emitExpr(b, loc, f64, c->args[0].get(), fieldArg);
+      if (!arg0)
+        return {};
+
+      auto ctr = b.create<tensorium::mlir::ContractOp>(loc, f64, arg0);
+      return ctr.getResult();
+    }
+
+    llvm::errs() << "[MLIRGen][error] unknown call: " << c->callee << "\n";
+    return {};
+  }
+
+    return {};
+  }
+}
 } // namespace
 
 void emitMLIR(const tensorium::backend::ModuleIR &module,
@@ -218,6 +352,36 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
 
   auto *entry = f.addEntryBlock();
   b.setInsertionPointToEnd(entry);
+
+  llvm::DenseMap<llvm::StringRef, ::mlir::Value> fieldArg;
+  fieldArg.reserve(fields.size());
+
+  for (unsigned i = 0; i < fields.size(); ++i) {
+    fieldArg[fields[i].name] = entry->getArgument(i);
+  }
+  auto f64 = b.getF64Type();
+  for (const auto &evo : module.evolutions) {
+    for (const auto &eq : evo.equations) {
+
+      auto it = fieldArg.find(eq.fieldName);
+      if (it == fieldArg.end()) {
+        llvm::errs() << "[MLIRGen][error] unknown lhs field: " << eq.fieldName
+                     << "\n";
+        continue;
+      }
+
+      auto rhsV = emitExpr(b, loc, f64, eq.rhs.get(), fieldArg);
+      if (!rhsV) {
+        llvm::errs() << "[MLIRGen][warn] skipping equation dt " << eq.fieldName
+                     << " (rhs not lowered)\n";
+        continue;
+      }
+
+      auto idxAttr = makeIndexArrayAttr(b, eq.indices);
+
+      b.create<tensorium::mlir::DtAssignOp>(loc, it->second, rhsV, idxAttr);
+    }
+  }
   b.create<::mlir::func::ReturnOp>(loc);
   moduleOp.push_back(f);
 
@@ -230,6 +394,24 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
   if (opts.enableNoOpPass) {
     pm.addPass(tensorium::mlir::createTensoriumNoOpPass());
   }
+
+  if (opts.enableAnalysisPass)
+    pm.addPass(tensorium::mlir::createTensoriumAnalysisPass());
+
+  if (opts.enableNoOpPass)
+    pm.addPass(tensorium::mlir::createTensoriumNoOpPass());
+
+  if (opts.enableEinsteinLoweringPass)
+    pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());
+
+  if (opts.enableIndexRoleAnalysisPass)
+    pm.addPass(tensorium::mlir::createTensoriumIndexRoleAnalysisPass());
+
+  if (opts.enableEinsteinValidityPass)
+    pm.addPass(tensorium::mlir::createTensoriumEinsteinValidityPass());
+
+  pm.addPass(::mlir::createCanonicalizerPass());
+  pm.addPass(::mlir::createCSEPass());
 
   if (::mlir::failed(pm.run(moduleOp))) {
     std::cerr << "[MLIR] pass pipeline failed\n";
