@@ -92,6 +92,7 @@ int main(int argc, char **argv) {
   bool enableEinsteinLoweringPass = false;
   bool enableIndexRoleAnalysisPass = false;
   bool enableEinsteinValidityPass = false;
+  bool enableIndexAnalyzePass = false;
 
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
@@ -123,6 +124,8 @@ int main(int argc, char **argv) {
       enableIndexRoleAnalysisPass = true;
     } else if (arg == "--tensorium-einstein-validate") {
       enableEinsteinValidityPass = true;
+    } else if (arg == "--tensorium-index-analyze") {
+      enableIndexAnalyzePass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
     } else if (arg == "--validate") {
@@ -255,6 +258,7 @@ int main(int argc, char **argv) {
         opts.enableEinsteinLoweringPass = enableEinsteinLoweringPass;
         opts.enableIndexRoleAnalysisPass = enableIndexRoleAnalysisPass;
         opts.enableEinsteinValidityPass = enableEinsteinValidityPass;
+        opts.enableIndexAnalyzePass = enableIndexAnalyzePass;
 
         tensorium_mlir::emitMLIR(mod, opts);
         std::cout << "==============================\n";

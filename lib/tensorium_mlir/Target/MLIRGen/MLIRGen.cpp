@@ -410,6 +410,9 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
   if (opts.enableEinsteinValidityPass)
     pm.addPass(tensorium::mlir::createTensoriumEinsteinValidityPass());
 
+  if (opts.enableIndexAnalyzePass)
+    pm.addPass(tensorium::mlir::createTensoriumIndexAnalyzePass());
+
   pm.addPass(::mlir::createCanonicalizerPass());
   pm.addPass(::mlir::createCSEPass());
 
