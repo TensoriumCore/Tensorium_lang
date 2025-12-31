@@ -23,18 +23,36 @@ struct TensoriumEinsteinValidityPass final
   }
 
   void runOnOperation() override {
-    ModuleOp m = getOperation();
-    bool ok = true;
+    ::mlir::ModuleOp mod = getOperation();
 
-    m.walk([&](tensorium::mlir::DtAssignOp op) {
-      auto v = op->getAttrOfType<BoolAttr>("tin.idx.valid");
-      if (!v || !v.getValue()) {
-        op->emitError("invalid Einstein indices on dt_assign");
-        ok = false;
+    bool failed = false;
+
+    mod.walk([&](tensorium::mlir::EinsumOp op) {
+      auto v = op->getAttrOfType<::mlir::BoolAttr>("tin.idx.valid");
+      if (!v) {
+        op.emitError("einsum missing tin.idx.valid (run "
+                     "--tensorium-einstein-analyze-einsum)");
+        failed = true;
+        return;
+      }
+      if (!v.getValue()) {
+        op.emitError("invalid Einstein indices on einsum");
+        failed = true;
+        return;
       }
     });
 
-    if (!ok)
+    mod.walk([&](tensorium::mlir::DtAssignOp op) {
+      auto v = op->getAttrOfType<::mlir::BoolAttr>("tin.idx.valid");
+      if (!v)
+        return; // optional
+      if (!v.getValue()) {
+        op.emitError("invalid Einstein indices on dt_assign");
+        failed = true;
+      }
+    });
+
+    if (failed)
       signalPassFailure();
   }
 };

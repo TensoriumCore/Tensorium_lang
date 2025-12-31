@@ -108,7 +108,6 @@ std::vector<std::unique_ptr<Expr>> Parser::parseExprList() {
   return l;
 }
 
-// LHS Handling with Parens (Fix requested)
 TensorAccess Parser::parseLHS() {
   TensorAccess lhs;
   if (cur.type != TokenType::Identifier)
@@ -148,11 +147,13 @@ Assignment Parser::parseAssignment() {
 
 FieldDecl Parser::parseFieldDecl() {
   expect(TokenType::KwField);
-  TensorKind k = TensorKind::Scalar;
+
+  TensorKind k;
   int u = 0, d = 0;
-  if (cur.type == TokenType::KwScalar)
+
+  if (cur.type == TokenType::KwScalar) {
     k = TensorKind::Scalar;
-  else if (cur.type == TokenType::KwVector) {
+  } else if (cur.type == TokenType::KwVector) {
     k = TensorKind::Vector;
     u = 1;
   } else if (cur.type == TokenType::KwCovector) {
@@ -164,7 +165,22 @@ FieldDecl Parser::parseFieldDecl() {
   } else if (cur.type == TokenType::KwConTensor2) {
     k = TensorKind::ConTensor2;
     u = 2;
+  } else if (cur.type == TokenType::KwCovTensor3) {
+    k = TensorKind::CovTensor3;
+    d = 3;
+  } else if (cur.type == TokenType::KwConTensor3) {
+    k = TensorKind::ConTensor3;
+    u = 3;
+  } else if (cur.type == TokenType::KwCovTensor4) {
+    k = TensorKind::CovTensor4;
+    d = 4;
+  } else if (cur.type == TokenType::KwConTensor4) {
+    k = TensorKind::ConTensor4;
+    u = 4;
+  } else {
+    syntaxError("Unknown field type '" + cur.text + "'");
   }
+
   advance();
 
   if (cur.type != TokenType::Identifier)

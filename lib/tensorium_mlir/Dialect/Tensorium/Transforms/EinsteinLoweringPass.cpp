@@ -72,50 +72,6 @@ static llvm::SmallVector<std::string, 4> arrayAttrToStrings(ArrayAttr a) {
   return out;
 }
 
-static bool collectIndexedRefOperands(Value v,
-                                      llvm::SmallVector<Operation *, 8> &refs) {
-  if (!v)
-    return false;
-
-  if (auto ref = v.getDefiningOp<tensorium::mlir::RefOp>()) {
-    auto idx = getIndicesAttr(ref.getOperation());
-    if (!idx)
-      return false;
-    refs.push_back(ref.getOperation());
-    return true;
-  }
-
-  if (auto mul = v.getDefiningOp<tensorium::mlir::MulOp>()) {
-    return collectIndexedRefOperands(mul.getLhs(), refs) &&
-           collectIndexedRefOperands(mul.getRhs(), refs);
-  }
-
-  return false;
-}
-
-static std::string buildSpec(const llvm::SmallVector<Operation *, 8> &refs,
-                             ArrayAttr lhsIndices) {
-  auto outIdx = arrayAttrToStrings(lhsIndices);
-
-  std::string spec;
-  for (size_t r = 0; r < refs.size(); ++r) {
-    auto idxA = getIndicesAttr(refs[r]);
-    auto idx = arrayAttrToStrings(idxA);
-
-    if (r != 0)
-      spec += ",";
-
-    for (auto &s : idx)
-      spec += s;
-  }
-
-  spec += "->";
-  for (auto &s : outIdx)
-    spec += s;
-
-  return spec;
-}
-
 struct LowerContractToEinsum final
     : OpRewritePattern<tensorium::mlir::DtAssignOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -209,32 +165,87 @@ struct LowerContractToEinsum final
 };
 
 struct LowerContractOp final : OpRewritePattern<tensorium::mlir::ContractOp> {
-
   using OpRewritePattern::OpRewritePattern;
+
+  static bool collectInsAndCounts(
+      const llvm::SmallVector<Operation *, 8> &tensorRefs,
+      llvm::SmallVector<llvm::SmallVector<llvm::StringRef, 4>, 8> &ins,
+      llvm::DenseMap<llvm::StringRef, unsigned> &counts) {
+
+    ins.clear();
+    counts.clear();
+    ins.reserve(tensorRefs.size());
+
+    for (auto *r : tensorRefs) {
+      auto idxAttr = getIndicesAttr(r);
+      if (!idxAttr)
+        return false;
+
+      llvm::SmallVector<llvm::StringRef, 4> v;
+      for (auto a : idxAttr) {
+        auto s = cast<StringAttr>(a).getValue();
+        v.push_back(s);
+        counts[s] += 1;
+      }
+      ins.push_back(std::move(v));
+    }
+    return true;
+  }
+
+  static void collectFreeIndicesInOrder(
+      const llvm::SmallVector<llvm::SmallVector<llvm::StringRef, 4>, 8> &ins,
+      const llvm::DenseMap<llvm::StringRef, unsigned> &counts,
+      llvm::SmallVector<llvm::StringRef, 8> &outIdx) {
+
+    outIdx.clear();
+    llvm::DenseSet<llvm::StringRef> seen;
+    for (auto &v : ins) {
+      for (auto s : v) {
+        if (counts.lookup(s) == 1 && !seen.contains(s)) {
+          outIdx.push_back(s);
+          seen.insert(s);
+        }
+      }
+    }
+  }
 
   LogicalResult matchAndRewrite(tensorium::mlir::ContractOp op,
                                 PatternRewriter &rewriter) const override {
-
     llvm::SmallVector<Operation *, 8> tensorRefs;
     llvm::SmallVector<Value, 8> scalars;
 
     if (!collectTensorRefsAndScalars(op.getIn(), tensorRefs, scalars))
       return failure();
 
-    if (tensorRefs.size() < 2)
+    if (tensorRefs.empty())
       return failure();
 
+    llvm::SmallVector<llvm::SmallVector<llvm::StringRef, 4>, 8> ins;
+    llvm::DenseMap<llvm::StringRef, unsigned> counts;
+    if (!collectInsAndCounts(tensorRefs, ins, counts))
+      return failure();
+
+    for (auto &it : counts) {
+      if (it.second > 2)
+        return failure();
+    }
+
+    llvm::SmallVector<llvm::StringRef, 8> outIdx;
+    collectFreeIndicesInOrder(ins, counts, outIdx);
+
     std::string spec;
-    for (unsigned i = 0; i < tensorRefs.size(); ++i) {
+    for (unsigned i = 0; i < ins.size(); ++i) {
       if (i)
         spec += ",";
-      auto idxAttr = getIndicesAttr(tensorRefs[i]);
-      for (auto a : idxAttr)
-        spec += cast<StringAttr>(a).getValue().str();
+      for (auto s : ins[i])
+        spec += s.str();
     }
     spec += "->";
+    for (auto s : outIdx)
+      spec += s.str();
 
-    llvm::SmallVector<Value, 4> inputs;
+    llvm::SmallVector<Value, 8> inputs;
+    inputs.reserve(tensorRefs.size());
     for (auto *o : tensorRefs)
       inputs.push_back(o->getResult(0));
 
@@ -244,7 +255,8 @@ struct LowerContractOp final : OpRewritePattern<tensorium::mlir::ContractOp> {
 
     Value out = eins.getResult();
     for (Value s : scalars)
-      out = rewriter.create<tensorium::mlir::MulOp>(op.getLoc(), out, s);
+      out = rewriter.create<tensorium::mlir::MulOp>(op.getLoc(), out, s)
+                .getResult();
 
     rewriter.replaceOp(op, out);
     return success();
@@ -263,8 +275,8 @@ struct TensoriumEinsteinLoweringPass final
     ModuleOp m = getOperation();
 
     RewritePatternSet patterns(&getContext());
-    patterns.add<LowerContractToEinsum>(&getContext()); // DtAssignOp
-    patterns.add<LowerContractOp>(&getContext());       // ContractOp
+    patterns.add<LowerContractToEinsum>(&getContext());
+    patterns.add<LowerContractOp>(&getContext());
 
     GreedyRewriteConfig cfg;
     cfg.useTopDownTraversal = true;

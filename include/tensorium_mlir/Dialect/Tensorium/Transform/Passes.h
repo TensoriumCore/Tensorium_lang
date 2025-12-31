@@ -12,7 +12,7 @@ std::unique_ptr<::mlir::Pass> createTensoriumEinsteinLoweringPass();
 
 std::unique_ptr<::mlir::Pass> createTensoriumIndexAnalyzePass();
 std::unique_ptr<::mlir::Pass> createTensoriumEinsteinLoweringPass();
-std::unique_ptr<::mlir::Pass> createTensoriumIndexRoleAnalysisPass();
+std::unique_ptr<::mlir::Pass> createTensoriumEinsteinAnalyzeEinsumPass();
 std::unique_ptr<::mlir::Pass> createTensoriumEinsteinValidityPass();
 std::unique_ptr<::mlir::Pass> createTensoriumEinsteinCanonicalizePass();
 } // namespace mlir

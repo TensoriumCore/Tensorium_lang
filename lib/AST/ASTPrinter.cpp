@@ -1,4 +1,5 @@
 #include "tensorium/AST/ASTPrinter.hpp"
+#include "tensorium/AST/AST.hpp"
 #include "tensorium/AST/Visitor.hpp"
 #include <iostream>
 
@@ -70,13 +71,25 @@ void printProgram(const Program &prog) {
         std::cout << "covector ";
         break;
       case TensorKind::CovTensor2:
-        std::cout << "cov_tensor2 ";
+        std::cout << "cov_tensor2";
         break;
       case TensorKind::ConTensor2:
-        std::cout << "con_tensor2 ";
+        std::cout << "con_tensor2";
+        break;
+	  case TensorKind::CovTensor3:
+        std::cout << "cov_tensor3";
+        break;
+      case TensorKind::ConTensor3:
+        std::cout << "con_tensor3";
+        break;
+      case TensorKind::ConTensor4:
+        std::cout << "con_tensor4";
+        break;
+      case TensorKind::CovTensor4:
+        std::cout << "cov_tensor4";
         break;
       case TensorKind::MixedTensor:
-        std::cout << "mixed_tensor ";
+        std::cout << "mixed_tensor";
         break;
       }
 

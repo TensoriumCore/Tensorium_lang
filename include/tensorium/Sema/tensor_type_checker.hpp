@@ -102,7 +102,7 @@ class TensorTypeChecker {
   }
 
 public:
-  TensorType infer(const IndexedExpr *e) const {
+  TensorType inferImpl(const IndexedExpr *e, bool allowRepeated) const {
     if (!e)
       throw std::runtime_error("null expression in tensor type inference");
 
@@ -110,16 +110,19 @@ public:
       return TensorType{0, 0};
 
     if (auto v = dynamic_cast<const IndexedVar *>(e)) {
-      std::unordered_set<std::string> seen;
-      for (const auto &name : v->tensorIndexNames) {
-        if (!name.empty()) {
-          if (!seen.insert(name).second) {
-            throw std::runtime_error("Implicit trace '" + v->name + "[" + name +
-                                     "," + name +
-                                     "]' is forbidden; use explicit trace()");
+      if (!allowRepeated) {
+        std::unordered_set<std::string> seen;
+        for (const auto &name : v->tensorIndexNames) {
+          if (!name.empty()) {
+            if (!seen.insert(name).second) {
+              throw std::runtime_error("Implicit trace '" + v->name + "[" +
+                                       name + "," + name +
+                                       "]' is forbidden; use explicit trace()");
+            }
           }
         }
       }
+
       switch (v->tensorKind) {
       case TensorKind::Scalar:
         return TensorType{0, 0};
@@ -131,14 +134,22 @@ public:
         return TensorType{0, 2};
       case TensorKind::ConTensor2:
         return TensorType{2, 0};
+      case TensorKind::CovTensor3:
+        return TensorType{0, 3};
+      case TensorKind::ConTensor3:
+        return TensorType{3, 0};
+      case TensorKind::CovTensor4:
+        return TensorType{0, 4};
+      case TensorKind::ConTensor4:
+        return TensorType{4, 0};
       case TensorKind::MixedTensor:
         return TensorType{v->up, v->down};
       }
     }
 
     if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
-      TensorType lt = infer(b->lhs.get());
-      TensorType rt = infer(b->rhs.get());
+      TensorType lt = inferImpl(b->lhs.get(), allowRepeated);
+      TensorType rt = inferImpl(b->rhs.get(), allowRepeated);
 
       if (b->op == '+' || b->op == '-') {
         if (!lt.sameVariance(rt))
@@ -147,9 +158,8 @@ public:
         return lt;
       }
 
-      if (b->op == '*') {
+      if (b->op == '*')
         return TensorType{lt.up + rt.up, lt.down + rt.down};
-      }
 
       if (b->op == '/') {
         if (!rt.isScalar())
@@ -169,7 +179,7 @@ public:
           throw std::runtime_error("contract() expects 1 argument");
 
         const IndexedExpr *arg = call->args[0].get();
-        TensorType t = infer(arg);
+        TensorType t = inferImpl(arg, true);
 
         int counts[256] = {0};
         collectIndexCounts(arg, counts);
@@ -209,7 +219,6 @@ public:
         int down = t.down;
 
         int rem = remove;
-
         int takeDown = (down < rem) ? down : rem;
         down -= takeDown;
         rem -= takeDown;
@@ -228,7 +237,7 @@ public:
       if (isPartialDerivative(cal)) {
         if (call->args.size() != 1)
           throw std::runtime_error("d_* expects exactly 1 argument");
-        TensorType argT = infer(call->args[0].get());
+        TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
         if (!argT.isScalar())
           throw std::runtime_error("d_* expects scalar argument");
         return TensorType{0, 1};
@@ -239,7 +248,7 @@ public:
       if (isCovariantDerivative(cal, contra, idx)) {
         if (call->args.size() != 1)
           throw std::runtime_error("nabla expects exactly 1 argument");
-        TensorType t = infer(call->args[0].get());
+        TensorType t = inferImpl(call->args[0].get(), allowRepeated);
         if (contra)
           return TensorType{t.up + 1, t.down};
         return TensorType{t.up, t.down + 1};
@@ -248,24 +257,26 @@ public:
       if (cal == "laplacian") {
         if (call->args.size() != 1)
           throw std::runtime_error("laplacian() expects exactly 1 argument");
-        TensorType argT = infer(call->args[0].get());
+        TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
         if (!argT.isScalar())
           throw std::runtime_error("laplacian() expects scalar argument");
         return TensorType{0, 0};
       }
 
       for (auto &arg : call->args) {
-        TensorType t = infer(arg.get());
+        TensorType t = inferImpl(arg.get(), allowRepeated);
         if (!t.isScalar())
           throw std::runtime_error("function '" + cal +
                                    "' expects scalar argument");
       }
+
       return TensorType{0, 0};
     }
 
     throw std::runtime_error("unsupported expression in tensor type inference");
   }
 
+  TensorType infer(const IndexedExpr *e) const { return inferImpl(e, false); }
   void checkAssignmentVariance(const TensorType &lhs,
                                const std::vector<std::string> &lhsIndexNames,
                                const IndexedExpr *rhs) const {

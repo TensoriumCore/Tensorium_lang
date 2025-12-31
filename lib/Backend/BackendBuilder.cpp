@@ -35,8 +35,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
 
     auto out = std::make_unique<VarIR>(v->name, k);
     out->coordIndex = coord;
-    out->tensorIndexNames =
-        v->tensorIndexNames; 
+    out->tensorIndexNames = v->tensorIndexNames;
     return out;
   }
 
@@ -70,6 +69,14 @@ FieldKind BackendBuilder::lowerFieldKind(TensorKind k) {
     return FieldKind::CovTensor2;
   case TensorKind::ConTensor2:
     return FieldKind::ConTensor2;
+  case TensorKind::CovTensor3:
+    return FieldKind::CovTensor3;
+  case TensorKind::ConTensor3:
+    return FieldKind::ConTensor4;
+  case TensorKind::CovTensor4:
+    return FieldKind::CovTensor4;
+  case TensorKind::ConTensor4:
+    return FieldKind::ConTensor4;
   case TensorKind::MixedTensor:
     return FieldKind::MixedTensor;
   }

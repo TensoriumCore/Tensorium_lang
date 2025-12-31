@@ -1,12 +1,13 @@
 field scalar K
 field cov_tensor2 Atilde[i,j]
 field cov_tensor2 gamma[i,j]
-field cov_tensor2 Ricci[i,j,k,l]
+field cov_tensor2 Ricci[i,j]
+field cov_tensor4 Riemann[i,j,k,l]
 field scalar alpha
-
 evolution T {
   dt Atilde[i,j] = alpha * contract(gamma[i,k] * Atilde[k,j])
   dt K = -alpha * K * K + alpha * contract(Atilde[i,j] * gamma[i,j])
+  dt Ricci[i,j] = contract(Riemann[k,i,k,j])
 }
 
 

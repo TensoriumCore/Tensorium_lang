@@ -64,6 +64,8 @@ add_library(tensorium_mlir_backend
   tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinValidityPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/IndexAnalyzePass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinCanonicalizePass.cpp
+  tensorium_mlir/Semantic/Einstein.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinAnalyzeEinsumPass.cpp
 )
 
 add_dependencies(tensorium_mlir_backend

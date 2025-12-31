@@ -39,6 +39,10 @@ enum class FieldKind {
   Covector,
   CovTensor2,
   ConTensor2,
+  CovTensor3,
+  ConTensor3,
+  CovTensor4,
+  ConTensor4,
   MixedTensor
 };
 

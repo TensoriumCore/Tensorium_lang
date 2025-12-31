@@ -11,6 +11,10 @@ enum class TensorKind {
   Covector,
   CovTensor2,
   ConTensor2,
+  CovTensor3,
+  ConTensor3,
+  ConTensor4,
+  CovTensor4,
   MixedTensor
 };
 

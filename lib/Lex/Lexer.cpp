@@ -106,6 +106,14 @@ Token Lexer::next() {
       return {TokenType::KwCovTensor2, t, line, col};
     if (t == "con_tensor2")
       return {TokenType::KwConTensor2, t, line, col};
+    if (t == "cov_tensor3")
+      return {TokenType::KwCovTensor3, t, line, col};
+    if (t == "con_tensor3")
+      return {TokenType::KwConTensor3, t, line, col};
+    if (t == "cov_tensor4")
+      return {TokenType::KwCovTensor4, t, line, col};
+    if (t == "con_tensor4")
+      return {TokenType::KwConTensor4, t, line, col};
     if (t == "simulation")
       return {TokenType::KwSimulation, t, line, col};
     if (t == "time")

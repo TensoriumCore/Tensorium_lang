@@ -7,6 +7,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/Pass.h"
+#include "tensorium_mlir/Semantic/Einstein.h"
 
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Operation.h"
@@ -174,6 +175,21 @@ contractOnce(::llvm::ArrayRef<::llvm::StringRef> in) {
   return out;
 }
 
+static DictionaryAttr makeRolesDictFromSemantic(
+    ::mlir::OpBuilder &b,
+    const tensorium::semantic::EinsteinAnalysisResult &sem) {
+  ::llvm::SmallVector<NamedAttribute, 16> kv;
+  kv.reserve(sem.all.size());
+  for (auto idx : sem.all) {
+    auto it = sem.roles.find(idx);
+    auto role = (it == sem.roles.end())
+                    ? llvm::StringRef("invalid")
+                    : tensorium::semantic::roleToString(it->second);
+    kv.push_back(b.getNamedAttr(idx, b.getStringAttr(role)));
+  }
+  return DictionaryAttr::get(b.getContext(), kv);
+}
+
 static llvm::SmallVector<llvm::StringRef, 32> collectIndices(Value v) {
   if (!v)
     return {};
@@ -243,37 +259,31 @@ struct TensoriumIndexAnalyzePass final
     m.walk([&](tensorium::mlir::DtAssignOp op) {
       b.setInsertionPoint(op);
 
-      // LHS indices
       auto out = readLhsIndices(op);
-
-      // RHS indices (flat list)
       auto rhs = collectIndices(op->getOperand(1));
 
-      // Count RHS occurrences
-      ::llvm::MapVector<::llvm::StringRef, int64_t> counts;
-      for (auto idx : rhs)
-        counts[idx] += 1;
+      tensorium::semantic::EinsteinAnalyzeOptions opt;
+      opt.allowSummed = false;
+      opt.allowDangling = false;
 
-      // Inputs list (single RHS for now)
-      ::llvm::SmallVector<::llvm::SmallVector<::llvm::StringRef, 8>, 1> ins;
-      ins.emplace_back(rhs.begin(), rhs.end());
+      auto sem = tensorium::semantic::analyzeEinstein(out, rhs, opt);
 
-      // All indices (stable order)
-      auto all = computeAllSorted(ins, out);
+      ::llvm::SmallVector<::llvm::SmallVector<::llvm::StringRef, 8>, 4> ins =
+          sem.ins;
 
-      // Determine roles + validity
-      bool valid = true;
-      auto roles = makeRoles(b, all, out, counts, valid);
+      auto outAttr = fromRefs(b, sem.out);
+      auto allAttr = fromRefs(b, sem.all);
+      auto countsAttr = makeCounts(b, sem.counts);
+      auto rolesAttr = makeRolesDictFromSemantic(b, sem);
 
-      // Write attrs
       op->setAttr("tin.idx.ins", arrayOfArraysFromVec(b, ins));
-      op->setAttr("tin.idx.out", fromRefs(b, out));
-      op->setAttr("tin.idx.all", fromRefs(b, all));
-      op->setAttr("tin.idx.counts", makeCounts(b, counts));
-      op->setAttr("tin.idx.roles", roles);
-      op->setAttr("tin.idx.valid", b.getBoolAttr(valid));
+      op->setAttr("tin.idx.out", outAttr);
+      op->setAttr("tin.idx.all", allAttr);
+      op->setAttr("tin.idx.counts", countsAttr);
+      op->setAttr("tin.idx.roles", rolesAttr);
+      op->setAttr("tin.idx.valid", b.getBoolAttr(sem.valid));
 
-      if (!valid) {
+      if (!sem.valid) {
         op.emitError("invalid Einstein indices in dt_assign");
         return;
       }
