@@ -90,10 +90,16 @@ def Tensorium_DtAssignOp : Tensorium_Op<"dt_assign"> {
     "$field `,` $rhs attr-dict `:` type($field) `,` type($rhs)";
 }
 
+
 def Tensorium_EinsumOp : Tensorium_Op<"einsum"> {
+  let summary = "Einstein summation (tensor contraction)";
 
-  let arguments = (ins Variadic<F64>:$ins);
-  let results   = (outs F64:$out);
+  let traits = [Pure];
+  let arguments = (ins Variadic<AnyType>:$inputs);
+  let results   = (outs AnyType:$result);
 
-  let assemblyFormat = "$ins attr-dict `:` type($out)";
+  let hasCustomAssemblyFormat = 1;
 }
+
+
+

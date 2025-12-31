@@ -17,6 +17,6 @@ simulation {
 }
 
 evolution ScalarTest {
-  dt phi = phi
+  dt phi = phi * 0.1
 }
 

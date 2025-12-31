@@ -12,8 +12,9 @@ using namespace mlir;
 namespace tensorium::mlir {
 namespace {
 
-struct TensoriumEinsteinValidityPass
-    : public PassWrapper<TensoriumEinsteinValidityPass, OperationPass<ModuleOp>> {
+struct TensoriumEinsteinValidityPass final
+    : public PassWrapper<TensoriumEinsteinValidityPass,
+                         OperationPass<ModuleOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TensoriumEinsteinValidityPass)
 
@@ -25,17 +26,11 @@ struct TensoriumEinsteinValidityPass
     ModuleOp m = getOperation();
     bool ok = true;
 
-    m.walk([&](tensorium::mlir::EinsumOp op) {
+    m.walk([&](tensorium::mlir::DtAssignOp op) {
       auto v = op->getAttrOfType<BoolAttr>("tin.idx.valid");
-      if (!v) {
-        op->emitError("missing tin.idx.valid; run IndexRoleAnalysisPass first");
+      if (!v || !v.getValue()) {
+        op->emitError("invalid Einstein indices on dt_assign");
         ok = false;
-        return;
-      }
-      if (!v.getValue()) {
-        op->emitError("invalid Einstein indices (tin.idx.valid=false)");
-        ok = false;
-        return;
       }
     });
 

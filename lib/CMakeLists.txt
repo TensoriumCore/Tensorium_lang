@@ -63,6 +63,7 @@ add_library(tensorium_mlir_backend
   tensorium_mlir/Dialect/Tensorium/Transforms/IndexRoleAnalysisPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinValidityPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/IndexAnalyzePass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinCanonicalizePass.cpp
 )
 
 add_dependencies(tensorium_mlir_backend

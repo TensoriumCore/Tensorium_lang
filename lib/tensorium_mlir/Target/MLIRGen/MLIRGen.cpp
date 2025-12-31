@@ -387,41 +387,33 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
 
   ::mlir::PassManager pm(&ctx);
 
-  if (opts.enableAnalysisPass) {
-    pm.addPass(tensorium::mlir::createTensoriumAnalysisPass());
-  }
-
-  if (opts.enableNoOpPass) {
-    pm.addPass(tensorium::mlir::createTensoriumNoOpPass());
-  }
-
-  if (opts.enableAnalysisPass)
-    pm.addPass(tensorium::mlir::createTensoriumAnalysisPass());
-
-  if (opts.enableNoOpPass)
-    pm.addPass(tensorium::mlir::createTensoriumNoOpPass());
-
   if (opts.enableEinsteinLoweringPass)
     pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());
-
-  if (opts.enableIndexRoleAnalysisPass)
-    pm.addPass(tensorium::mlir::createTensoriumIndexRoleAnalysisPass());
-
-  if (opts.enableEinsteinValidityPass)
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinValidityPass());
 
   if (opts.enableIndexAnalyzePass)
     pm.addPass(tensorium::mlir::createTensoriumIndexAnalyzePass());
 
+  if (opts.enableEinsteinCanonicalizePass)
+    pm.addPass(tensorium::mlir::createTensoriumEinsteinCanonicalizePass());
+
+  if (opts.enableEinsteinValidityPass)
+    pm.addPass(tensorium::mlir::createTensoriumEinsteinValidityPass());
+
   pm.addPass(::mlir::createCanonicalizerPass());
   pm.addPass(::mlir::createCSEPass());
 
-  if (::mlir::failed(pm.run(moduleOp))) {
-    std::cerr << "[MLIR] pass pipeline failed\n";
-    return;
-  }
+  pm.addPass(::mlir::createCanonicalizerPass());
+  pm.addPass(::mlir::createCSEPass());
+
+  bool pipelineFailed = ::mlir::failed(pm.run(moduleOp));
 
   moduleOp.print(llvm::outs());
+  llvm::outs() << "\n";
+
+  if (pipelineFailed) {
+    std::cerr << "[MLIR] pass pipeline failed\n";
+  }
+
   llvm::outs() << "\n";
 }
 

@@ -1,0 +1,6 @@
+field cov_tensor2 A
+field cov_tensor2 B
+
+evolution UnusedOutputIndex {
+  dt B[i,j] = A[i,k]
+}

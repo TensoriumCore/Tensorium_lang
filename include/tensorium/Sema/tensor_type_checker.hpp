@@ -71,6 +71,30 @@ class TensorTypeChecker {
     }
 
     if (auto c = dynamic_cast<const IndexedCall *>(e)) {
+      if (c->callee == "contract") {
+        if (c->args.size() != 1)
+          throw std::runtime_error("contract() expects 1 argument");
+
+        int tmp[256] = {0};
+        collectIndexCounts(c->args[0].get(), tmp);
+
+        for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
+          int cc = tmp[(unsigned char)idx];
+          if (cc == 0)
+            continue;
+          if (cc == 1) {
+            counts[(unsigned char)idx] += 1;
+            continue;
+          }
+          if (cc == 2)
+            continue;
+          throw std::runtime_error(
+              std::string("Ambiguous contraction: index '") + idx +
+              "' appears " + std::to_string(cc) + " times.");
+        }
+        return;
+      }
+
       for (const auto &arg : c->args)
         collectIndexCounts(arg.get(), counts);
       return;
@@ -86,6 +110,16 @@ public:
       return TensorType{0, 0};
 
     if (auto v = dynamic_cast<const IndexedVar *>(e)) {
+      std::unordered_set<std::string> seen;
+      for (const auto &name : v->tensorIndexNames) {
+        if (!name.empty()) {
+          if (!seen.insert(name).second) {
+            throw std::runtime_error("Implicit trace '" + v->name + "[" + name +
+                                     "," + name +
+                                     "]' is forbidden; use explicit trace()");
+          }
+        }
+      }
       switch (v->tensorKind) {
       case TensorKind::Scalar:
         return TensorType{0, 0};
@@ -114,10 +148,6 @@ public:
       }
 
       if (b->op == '*') {
-        if (lt.isScalar())
-          return rt;
-        if (rt.isScalar())
-          return lt;
         return TensorType{lt.up + rt.up, lt.down + rt.down};
       }
 
@@ -144,28 +174,42 @@ public:
         int counts[256] = {0};
         collectIndexCounts(arg, counts);
 
-        int pairs = 0;
+        int freeCount = 0;
+        int contracted = 0;
+
         for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
           int c = counts[(unsigned char)idx];
-          if (c < 0)
-            throw std::runtime_error("internal error: negative index count");
-          pairs += (c / 2);
+          if (c == 0)
+            continue;
+          if (c == 1) {
+            freeCount += 1;
+            continue;
+          }
+          if (c == 2) {
+            contracted += 1;
+            continue;
+          }
+          throw std::runtime_error(
+              std::string("Ambiguous contraction: index '") + idx +
+              "' appears " + std::to_string(c) + " times.");
         }
 
-        if (pairs == 0)
+        if (contracted == 0)
           throw std::runtime_error(
               "contract() expects at least one repeated index");
 
-        int remove = 2 * pairs;
-        int r = t.rank();
-        if (r < remove)
-          throw std::runtime_error(
-              "contract() contraction exceeds tensor rank");
+        if (t.up == 0 && t.down > 0)
+          return TensorType{0, freeCount};
 
+        if (t.down == 0 && t.up > 0)
+          return TensorType{freeCount, 0};
+
+        int remove = 2 * contracted;
         int up = t.up;
         int down = t.down;
 
         int rem = remove;
+
         int takeDown = (down < rem) ? down : rem;
         down -= takeDown;
         rem -= takeDown;
@@ -176,10 +220,11 @@ public:
 
         if (rem != 0)
           throw std::runtime_error(
-              "contract() could not remove requested rank");
+              "internal error: contract() could not remove requested rank");
 
         return TensorType{up, down};
       }
+
       if (isPartialDerivative(cal)) {
         if (call->args.size() != 1)
           throw std::runtime_error("d_* expects exactly 1 argument");
@@ -222,13 +267,78 @@ public:
   }
 
   void checkAssignmentVariance(const TensorType &lhs,
+                               const std::vector<std::string> &lhsIndexNames,
                                const IndexedExpr *rhs) const {
-    TensorType rhsType = infer(rhs);
-    if (!lhs.sameVariance(rhsType)) {
+    TensorType rhsRaw = infer(rhs);
+
+    bool lhsSet[256] = {false};
+    for (const auto &nm : lhsIndexNames) {
+      if (nm.empty())
+        continue;
+      char c = nm[0];
+      if (!isTensorIndexChar(c))
+        throw std::runtime_error("Invalid tensor index '" + nm + "'");
+      lhsSet[(unsigned char)c] = true;
+    }
+
+    int counts[256] = {0};
+    collectIndexCounts(rhs, counts);
+    int contracted = 0;
+    for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
+      int c = counts[(unsigned char)idx];
+      bool inLhs = lhsSet[(unsigned char)idx];
+
+      if (c == 0)
+        continue;
+
+      if (c >= 3) {
+        throw std::runtime_error(std::string("Ambiguous contraction: index '") +
+                                 idx + "' appears " + std::to_string(c) +
+                                 " times.");
+      }
+
+      if (inLhs) {
+        if (c != 1) {
+          throw std::runtime_error(
+              std::string("Invalid Einstein: LHS index '") + idx +
+              "' must appear exactly once in RHS.");
+        }
+      } else {
+        if (c == 1) {
+          throw std::runtime_error(std::string("Free index '") + idx +
+                                   "' appears only in RHS and not LHS.");
+        }
+        contracted += 1;
+      }
+    }
+
+    int remove = 2 * contracted;
+
+    int up = rhsRaw.up;
+    int down = rhsRaw.down;
+
+    int rem = remove;
+
+    int takeDown = (down < rem) ? down : rem;
+    down -= takeDown;
+    rem -= takeDown;
+
+    int takeUp = (up < rem) ? up : rem;
+    up -= takeUp;
+    rem -= takeUp;
+
+    if (rem != 0) {
+      throw std::runtime_error("internal error: Einstein contraction could not "
+                               "remove requested rank");
+    }
+
+    TensorType rhsEff{up, down};
+
+    if (!lhs.sameVariance(rhsEff)) {
       throw std::runtime_error(
           "tensor assignment mismatch: LHS(" + std::to_string(lhs.up) + "," +
-          std::to_string(lhs.down) + ") vs RHS(" + std::to_string(rhsType.up) +
-          "," + std::to_string(rhsType.down) + ")");
+          std::to_string(lhs.down) + ") vs RHS(" + std::to_string(rhsEff.up) +
+          "," + std::to_string(rhsEff.down) + ")");
     }
   }
 

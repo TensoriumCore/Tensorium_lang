@@ -52,6 +52,15 @@ static void printIndexedExpr(const IndexedExpr *e) {
       break;
     }
 
+    if (!v->tensorIndexNames.empty()) {
+      std::cout << ";";
+      for (size_t i = 0; i < v->tensorIndexNames.size(); ++i) {
+        std::cout << v->tensorIndexNames[i];
+        if (i + 1 < v->tensorIndexNames.size())
+          std::cout << ",";
+      }
+    }
+
     std::cout << "]";
     return;
   }
@@ -93,6 +102,7 @@ int main(int argc, char **argv) {
   bool enableIndexRoleAnalysisPass = false;
   bool enableEinsteinValidityPass = false;
   bool enableIndexAnalyzePass = false;
+  bool enableEinsteinCanonicalizePass = false;
 
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
@@ -120,12 +130,15 @@ int main(int argc, char **argv) {
       runCpu = true;
     } else if (arg == "--tensorium-einstein-lower") {
       enableEinsteinLoweringPass = true;
-    } else if (arg == "--tensorium-index-analyze") {
+
+    } else if (arg == "--tensorium-index-role-analyze") {
       enableIndexRoleAnalysisPass = true;
-    } else if (arg == "--tensorium-einstein-validate") {
-      enableEinsteinValidityPass = true;
     } else if (arg == "--tensorium-index-analyze") {
       enableIndexAnalyzePass = true;
+    } else if (arg == "--tensorium-einstein-validate") {
+      enableEinsteinValidityPass = true;
+    } else if (arg == "--tensorium-einstein-canonicalize") {
+      enableEinsteinCanonicalizePass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
     } else if (arg == "--validate") {
@@ -259,6 +272,7 @@ int main(int argc, char **argv) {
         opts.enableIndexRoleAnalysisPass = enableIndexRoleAnalysisPass;
         opts.enableEinsteinValidityPass = enableEinsteinValidityPass;
         opts.enableIndexAnalyzePass = enableIndexAnalyzePass;
+        opts.enableEinsteinCanonicalizePass = enableEinsteinCanonicalizePass;
 
         tensorium_mlir::emitMLIR(mod, opts);
         std::cout << "==============================\n";

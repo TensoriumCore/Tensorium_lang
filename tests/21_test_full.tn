@@ -1,0 +1,19 @@
+field scalar      chi
+field scalar      alpha
+field scalar      K
+field cov_tensor2 gamma
+field cov_tensor2 Atilde
+
+evolution AnalyticFullTest {
+
+  dt chi = -2.0 * alpha * chi * K
+
+  dt gamma[i,j] = -2.0 * alpha * Atilde[i,j]
+
+  dt K = contract(gamma[i,j] * Atilde[i,j])
+
+  dt gamma[i,j] =
+      contract(gamma[i,k] * gamma[k,l] * Atilde[l,m] * gamma[m,j])
+
+  dt Atilde[j,i] = contract(gamma[i,k] * Atilde[k,j])
+}

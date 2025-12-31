@@ -1,6 +1,6 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
+#include "mlir/IR/Builders.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
-#include "mlir/IR/Builders.h" 
 
 using namespace mlir;
 namespace tensorium {
@@ -36,6 +36,68 @@ LogicalResult IndexOp::verify() {
   return success();
 }
 
+ParseResult EinsumOp::parse(OpAsmParser &parser, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 8> operands;
+  Type resultType;
+
+  if (parser.parseOperandList(operands))
+    return failure();
+
+  if (parser.parseColon())
+    return failure();
+
+  if (parser.parseType(resultType))
+    return failure();
+
+  SmallVector<Type, 8> operandTypes(operands.size(), resultType);
+  if (parser.resolveOperands(operands, operandTypes,
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
+
+  result.addTypes(resultType);
+
+  if (succeeded(parser.parseOptionalAttrDict(result.attributes)))
+    return success();
+
+  return success();
+}
+
+void EinsumOp::print(OpAsmPrinter &p) {
+  p << " " << getOperands();
+  p << " {";
+  p.printNewline();
+  p.increaseIndent();
+
+  auto printOne = [&](StringRef name) {
+    if (auto a = (*this)->getAttr(name)) {
+      p.printNewline();
+      p << name << " = ";
+      p.printAttribute(a);
+    }
+  };
+
+  printOne("spec");
+  printOne("tin.idx.ins");
+  printOne("tin.idx.out");
+  printOne("tin.idx.all");
+  printOne("tin.idx.counts");
+  printOne("tin.idx.roles");
+  printOne("tin.idx.valid");
+
+  for (auto na : (*this)->getAttrs()) {
+    auto n = na.getName().strref();
+    if (n == "spec" || n.starts_with("tin.idx."))
+      continue;
+    p.printNewline();
+    p << n << " = ";
+    p.printAttribute(na.getValue());
+  }
+
+  p.decreaseIndent();
+  p.printNewline();
+  p << "}";
+  p << " : " << getResult().getType();
+}
 } // namespace mlir
 } // namespace tensorium
 

@@ -1,0 +1,7 @@
+field cov_tensor2 A
+field cov_tensor2 B
+field cov_tensor2 C
+
+evolution DuplicateFreeIndex {
+  dt C[i,i] = A[i,k] * B[k,i]
+}

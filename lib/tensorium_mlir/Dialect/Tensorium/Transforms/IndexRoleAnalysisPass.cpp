@@ -113,6 +113,42 @@ struct TensoriumIndexRoleAnalysisPass
       if (!eins)
         return;
 
+      // === Récupération et validation du spec ===
+      auto specAttr = eins->getAttrOfType<StringAttr>("spec");
+      if (!specAttr) {
+        eins->emitError("einsum missing spec attribute");
+        signalPassFailure();
+        return;
+      }
+
+      StringRef spec = specAttr.getValue();
+      auto split = spec.split("->");
+      StringRef outSpec = split.second; // peut être vide
+
+      // === CAS SCALAIRE : spec = "...->" ===
+      if (outSpec.empty()) {
+        SmallVector<Attribute, 8> insLists;
+
+        for (Value v : eins->getOperands()) {
+          Operation *def = v.getDefiningOp();
+          ArrayAttr inIdxAttr =
+              def ? def->getAttrOfType<ArrayAttr>("indices") : ArrayAttr();
+          if (!inIdxAttr)
+            inIdxAttr = ArrayAttr::get(&ctx, {});
+          insLists.push_back(inIdxAttr);
+        }
+
+        eins->setAttr("tin.idx.ins", ArrayAttr::get(&ctx, insLists));
+        eins->setAttr("tin.idx.out", ArrayAttr::get(&ctx, {}));
+        eins->setAttr("tin.idx.all", ArrayAttr::get(&ctx, {}));
+        eins->setAttr("tin.idx.counts", DictionaryAttr::get(&ctx, {}));
+        eins->setAttr("tin.idx.roles", DictionaryAttr::get(&ctx, {}));
+        eins->setAttr("tin.idx.valid", BoolAttr::get(&ctx, true));
+        return;
+      }
+
+      // === CAS TENSORIEL ===
+
       auto outIdxAttr = dt->getAttrOfType<ArrayAttr>("indices");
       if (!outIdxAttr)
         outIdxAttr = ArrayAttr::get(&ctx, {});
@@ -123,7 +159,7 @@ struct TensoriumIndexRoleAnalysisPass
       }
       auto outIdx = toRefs(outIdxAttr);
 
-      llvm::SmallVector<Attribute, 8> insLists;
+      SmallVector<Attribute, 8> insLists;
       llvm::DenseMap<StringRef, int64_t> counts;
 
       for (Value v : eins->getOperands()) {

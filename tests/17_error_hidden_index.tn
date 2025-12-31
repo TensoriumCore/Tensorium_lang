@@ -1,0 +1,7 @@
+field cov_tensor2 A
+field cov_tensor2 B
+field cov_tensor2 C
+
+evolution HiddenIndex {
+  dt C[i,j] = A[i,k] * (B[k,j] * A[k,j])
+}

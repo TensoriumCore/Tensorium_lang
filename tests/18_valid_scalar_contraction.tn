@@ -1,0 +1,7 @@
+field cov_tensor2 A
+field cov_tensor2 B
+field scalar s
+
+evolution ScalarContraction {
+  dt s = contract(A[i,j] * B[i,j])
+}

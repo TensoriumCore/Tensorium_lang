@@ -8,19 +8,55 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
-
-namespace tensorium::mlir {
-namespace {
-
-static ArrayAttr getIndicesAttr(Operation *op) {
-  if (!op)
-    return {};
+static ArrayAttr getIndicesAttr(::mlir::Operation *op) {
   return op->getAttrOfType<ArrayAttr>("indices");
 }
+
+static bool
+collectTensorRefsAndScalars(mlir::Value v,
+                            llvm::SmallVector<mlir::Operation *, 8> &tensorRefs,
+                            llvm::SmallVector<mlir::Value, 8> &scalars) {
+
+  if (!v)
+    return false;
+
+  if (auto ref = v.getDefiningOp<tensorium::mlir::RefOp>()) {
+    auto idx = getIndicesAttr(ref.getOperation());
+    if (idx) {
+      tensorRefs.push_back(ref.getOperation());
+    } else {
+      scalars.push_back(ref.getResult());
+    }
+    return true;
+  }
+
+  if (auto cst = v.getDefiningOp<tensorium::mlir::ConstOp>()) {
+    scalars.push_back(cst.getResult());
+    return true;
+  }
+
+  if (auto ctr = v.getDefiningOp<tensorium::mlir::ContractOp>()) {
+    return collectTensorRefsAndScalars(ctr.getIn(), tensorRefs, scalars);
+  }
+
+  if (auto mul = v.getDefiningOp<tensorium::mlir::MulOp>()) {
+    return collectTensorRefsAndScalars(mul.getLhs(), tensorRefs, scalars) &&
+           collectTensorRefsAndScalars(mul.getRhs(), tensorRefs, scalars);
+  }
+
+  return false;
+}
+namespace tensorium::mlir {
+namespace {
 
 static llvm::SmallVector<std::string, 4> arrayAttrToStrings(ArrayAttr a) {
   llvm::SmallVector<std::string, 4> out;
@@ -36,20 +72,25 @@ static llvm::SmallVector<std::string, 4> arrayAttrToStrings(ArrayAttr a) {
   return out;
 }
 
-static void collectRefOperands(Value v,
-                               llvm::SmallVector<Operation *, 8> &refs) {
+static bool collectIndexedRefOperands(Value v,
+                                      llvm::SmallVector<Operation *, 8> &refs) {
   if (!v)
-    return;
+    return false;
 
   if (auto ref = v.getDefiningOp<tensorium::mlir::RefOp>()) {
+    auto idx = getIndicesAttr(ref.getOperation());
+    if (!idx)
+      return false;
     refs.push_back(ref.getOperation());
-    return;
+    return true;
   }
 
   if (auto mul = v.getDefiningOp<tensorium::mlir::MulOp>()) {
-    collectRefOperands(mul.getLhs(), refs);
-    collectRefOperands(mul.getRhs(), refs);
+    return collectIndexedRefOperands(mul.getLhs(), refs) &&
+           collectIndexedRefOperands(mul.getRhs(), refs);
   }
+
+  return false;
 }
 
 static std::string buildSpec(const llvm::SmallVector<Operation *, 8> &refs,
@@ -81,45 +122,131 @@ struct LowerContractToEinsum final
 
   LogicalResult matchAndRewrite(tensorium::mlir::DtAssignOp op,
                                 PatternRewriter &rewriter) const override {
-    auto ctr = op.getRhs().getDefiningOp<tensorium::mlir::ContractOp>();
-    if (!ctr)
-      return failure();
+    auto loc = op.getLoc();
+    Value destField = op.getField();
+    Value rhs = op.getRhs();
 
-    llvm::SmallVector<Operation *, 8> refs;
-    collectRefOperands(ctr.getIn(), refs);
-    if (refs.empty())
-      return failure();
+    auto lhsIdxAttr = cast<ArrayAttr>(op->getAttr("indices"));
 
-    auto lhsIdx = op->getAttrOfType<ArrayAttr>("indices");
-    if (!lhsIdx)
-      lhsIdx = rewriter.getArrayAttr({});
+    llvm::SmallVector<Operation *, 8> tensorRefs;
+    llvm::SmallVector<Value, 8> scalars;
 
-    std::string spec = buildSpec(refs, lhsIdx);
+    auto process = [&](Value expr) -> LogicalResult {
+      tensorRefs.clear();
+      scalars.clear();
 
-    llvm::SmallVector<Value, 8> ins;
-    ins.reserve(refs.size());
-    for (auto *r : refs) {
-      if (r->getNumResults() != 1)
+      if (!collectTensorRefsAndScalars(expr, tensorRefs, scalars))
         return failure();
-      ins.push_back(r->getResult(0));
-    }
 
-    OperationState st(op.getLoc(), "tensorium.einsum");
-    st.addOperands(ins);
-    st.addTypes(rewriter.getF64Type());
-    st.addAttribute("spec", rewriter.getStringAttr(spec));
-    Operation *einsOp = rewriter.create(st);
-    Value eins = einsOp->getResult(0);
+      if (tensorRefs.size() == 0)
+        return failure();
 
-    Value lhsField = op->getOperand(0);
+      llvm::SmallVector<llvm::StringRef, 8> lhsIdx;
+      for (auto a : lhsIdxAttr)
+        lhsIdx.push_back(cast<StringAttr>(a).getValue());
 
-    rewriter.create<tensorium::mlir::DtAssignOp>(op.getLoc(), lhsField, eins,
-                                                 lhsIdx);
+      llvm::SmallVector<llvm::SmallVector<llvm::StringRef, 4>, 8> ins;
+      for (auto *r : tensorRefs) {
+        llvm::SmallVector<llvm::StringRef, 4> v;
+        for (auto a : getIndicesAttr(r))
+          v.push_back(cast<StringAttr>(a).getValue());
+        ins.push_back(v);
+      }
+
+      llvm::DenseMap<llvm::StringRef, unsigned> counts;
+      for (auto &v : ins)
+        for (auto s : v)
+          counts[s]++;
+
+      llvm::SmallVector<llvm::StringRef, 4> rhsFree;
+      for (auto &it : counts)
+        if (it.second == 1)
+          rhsFree.push_back(it.first);
+
+      if (rhsFree.size() != lhsIdx.size())
+        return failure();
+
+      for (auto s : rhsFree)
+        if (!llvm::is_contained(lhsIdx, s))
+          return failure();
+      std::string spec;
+      for (unsigned i = 0; i < ins.size(); ++i) {
+        if (i)
+          spec += ",";
+        for (auto s : ins[i])
+          spec += s.str();
+      }
+      spec += "->";
+      for (auto s : lhsIdx)
+        spec += s.str();
+
+      llvm::SmallVector<Value, 8> inputs;
+      for (auto *o : tensorRefs)
+        inputs.push_back(o->getResult(0));
+
+      auto specAttr =
+          rewriter.getNamedAttr("spec", rewriter.getStringAttr(spec));
+
+      auto eins = rewriter.create<tensorium::mlir::EinsumOp>(
+          loc, rewriter.getF64Type(), inputs,
+          llvm::ArrayRef<NamedAttribute>{specAttr});
+
+      Value out = eins.getResult();
+      for (Value s : scalars)
+        out = rewriter.create<tensorium::mlir::MulOp>(loc, out, s).getResult();
+
+      rewriter.create<tensorium::mlir::DtAssignOp>(loc, destField, out,
+                                                   lhsIdxAttr);
+
+      return success();
+    };
+    if (failed(process(rhs)))
+      return failure();
 
     rewriter.eraseOp(op);
+    return success();
+  }
+};
 
-    if (ctr->use_empty())
-      rewriter.eraseOp(ctr);
+struct LowerContractOp final : OpRewritePattern<tensorium::mlir::ContractOp> {
+
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tensorium::mlir::ContractOp op,
+                                PatternRewriter &rewriter) const override {
+
+    llvm::SmallVector<Operation *, 8> tensorRefs;
+    llvm::SmallVector<Value, 8> scalars;
+
+    if (!collectTensorRefsAndScalars(op.getIn(), tensorRefs, scalars))
+      return failure();
+
+    if (tensorRefs.size() < 2)
+      return failure();
+
+    std::string spec;
+    for (unsigned i = 0; i < tensorRefs.size(); ++i) {
+      if (i)
+        spec += ",";
+      auto idxAttr = getIndicesAttr(tensorRefs[i]);
+      for (auto a : idxAttr)
+        spec += cast<StringAttr>(a).getValue().str();
+    }
+    spec += "->";
+
+    llvm::SmallVector<Value, 4> inputs;
+    for (auto *o : tensorRefs)
+      inputs.push_back(o->getResult(0));
+
+    auto eins = rewriter.create<tensorium::mlir::EinsumOp>(
+        op.getLoc(), rewriter.getF64Type(), inputs,
+        rewriter.getNamedAttr("spec", rewriter.getStringAttr(spec)));
+
+    Value out = eins.getResult();
+    for (Value s : scalars)
+      out = rewriter.create<tensorium::mlir::MulOp>(op.getLoc(), out, s);
+
+    rewriter.replaceOp(op, out);
     return success();
   }
 };
@@ -136,7 +263,8 @@ struct TensoriumEinsteinLoweringPass final
     ModuleOp m = getOperation();
 
     RewritePatternSet patterns(&getContext());
-    patterns.add<LowerContractToEinsum>(&getContext());
+    patterns.add<LowerContractToEinsum>(&getContext()); // DtAssignOp
+    patterns.add<LowerContractOp>(&getContext());       // ContractOp
 
     GreedyRewriteConfig cfg;
     cfg.useTopDownTraversal = true;

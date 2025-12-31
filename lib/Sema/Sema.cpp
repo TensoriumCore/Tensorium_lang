@@ -255,7 +255,7 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
     }
 
     TensorType lhsType = {fd->up, fd->down};
-    checker.checkAssignmentVariance(lhsType, ie.rhs.get());
+    checker.checkAssignmentVariance(lhsType, ie.indices, ie.rhs.get());
 
     out.equations.push_back(std::move(ie));
   }

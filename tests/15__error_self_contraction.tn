@@ -1,0 +1,7 @@
+field cov_tensor2 A
+field cov_tensor2 B
+
+evolution SelfContraction {
+  dt B[i,j] = A[i,i]
+}
+

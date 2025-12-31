@@ -1,0 +1,22 @@
+field cov_tensor2 A[i,j]
+field cov_tensor2 B[j,i]
+
+simulation {
+  dimension = 2
+  resolution = [16,16]
+
+  time {
+    dt = 0.01
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution ContractionTest {
+	dt A[i,j] = contract(B[k,j] * A[k,i])
+}

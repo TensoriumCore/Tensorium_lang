@@ -1,0 +1,9 @@
+field cov_tensor2 A
+field cov_tensor2 B
+field cov_tensor2 C
+field cov_tensor2 D
+field cov_tensor2 E
+
+evolution HeavyContraction {
+  dt E[i,j] = contract(A[i,k] * B[k,l] * C[l,m] * D[m,j])
+}

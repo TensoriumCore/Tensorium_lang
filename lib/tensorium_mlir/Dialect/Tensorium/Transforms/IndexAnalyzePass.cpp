@@ -8,9 +8,15 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/Pass.h"
 
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Support/LLVM.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 
@@ -69,59 +75,6 @@ static ArrayAttr arrayOfArraysFromVec(
   for (auto &v : vv)
     out.push_back(fromRefs(b, v));
   return b.getArrayAttr(out);
-}
-
-static ::llvm::SmallVector<::llvm::SmallVector<::llvm::StringRef, 8>, 8>
-readTinIdxInsOrReconstruct(tensorium::mlir::EinsumOp op) {
-  auto insAttr = getArrayAttr(op.getOperation(), "tin.idx.ins");
-  if (insAttr) {
-    ::llvm::SmallVector<::llvm::SmallVector<::llvm::StringRef, 8>, 8> ins;
-    ins.reserve(insAttr.size());
-    for (Attribute a : insAttr) {
-      auto aa = dyn_cast<ArrayAttr>(a);
-      if (!aa || !isStringArray(aa))
-        return {};
-      ins.push_back(toRefs(aa));
-    }
-    return ins;
-  }
-
-  ::llvm::SmallVector<::llvm::SmallVector<::llvm::StringRef, 8>, 8> ins;
-  ins.reserve(op.getNumOperands());
-  for (Value v : op.getOperands()) {
-    ::mlir::Operation *def = v.getDefiningOp();
-    if (!def) {
-      ins.push_back({});
-      continue;
-    }
-    auto idx = getIndicesAttr(def);
-    if (!idx || !isStringArray(idx)) {
-      ins.push_back({});
-      continue;
-    }
-    ins.push_back(toRefs(idx));
-  }
-  return ins;
-}
-
-static ::llvm::SmallVector<::llvm::StringRef, 8>
-readTinIdxOutOrFallback(tensorium::mlir::EinsumOp op) {
-  auto outAttr = getArrayAttr(op.getOperation(), "tin.idx.out");
-  if (outAttr && isStringArray(outAttr))
-    return toRefs(outAttr);
-
-  ::mlir::Operation *user = nullptr;
-  for (::mlir::Operation *u : op->getUsers()) {
-    user = u;
-    break;
-  }
-  if (!user)
-    return {};
-
-  auto lhsIdx = user->getAttrOfType<ArrayAttr>("indices");
-  if (!lhsIdx || !isStringArray(lhsIdx))
-    return {};
-  return toRefs(lhsIdx);
 }
 
 static DictionaryAttr
@@ -193,6 +146,86 @@ static ::llvm::SmallVector<::llvm::StringRef, 16> computeAllSorted(
   return all;
 }
 
+static ::llvm::SmallVector<::llvm::StringRef, 8>
+readLhsIndices(tensorium::mlir::DtAssignOp op) {
+  auto lhsIdx = op->getAttrOfType<ArrayAttr>("indices");
+  if (!lhsIdx || !isStringArray(lhsIdx))
+    return {};
+  return toRefs(lhsIdx);
+}
+
+static void appendAll(::llvm::SmallVector<::llvm::StringRef, 32> &dst,
+                      ::llvm::ArrayRef<::llvm::StringRef> src) {
+  dst.append(src.begin(), src.end());
+}
+
+static ::llvm::SmallVector<::llvm::StringRef, 32>
+contractOnce(::llvm::ArrayRef<::llvm::StringRef> in) {
+  ::llvm::MapVector<::llvm::StringRef, int64_t> counts;
+  for (auto s : in)
+    counts[s] += 1;
+
+  ::llvm::SmallVector<::llvm::StringRef, 32> out;
+  out.reserve(in.size());
+  for (auto s : in)
+    if (counts[s] == 1)
+      out.push_back(s);
+
+  return out;
+}
+
+static llvm::SmallVector<llvm::StringRef, 32> collectIndices(Value v) {
+  if (!v)
+    return {};
+
+  if (auto ref = v.getDefiningOp<tensorium::mlir::RefOp>()) {
+    auto idx = ref->getAttrOfType<ArrayAttr>("indices");
+    if (!idx)
+      return {};
+    llvm::SmallVector<llvm::StringRef, 8> out;
+    for (auto a : idx)
+      out.push_back(cast<StringAttr>(a).getValue());
+    return out;
+  }
+
+  auto *def = v.getDefiningOp();
+  if (!def)
+    return {};
+
+  auto name = def->getName().getStringRef();
+
+  if (name == "tensorium.einsum") {
+    llvm::SmallVector<llvm::StringRef, 32> out;
+    for (auto in : def->getOperands()) {
+      auto sub = collectIndices(in);
+      out.append(sub.begin(), sub.end());
+    }
+    return out;
+  }
+
+  if (name == "tensorium.mul" || name == "tensorium.add" ||
+      name == "tensorium.sub" || name == "tensorium.div") {
+    auto a = collectIndices(def->getOperand(0));
+    auto b = collectIndices(def->getOperand(1));
+    a.append(b.begin(), b.end());
+    return a;
+  }
+
+  if (name == "tensorium.contract") {
+    return collectIndices(def->getOperand(0));
+  }
+
+  if (name == "tensorium.deriv") {
+    auto base = collectIndices(def->getOperand(0));
+    auto idx = def->getAttrOfType<StringAttr>("index");
+    if (idx)
+      base.push_back(idx.getValue());
+    return base;
+  }
+
+  return {};
+}
+
 struct TensoriumIndexAnalyzePass final
     : public ::mlir::PassWrapper<TensoriumIndexAnalyzePass,
                                  ::mlir::OperationPass<::mlir::ModuleOp>> {
@@ -204,31 +237,35 @@ struct TensoriumIndexAnalyzePass final
 
   void runOnOperation() override {
     ::mlir::ModuleOp m = this->getOperation();
+    llvm::errs() << "[IndexAnalyze] ran\n";
     ::mlir::OpBuilder b(&this->getContext());
 
-    m.walk([&](tensorium::mlir::EinsumOp op) {
+    m.walk([&](tensorium::mlir::DtAssignOp op) {
       b.setInsertionPoint(op);
 
-      auto ins = readTinIdxInsOrReconstruct(op);
-      auto out = readTinIdxOutOrFallback(op);
+      // LHS indices
+      auto out = readLhsIndices(op);
 
-      if (ins.empty() || out.empty()) {
-        op.emitError("einsum index analysis failed: missing tin.idx.ins/out "
-                     "and cannot reconstruct");
-        op->setAttr("tin.idx.valid", b.getBoolAttr(false));
-        return;
-      }
+      // RHS indices (flat list)
+      auto rhs = collectIndices(op->getOperand(1));
 
+      // Count RHS occurrences
       ::llvm::MapVector<::llvm::StringRef, int64_t> counts;
-      for (auto &vec : ins)
-        for (auto idx : vec)
-          counts[idx] += 1;
+      for (auto idx : rhs)
+        counts[idx] += 1;
 
+      // Inputs list (single RHS for now)
+      ::llvm::SmallVector<::llvm::SmallVector<::llvm::StringRef, 8>, 1> ins;
+      ins.emplace_back(rhs.begin(), rhs.end());
+
+      // All indices (stable order)
       auto all = computeAllSorted(ins, out);
 
+      // Determine roles + validity
       bool valid = true;
       auto roles = makeRoles(b, all, out, counts, valid);
 
+      // Write attrs
       op->setAttr("tin.idx.ins", arrayOfArraysFromVec(b, ins));
       op->setAttr("tin.idx.out", fromRefs(b, out));
       op->setAttr("tin.idx.all", fromRefs(b, all));
@@ -237,10 +274,8 @@ struct TensoriumIndexAnalyzePass final
       op->setAttr("tin.idx.valid", b.getBoolAttr(valid));
 
       if (!valid) {
-        auto specAttr = op->getAttrOfType<StringAttr>("spec");
-        auto d = op.emitError("invalid einsum indices");
-        if (specAttr)
-          d.attachNote(op.getLoc()) << "spec: " << specAttr.getValue();
+        op.emitError("invalid Einstein indices in dt_assign");
+        return;
       }
     });
   }

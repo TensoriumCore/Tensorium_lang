@@ -11,6 +11,7 @@ struct MLIRGenOptions {
   bool enableIndexRoleAnalysisPass = false;
   bool enableEinsteinValidityPass = false;
   bool enableIndexAnalyzePass = false;
+  bool enableEinsteinCanonicalizePass = false;
 };
 
 void emitMLIR(const tensorium::backend::ModuleIR &module,
