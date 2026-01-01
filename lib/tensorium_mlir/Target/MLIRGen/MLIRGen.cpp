@@ -209,6 +209,10 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
                                             makeIndexArrayAttr(b, eq.indices));
     }
   }
+  if (module.simulation) {
+    moduleOp->setAttr("tensorium.sim.dim",
+                      b.getI64IntegerAttr(module.simulation->dimension));
+  }
   b.create<mlir::func::ReturnOp>(loc);
   moduleOp.push_back(f);
 

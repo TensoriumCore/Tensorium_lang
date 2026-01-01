@@ -19,4 +19,9 @@ def TensoriumStencilLowering : Pass<"tensorium-stencil-lower", "mlir::ModuleOp">
   let summary = "Lower derivatives to finite difference stencils";
   let constructor = "tensorium::mlir::createTensoriumStencilLoweringPass()";
 }
+
+def TensoriumDissipation : Pass<"tensorium-dissipation", "mlir::ModuleOp"> {
+  let summary = "Add Kreiss-Oliger dissipation to dt_assign operations";
+  let constructor = "tensorium::mlir::createTensoriumDissipationPass()";
+}
 #endif // TENSORIUM_TRANSFORM_PASSES_TD

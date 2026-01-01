@@ -3,11 +3,28 @@ field cov_tensor2 Atilde[i,j]
 field cov_tensor2 gamma[i,j]
 field cov_tensor2 Ricci[i,j]
 field cov_tensor4 Riemann[i,j,k,l]
+field cov_tensor3 DAtilde[i,j,k]
+simulation {
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.01
+    integrator = rk4
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
 field scalar alpha
 evolution T {
   dt Atilde[i,j] = alpha * contract(gamma[i,k] * Atilde[k,j])
   dt K = -alpha * K * K + alpha * contract(Atilde[i,j] * gamma[i,j])
   dt Ricci[i,j] = contract(Riemann[k,i,k,j])
+  dt DAtilde[i,j,k] = d_i(Atilde[j,k])
 }
 
 

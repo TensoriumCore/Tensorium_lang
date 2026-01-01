@@ -42,16 +42,62 @@ struct AddDissipation : public OpRewritePattern<DtAssignOp> {
     if (op->hasAttr("dissipation_added"))
       return failure();
 
-    Location loc = op.getLoc();
+    bool hasSpatialTerms = false;
+    std::vector<Value> worklist;
+    worklist.push_back(op.getOperand(1));
+    llvm::SmallPtrSet<Operation *, 16> visited;
 
+    while (!worklist.empty()) {
+      Value val = worklist.back();
+      worklist.pop_back();
+
+      Operation *defOp = val.getDefiningOp();
+      if (!defOp)
+        continue;
+
+      if (!visited.insert(defOp).second)
+        continue;
+
+      if (auto ref = dyn_cast<RefOp>(defOp)) {
+        if (ArrayAttr offsets = ref.getOffsetsAttr()) {
+          for (auto attr : offsets) {
+            if (cast<IntegerAttr>(attr).getInt() != 0) {
+              hasSpatialTerms = true;
+              worklist.clear();
+              break;
+            }
+          }
+        }
+      }
+      if (hasSpatialTerms)
+        break;
+
+      for (Value operand : defOp->getOperands()) {
+        worklist.push_back(operand);
+      }
+    }
+
+    if (!hasSpatialTerms)
+      return failure();
+
+    Location loc = op.getLoc();
     Value currentRHS = op.getOperand(1);
     Value field = op.getField();
-
     ArrayAttr tensorIndices = op.getIndices();
 
-    unsigned spatialDim = 3;
+    auto mod = op->getParentOfType<ModuleOp>();
+
+    auto dimAttr = mod->getAttrOfType<IntegerAttr>("tensorium.sim.dim");
+    if (!dimAttr) {
+      dimAttr = mod->getAttrOfType<IntegerAttr>("tensorium.sim.dimension");
+    }
+    if (!dimAttr)
+      return failure();
+
+    unsigned spatialDim = (unsigned)dimAttr.getInt();
     auto stencil = getKO4Stencil();
-    double factor = strength * (1.0 / dx);
+    double invDx = (dx > 1e-12) ? (1.0 / dx) : 1.0;
+    double factor = strength * invDx * invDx * invDx * invDx * invDx;
 
     Value dissipationTotal = rewriter.create<ConstOp>(
         loc, rewriter.getF64Type(), rewriter.getF64FloatAttr(0.0));
@@ -109,11 +155,9 @@ struct DissipationPass
     RewritePatternSet patterns(&getContext());
     patterns.add<AddDissipation>(&getContext(), strength, dx);
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
-      // signalPassFailure();
     }
   }
 };
-
 } // namespace
 
 namespace tensorium::mlir {

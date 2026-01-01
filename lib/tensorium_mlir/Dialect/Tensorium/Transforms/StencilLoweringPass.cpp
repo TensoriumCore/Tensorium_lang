@@ -65,7 +65,11 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
       return failure();
 
     auto stencil = getCoefficients(order);
-    unsigned spatialDim = 3;
+    auto mod = op->getParentOfType<ModuleOp>();
+    auto dimAttr = mod->getAttrOfType<IntegerAttr>("tensorium.sim.dim");
+    if (!dimAttr)
+      return failure();
+    unsigned spatialDim = (unsigned)dimAttr.getInt();
 
     Location loc = op.getLoc();
     Value sum = rewriter.create<ConstOp>(loc, rewriter.getF64Type(),

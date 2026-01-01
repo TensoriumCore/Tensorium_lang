@@ -3,7 +3,21 @@ field scalar      alpha
 field scalar      K
 field cov_tensor2 gamma
 field cov_tensor2 Atilde
+simulation {
+  dimension = 3
+  resolution = [16,16,16]
 
+  time {
+    dt = 0.01
+    integrator = rk4
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
 evolution AnalyticFullTest {
 
   dt chi = -2.0 * alpha * chi * K
