@@ -55,6 +55,18 @@ void printExpr(const Expr *e) {
 
 void printProgram(const Program &prog) {
   std::cout << "=== Program AST ===\n";
+  if (!prog.externs.empty()) {
+    std::cout << "\nExtern Functions:\n";
+    for (const auto &ext : prog.externs) {
+      std::cout << "  extern scalar " << ext.name << "(";
+      for (size_t i = 0; i < ext.paramCount; ++i) {
+        std::cout << "scalar";
+        if (i + 1 < ext.paramCount)
+          std::cout << ", ";
+      }
+      std::cout << ")\n";
+    }
+  }
   if (!prog.fields.empty()) {
     std::cout << "\nFields:\n";
     for (const auto &f : prog.fields) {

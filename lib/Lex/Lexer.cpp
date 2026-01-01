@@ -96,6 +96,8 @@ Token Lexer::next() {
       return {TokenType::KwDt, t, line, col};
     if (t == "field")
       return {TokenType::KwField, t, line, col};
+    if (t == "extern")
+      return {TokenType::KwExtern, t, line, col};
     if (t == "scalar")
       return {TokenType::KwScalar, t, line, col};
     if (t == "vector")

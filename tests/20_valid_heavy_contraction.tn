@@ -4,6 +4,22 @@ field cov_tensor2 C
 field cov_tensor2 D
 field cov_tensor2 E
 
+simulation {
+  dimension = 1
+  resolution = [4]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
 evolution HeavyContraction {
   dt E[i,j] = contract(A[i,k] * B[k,l] * C[l,m] * D[m,j])
 }

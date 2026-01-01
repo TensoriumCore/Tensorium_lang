@@ -48,6 +48,8 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
 
   if (auto c = dynamic_cast<const IndexedCall *>(e)) {
     auto out = std::make_unique<CallIR>(c->callee);
+    out->isExtern = c->isExtern;
+    out->externArity = c->declaredArity;
     out->args.reserve(c->args.size());
     for (const auto &a : c->args)
       out->args.push_back(lowerIndexedExpr(a.get()));
@@ -162,6 +164,15 @@ ModuleIR BackendBuilder::build(const Program &prog,
       oeq.indices = eq.indices;
       oeq.rhs = lowerIndexedExpr(eq.rhs.get());
       out.equations.push_back(std::move(oeq));
+    }
+
+    out.temporaries.reserve(indexed.temp.size());
+    for (const auto &tmp : indexed.temp) {
+      TempAssignIR ot;
+      ot.name = tmp.tensor;
+      ot.indexOffsets = tmp.indexOffsets;
+      ot.rhs = lowerIndexedExpr(tmp.rhs.get());
+      out.temporaries.push_back(std::move(ot));
     }
 
     mod.evolutions.push_back(std::move(out));

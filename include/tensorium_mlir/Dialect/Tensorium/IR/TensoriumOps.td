@@ -72,6 +72,12 @@ def Tensorium_MulOp : Tensorium_Op<"mul"> {
   let arguments = (ins F64:$lhs, F64:$rhs);
   let results   = (outs F64:$res);
 }
+def Tensorium_DivOp : Tensorium_Op<"div"> {
+  let traits = [Pure];
+
+  let arguments = (ins F64:$lhs, F64:$rhs);
+  let results   = (outs F64:$res);
+}
 
 def Tensorium_DerivOp : Tensorium_Op<"deriv"> {
   let traits = [Pure];

@@ -30,6 +30,7 @@ enum class TokenType {
   KwSpatial,
   KwExtrinsic,
   KwField,
+  KwExtern,
   KwScalar,
   KwVector,
   KwTensor2,

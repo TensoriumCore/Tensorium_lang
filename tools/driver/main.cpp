@@ -105,6 +105,7 @@ int main(int argc, char **argv) {
   bool enableEinsteinAnalyzeEinsumPass = false;
   bool enableStencilLoweringPass = false;
   bool enableDissipationPass = false;
+  CompilationMode compilationMode = CompilationMode::Executable;
 
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
@@ -160,6 +161,8 @@ int main(int argc, char **argv) {
       if (i + 1 >= argc)
         throw std::runtime_error("--init-alpha expects a float");
       initAlpha = std::stod(argv[++i]);
+    } else if (arg == "--symbolic") {
+      compilationMode = CompilationMode::Symbolic;
     } else {
       files.push_back(arg);
     }
@@ -180,7 +183,7 @@ int main(int argc, char **argv) {
       Parser parser(lex);
       Program prog = parser.parseProgram();
 
-      SemanticAnalyzer sem(prog);
+      SemanticAnalyzer sem(prog, compilationMode);
       std::vector<IndexedEvolution> indexedEvos;
 
       if (dumpIndexed) {
@@ -224,6 +227,12 @@ int main(int argc, char **argv) {
         std::cout << "==============================\n";
       }
       auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
+      const bool isSymbolicMode = compilationMode == CompilationMode::Symbolic;
+      const bool executableRequested = validateOnly || dumpMLIR || runCpu;
+      if (isSymbolicMode && executableRequested) {
+        std::cerr << "Symbolically valid but not executable: missing simulation metadata\n";
+        continue;
+      }
       if (validateOnly) {
         auto result = tensorium::sema::validateProgram(mod);
 

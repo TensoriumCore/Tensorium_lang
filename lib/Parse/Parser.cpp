@@ -145,6 +145,34 @@ Assignment Parser::parseAssignment() {
   return a;
 }
 
+ExternScalarDecl Parser::parseExternDecl() {
+  expect(TokenType::KwExtern);
+  expect(TokenType::KwScalar);
+  if (cur.type != TokenType::Identifier)
+    syntaxError("Expected extern function name");
+
+  ExternScalarDecl decl;
+  decl.name = cur.text;
+  advance();
+
+  expect(TokenType::LParen);
+  if (cur.type != TokenType::RParen) {
+    while (true) {
+      if (cur.type != TokenType::KwScalar)
+        syntaxError("extern arguments must be scalar");
+      ++decl.paramCount;
+      advance();
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      break;
+    }
+  }
+  expect(TokenType::RParen);
+  return decl;
+}
+
 FieldDecl Parser::parseFieldDecl() {
   expect(TokenType::KwField);
 
@@ -462,6 +490,10 @@ Program Parser::parseProgram() {
   while (cur.type != TokenType::End) {
     if (cur.type == TokenType::KwField) {
       p.fields.push_back(parseFieldDecl());
+      continue;
+    }
+    if (cur.type == TokenType::KwExtern) {
+      p.externs.push_back(parseExternDecl());
       continue;
     }
     if (cur.type == TokenType::KwMetric) {

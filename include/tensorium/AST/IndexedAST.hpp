@@ -1,5 +1,6 @@
 #pragma once
 #include "tensorium/AST/AST.hpp"
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -44,6 +45,8 @@ struct IndexedBinary : IndexedExpr {
 struct IndexedCall : IndexedExpr {
   std::string callee;
   std::vector<std::unique_ptr<IndexedExpr>> args;
+  bool isExtern = false;
+  size_t declaredArity = 0;
 };
 
 struct IndexedAssignment {

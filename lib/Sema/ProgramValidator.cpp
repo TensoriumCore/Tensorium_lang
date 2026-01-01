@@ -6,7 +6,8 @@ using namespace tensorium::backend;
 using namespace tensorium::sema;
 
 static bool isValidIndexName(const std::string &s) {
-  return s == "i" || s == "j" || s == "k" || s == "l";
+  return s == "i" || s == "j" || s == "k" || s == "l" || s == "m" ||
+         s == "n";
 }
 
 static int fieldRank(const FieldIR &f) {
@@ -15,32 +16,6 @@ static int fieldRank(const FieldIR &f) {
 
 ValidationResult sema::validateProgram(const ModuleIR &m) {
   ValidationResult res;
-
-  if (!m.simulation.has_value()) {
-    res.diags.push_back(
-        {Diagnostic::Kind::Error, "missing simulation block"});
-    return res;
-  }
-
-  const SimulationIR &sim = *m.simulation;
-
-  if (sim.dimension <= 0) {
-    res.diags.push_back(
-        {Diagnostic::Kind::Error, "simulation dimension must be > 0"});
-  }
-
-  if ((int)sim.resolution.size() != sim.dimension) {
-    res.diags.push_back(
-        {Diagnostic::Kind::Error,
-         "resolution size does not match simulation dimension"});
-  }
-
-  for (int r : sim.resolution) {
-    if (r <= 0) {
-      res.diags.push_back(
-          {Diagnostic::Kind::Error, "resolution entries must be > 0"});
-    }
-  }
 
   std::unordered_map<std::string, const FieldIR *> fieldMap;
   for (auto &f : m.fields)

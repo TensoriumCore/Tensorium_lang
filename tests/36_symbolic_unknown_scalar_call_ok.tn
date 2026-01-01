@@ -1,0 +1,6 @@
+field scalar phi
+field scalar psi
+
+evolution SymbolicUnknownCallTwoArgs {
+  dt phi = foo(phi, psi)
+}

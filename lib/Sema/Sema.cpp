@@ -1,4 +1,5 @@
 #include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Sema/CallSupport.hpp"
 #include "tensorium/Sema/tensor_type_checker.hpp"
 #include <algorithm>
 #include <iostream>
@@ -91,8 +92,31 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
   }
 
   if (auto c = dynamic_cast<const CallExpr *>(e)) {
+    bool isExternCall = false;
+    size_t externArity = 0;
+    if (auto itExt = externScalarFuncs.find(c->callee);
+        itExt != externScalarFuncs.end()) {
+      isExternCall = true;
+      externArity = itExt->second;
+      if (c->args.size() != externArity) {
+        throw std::runtime_error("extern function '" + c->callee +
+                                 "' expects " +
+                                 std::to_string(externArity) +
+                                 " arguments, got " +
+                                 std::to_string(c->args.size()));
+      }
+    }
+
+    if (mode == CompilationMode::Executable &&
+        !isExecutableBuiltin(c->callee) && !isExternCall) {
+      throw std::runtime_error(
+          "executable mode requires implementation for function '" +
+          c->callee + "'");
+    }
     auto out = std::make_unique<IndexedCall>();
     out->callee = c->callee;
+    out->isExtern = isExternCall;
+    out->declaredArity = externArity;
     for (auto &arg : c->args)
       out->args.push_back(transformExpr(arg.get()));
     return out;
@@ -101,7 +125,14 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
   throw std::runtime_error("Unsupported expr in semantic analyzer");
 }
 
-SemanticAnalyzer::SemanticAnalyzer(const Program &p) : prog(p) {
+SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
+    : prog(p), mode(m) {
+  for (const auto &ext : prog.externs) {
+    if (!externScalarFuncs.emplace(ext.name, ext.paramCount).second) {
+      throw std::runtime_error("Extern function redeclared: " + ext.name);
+    }
+  }
+
   for (const auto &f : prog.fields) {
     if (fields.count(f.name))
       throw std::runtime_error("Field redeclared: " + f.name);
@@ -123,7 +154,13 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p) : prog(p) {
     syntheticMetricFields.push_back(fd);
     fields[m.name] = &syntheticMetricFields.back();
   }
-  if (prog.simulation) {
+  if (!prog.simulation) {
+    if (mode == CompilationMode::Executable) {
+      throw std::runtime_error("missing simulation block");
+    }
+    simulationMissing = true;
+    std::cerr << "[Tensorium] warning: missing simulation block (symbolic mode)\n";
+  } else {
     validateSimulation(*prog.simulation);
   }
 }
@@ -161,135 +198,6 @@ IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
 
   return out;
 }
-
-struct IndexCollector {
-  std::unordered_map<std::string, int> &counter;
-  IndexCollector(std::unordered_map<std::string, int> &c) : counter(c) {}
-
-  static bool isSpatialIdx(const std::string &s) {
-    return s == "i" || s == "j" || s == "k" || s == "l" || s == "m" || s == "n";
-  }
-
-  static bool isPartialDerivName(const std::string &s) {
-    return s.size() == 3 && s[0] == 'd' && s[1] == '_' &&
-           isSpatialIdx(std::string(1, s[2]));
-  }
-
-  static bool isNablaName(const std::string &s, char &idx) {
-    if (s.size() == 7 && s.rfind("nabla_", 0) == 0) {
-      idx = s[6];
-      return isSpatialIdx(std::string(1, idx));
-    }
-    if (s.size() == 7 && s.rfind("nabla^", 0) == 0) {
-      idx = s[6];
-      return isSpatialIdx(std::string(1, idx));
-    }
-    return false;
-  }
-
-  void bumpLocalCounts(const IndexedExpr *expr,
-                       std::unordered_map<std::string, int> &local) {
-    if (!expr)
-      return;
-
-    if (auto v = dynamic_cast<const IndexedVar *>(expr)) {
-      for (auto &idx : v->tensorIndexNames)
-        if (!idx.empty() && isSpatialIdx(idx))
-          local[idx] += 1;
-      return;
-    }
-
-    if (auto b = dynamic_cast<const IndexedBinary *>(expr)) {
-      bumpLocalCounts(b->lhs.get(), local);
-      bumpLocalCounts(b->rhs.get(), local);
-      return;
-    }
-
-    if (auto c = dynamic_cast<const IndexedCall *>(expr)) {
-      for (auto &arg : c->args)
-        bumpLocalCounts(arg.get(), local);
-
-      const std::string &cal = c->callee;
-
-      if (isPartialDerivName(cal)) {
-        std::string idx(1, cal[2]);
-        local[idx] += 1;
-        return;
-      }
-
-      char nidx = 0;
-      if (isNablaName(cal, nidx)) {
-        std::string idx(1, nidx);
-        local[idx] += 1;
-        return;
-      }
-
-      return;
-    }
-  }
-
-  void walk(const IndexedExpr *expr) {
-    if (!expr)
-      return;
-
-    if (auto v = dynamic_cast<const IndexedVar *>(expr)) {
-      for (auto &idx : v->tensorIndexNames)
-        if (!idx.empty() && isSpatialIdx(idx))
-          counter[idx] += 1;
-      return;
-    }
-
-    if (auto b = dynamic_cast<const IndexedBinary *>(expr)) {
-      walk(b->lhs.get());
-      walk(b->rhs.get());
-      return;
-    }
-
-    if (auto c = dynamic_cast<const IndexedCall *>(expr)) {
-      if (c->callee == "contract") {
-        if (c->args.size() != 1)
-          throw std::runtime_error("contract() expects 1 argument");
-
-        std::unordered_map<std::string, int> local;
-        bumpLocalCounts(c->args[0].get(), local);
-
-        for (auto &kv : local) {
-          const std::string &idx = kv.first;
-          int cnt = kv.second;
-          if (cnt == 1) {
-            counter[idx] += 1;
-          } else if (cnt == 2) {
-          } else if (cnt > 2) {
-            throw std::runtime_error("Ambiguous contraction: index '" + idx +
-                                     "' appears " + std::to_string(cnt) +
-                                     " times.");
-          }
-        }
-        return;
-      }
-
-      for (auto &arg : c->args)
-        walk(arg.get());
-
-      const std::string &cal = c->callee;
-
-      if (isPartialDerivName(cal)) {
-        std::string idx(1, cal[2]);
-        counter[idx] += 1;
-        return;
-      }
-
-      char nidx = 0;
-      if (isNablaName(cal, nidx)) {
-        std::string idx(1, nidx);
-        counter[idx] += 1;
-        return;
-      }
-
-      return;
-    }
-  }
-};
 
 IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
   coordIndex.clear();
@@ -334,34 +242,10 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
           std::to_string(eq.indices.size()));
     }
 
-    indexUseCount.clear();
-    lhsIndices.clear();
-
-    for (auto &idx : eq.indices)
-      lhsIndices.insert(idx);
-
     IndexedEvolutionEq ie;
     ie.fieldName = eq.fieldName;
     ie.indices = eq.indices;
     ie.rhs = transformExpr(eq.rhs.get());
-
-    IndexCollector collector(indexUseCount);
-    collector.walk(ie.rhs.get());
-
-    for (auto &[idx, count] : indexUseCount) {
-      validateSpatialIndex(idx);
-
-      if (count == 1 && !lhsIndices.count(idx)) {
-        throw std::runtime_error("Free index '" + idx +
-                                 "' appears only in RHS and not LHS.");
-      }
-
-      if (count > 2 && !lhsIndices.count(idx)) {
-        throw std::runtime_error("Ambiguous contraction: index '" + idx +
-                                 "' appears " + std::to_string(count) +
-                                 " times.");
-      }
-    }
 
     TensorType lhsType = {fd->up, fd->down};
     checker.checkAssignmentVariance(lhsType, ie.indices, ie.rhs.get());
@@ -370,11 +254,15 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
   }
 
   for (const auto &tmp : evo.tempAssignments) {
+    auto rhs = transformExpr(tmp.rhs.get());
+    TensorType lhsType{0, 0};
+    checker.checkAssignmentVariance(lhsType, tmp.lhs.indices, rhs.get());
+
     IndexedAssignment ia;
     ia.tensor = tmp.lhs.base;
     for (auto &idx : tmp.lhs.indices)
       ia.indexOffsets.push_back(resolveIndex(idx));
-    ia.rhs = transformExpr(tmp.rhs.get());
+    ia.rhs = std::move(rhs);
     out.temp.push_back(std::move(ia));
   }
 

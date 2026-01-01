@@ -1,6 +1,4 @@
-field cov_tensor2 A
-field cov_tensor2 B
-field scalar s
+field scalar phi
 
 simulation {
   dimension = 1
@@ -18,6 +16,7 @@ simulation {
   }
 }
 
-evolution ScalarContraction {
-  dt s = contract(A[i,j] * B[i,j])
+evolution TempValid {
+  K = phi * phi
+  dt phi = K
 }

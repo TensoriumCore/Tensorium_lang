@@ -3,7 +3,9 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
+#include <stdexcept>
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
@@ -11,6 +13,7 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "tensorium_mlir/Dialect/Tensorium/Transform/Passes.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace tensorium_mlir {
@@ -56,13 +59,29 @@ extractFields(const tensorium::backend::ModuleIR &module) {
   return out;
 }
 
+[[noreturn]] static void emitUnsupportedExprError(mlir::Location loc,
+                                                 const std::string &detail) {
+  mlir::emitError(loc) << "unsupported Tensorium expression in MLIR emission: "
+                       << detail;
+  throw std::runtime_error(detail);
+}
+
+[[noreturn]] static void emitExternLoweringError(mlir::Location loc,
+                                                 const std::string &callee) {
+  const std::string detail =
+      "extern function '" + callee + "' lowering is not implemented yet";
+  mlir::emitError(loc) << detail;
+  throw std::runtime_error(detail);
+}
+
 static mlir::Value
 emitExpr(mlir::OpBuilder &b, mlir::Location loc, mlir::Type f64,
          const tensorium::backend::ExprIR *e,
-         const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg) {
+         const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg,
+         llvm::StringMap<mlir::Value> *localTemps) {
   using namespace tensorium::backend;
   if (!e)
-    return {};
+    emitUnsupportedExprError(loc, "null expression");
 
   switch (e->kind) {
   case ExprIR::Kind::Number: {
@@ -72,9 +91,22 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc, mlir::Type f64,
   }
   case ExprIR::Kind::Var: {
     auto *v = static_cast<const VarIR *>(e);
+    if (v->vkind == VarKind::Local) {
+      if (!localTemps)
+        emitUnsupportedExprError(loc, "temporary '" + v->name +
+                                         "' is not supported in this context");
+      auto itLocal = localTemps->find(v->name);
+      if (itLocal == localTemps->end()) {
+        emitUnsupportedExprError(
+            loc, "temporary '" + v->name + "' referenced before definition");
+      }
+      return itLocal->second;
+    }
+
     auto it = fieldArg.find(v->name);
     if (it == fieldArg.end())
-      return {};
+      emitUnsupportedExprError(loc, "unknown field reference '" + v->name +
+                                       "' in MLIR emission");
 
     mlir::ArrayAttr indicesAttr;
     if (!v->tensorIndexNames.empty()) {
@@ -92,10 +124,8 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc, mlir::Type f64,
   }
   case ExprIR::Kind::Binary: {
     auto *bin = static_cast<const BinaryIR *>(e);
-    auto L = emitExpr(b, loc, f64, bin->lhs.get(), fieldArg);
-    auto R = emitExpr(b, loc, f64, bin->rhs.get(), fieldArg);
-    if (!L || !R)
-      return {};
+    auto L = emitExpr(b, loc, f64, bin->lhs.get(), fieldArg, localTemps);
+    auto R = emitExpr(b, loc, f64, bin->rhs.get(), fieldArg, localTemps);
 
     if (bin->op == "+")
       return b.create<tensorium::mlir::AddOp>(loc, f64, L, R);
@@ -103,14 +133,20 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc, mlir::Type f64,
       return b.create<tensorium::mlir::MulOp>(loc, f64, L, R);
     if (bin->op == "-")
       return b.create<tensorium::mlir::SubOp>(loc, f64, L, R);
-    return {};
+	if (bin->op == "/")
+      return b.create<tensorium::mlir::DivOp>(loc, f64, L, R);
+
+    emitUnsupportedExprError(loc,
+                             "binary operator '" + bin->op +
+                                 "' is not supported during MLIR emission");
   }
   case ExprIR::Kind::Call: {
     auto *c = static_cast<const CallIR *>(e);
     if (startsWith(c->callee, "d_") && c->callee.size() == 3) {
       if (c->args.empty())
-        return {};
-      auto arg0 = emitExpr(b, loc, f64, c->args[0].get(), fieldArg);
+        emitUnsupportedExprError(loc,
+                                 "d_* expects exactly one argument in MLIR emission");
+      auto arg0 = emitExpr(b, loc, f64, c->args[0].get(), fieldArg, localTemps);
       auto deriv =
           b.create<tensorium::mlir::DerivOp>(loc, arg0.getType(), arg0);
       deriv->setAttr("index", b.getStringAttr(std::string(1, c->callee[2])));
@@ -118,14 +154,19 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc, mlir::Type f64,
     }
     if (c->callee == "contract") {
       if (c->args.empty())
-        return {};
-      auto arg0 = emitExpr(b, loc, f64, c->args[0].get(), fieldArg);
+        emitUnsupportedExprError(loc,
+                                 "contract() expects exactly one argument in MLIR emission");
+      auto arg0 = emitExpr(b, loc, f64, c->args[0].get(), fieldArg, localTemps);
       return b.create<tensorium::mlir::ContractOp>(loc, f64, arg0);
     }
-    return {};
+    if (c->isExtern)
+      emitExternLoweringError(loc, c->callee);
+
+    emitUnsupportedExprError(loc, "call to '" + c->callee +
+                                       "' is not supported during MLIR emission");
   }
   default:
-    return {};
+    emitUnsupportedExprError(loc, "unknown expression kind");
   }
 }
 } // namespace
@@ -198,11 +239,23 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
 
   auto f64 = b.getF64Type();
   for (const auto &evo : module.evolutions) {
+    llvm::StringMap<mlir::Value> tempValues;
+
+    for (const auto &tmp : evo.temporaries) {
+      if (!tmp.indexOffsets.empty()) {
+        emitUnsupportedExprError(
+            loc, "non-scalar temporary '" + tmp.name +
+                     "' is not supported in executable mode");
+      }
+      auto rhsV = emitExpr(b, loc, f64, tmp.rhs.get(), fieldArg, &tempValues);
+      tempValues[tmp.name] = rhsV;
+    }
+
     for (const auto &eq : evo.equations) {
       auto it = fieldArg.find(eq.fieldName);
       if (it == fieldArg.end())
         continue;
-      auto rhsV = emitExpr(b, loc, f64, eq.rhs.get(), fieldArg);
+      auto rhsV = emitExpr(b, loc, f64, eq.rhs.get(), fieldArg, &tempValues);
       if (!rhsV)
         continue;
       b.create<tensorium::mlir::DtAssignOp>(loc, it->second, rhsV,

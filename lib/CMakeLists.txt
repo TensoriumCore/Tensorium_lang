@@ -6,6 +6,7 @@ add_library(tensorium
   Parse/Parser.cpp
   Runtime/CpuRuntime.cpp
   Runtime/Eval.cpp
+  Sema/CallSupport.cpp
   Sema/Sema.cpp
   Sema/ProgramValidator.cpp
 )

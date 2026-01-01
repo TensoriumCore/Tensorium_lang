@@ -1,5 +1,6 @@
 
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -89,6 +90,8 @@ struct BinaryIR final : ExprIR {
 struct CallIR final : ExprIR {
   std::string callee;
   std::vector<std::unique_ptr<ExprIR>> args;
+  bool isExtern = false;
+  size_t externArity = 0;
   explicit CallIR(std::string c) : ExprIR(Kind::Call), callee(std::move(c)) {}
 };
 
@@ -98,9 +101,16 @@ struct EquationIR {
   std::unique_ptr<ExprIR> rhs;
 };
 
+struct TempAssignIR {
+  std::string name;
+  std::vector<int> indexOffsets;
+  std::unique_ptr<ExprIR> rhs;
+};
+
 struct EvolutionIR {
   std::string name;
   std::vector<EquationIR> equations;
+  std::vector<TempAssignIR> temporaries;
 };
 
 struct ModuleIR {

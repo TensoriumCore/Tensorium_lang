@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -90,6 +91,11 @@ struct Assignment {
   std::unique_ptr<Expr> rhs;
 };
 
+struct ExternScalarDecl {
+  std::string name;
+  size_t paramCount = 0;
+};
+
 struct FieldDecl {
   TensorKind kind;
   std::string name;
@@ -144,6 +150,7 @@ struct SimulationConfig {
 };
 
 struct Program {
+  std::vector<ExternScalarDecl> externs;
   std::vector<FieldDecl> fields;
   std::vector<MetricDecl> metrics;
   std::vector<EvolutionDecl> evolutions;

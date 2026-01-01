@@ -1,6 +1,6 @@
-field cov_tensor2 A
-field cov_tensor2 B
-field scalar s
+extern scalar bar(scalar)
+
+field scalar phi
 
 simulation {
   dimension = 1
@@ -8,7 +8,7 @@ simulation {
 
   time {
     dt = 0.1
-    integrator = euler
+    integrator = rk4
   }
 
   spatial {
@@ -18,6 +18,6 @@ simulation {
   }
 }
 
-evolution ScalarContraction {
-  dt s = contract(A[i,j] * B[i,j])
+evolution MissingExtern {
+  dt phi = foo(phi)
 }

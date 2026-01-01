@@ -2,6 +2,22 @@ field cov_tensor2 A
 field cov_tensor2 B
 field cov_tensor2 C
 
+simulation {
+  dimension = 1
+  resolution = [4]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
 evolution PermutationOK {
   dt C[j,i] = contract(B[k,i] * A[j,k])
 }

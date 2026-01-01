@@ -1,0 +1,5 @@
+field scalar phi
+
+evolution SymbolicUnknownCall {
+  dt phi = foo(phi)
+}

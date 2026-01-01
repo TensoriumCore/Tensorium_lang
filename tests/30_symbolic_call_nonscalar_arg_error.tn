@@ -1,0 +1,6 @@
+field scalar phi
+field cov_tensor2 A
+
+evolution SymbolicBadCall {
+  dt phi = foo(A[i,j])
+}

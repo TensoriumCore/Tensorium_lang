@@ -20,6 +20,7 @@ class Parser {
 
   TensorAccess parseLHS();
   Assignment parseAssignment();
+  ExternScalarDecl parseExternDecl();
   FieldDecl parseFieldDecl();
   MetricDecl parseMetric();
   EvolutionEq parseEvolutionEq();

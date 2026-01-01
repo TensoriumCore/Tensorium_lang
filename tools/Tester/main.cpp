@@ -19,7 +19,7 @@ bool runTest(const TestCase &t) {
     Lexer lex(t.input.c_str());
     Parser parser(lex);
     Program prog = parser.parseProgram();
-    SemanticAnalyzer sem(prog);
+    SemanticAnalyzer sem(prog, CompilationMode::Symbolic);
 
     std::vector<IndexedMetric> indexedMetrics;
     std::vector<IndexedEvolution> indexedEvos;
@@ -195,6 +195,15 @@ int main() {
             }
         )",
        true},
+
+      {"Unknown scalar call allowed in symbolic mode",
+       R"(
+            field scalar phi
+
+            evolution SymbolicCall {
+                dt phi = foo(phi)
+            }
+        )"},
 
       {"Reference to undeclared field",
        R"(
