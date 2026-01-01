@@ -24,18 +24,6 @@ using namespace mlir;
 namespace tensorium::mlir {
 namespace {
 
-static ArrayAttr getArrayAttr(::mlir::Operation *op, ::llvm::StringRef name) {
-  if (!op)
-    return {};
-  return op->getAttrOfType<ArrayAttr>(name);
-}
-
-static ArrayAttr getIndicesAttr(::mlir::Operation *op) {
-  if (!op)
-    return {};
-  return op->getAttrOfType<ArrayAttr>("indices");
-}
-
 static bool isStringArray(ArrayAttr a) {
   if (!a)
     return false;
@@ -88,64 +76,6 @@ makeCounts(::mlir::OpBuilder &b,
   return DictionaryAttr::get(b.getContext(), kv);
 }
 
-static DictionaryAttr
-makeRoles(::mlir::OpBuilder &b, ::mlir::ArrayRef<::llvm::StringRef> all,
-          ::mlir::ArrayRef<::llvm::StringRef> out,
-          const ::llvm::MapVector<::llvm::StringRef, int64_t> &counts,
-          bool &valid) {
-  ::llvm::SmallDenseSet<::llvm::StringRef, 16> outSet;
-  for (auto x : out)
-    outSet.insert(x);
-
-  ::llvm::SmallVector<NamedAttribute, 16> kv;
-  kv.reserve(all.size());
-
-  valid = true;
-
-  for (auto idx : all) {
-    auto it = counts.find(idx);
-    int64_t c = (it == counts.end()) ? 0 : it->second;
-
-    ::llvm::StringRef role = "invalid";
-
-    if (outSet.contains(idx)) {
-      role = "free";
-      if (c != 1)
-        valid = false;
-    } else {
-      if (c == 2)
-        role = "contracted";
-      else if (c > 2)
-        role = "summed";
-      else
-        role = "invalid";
-      if (c < 2)
-        valid = false;
-    }
-
-    kv.push_back(b.getNamedAttr(idx, b.getStringAttr(role)));
-  }
-
-  return DictionaryAttr::get(b.getContext(), kv);
-}
-
-static ::llvm::SmallVector<::llvm::StringRef, 16> computeAllSorted(
-    ::mlir::ArrayRef<::llvm::SmallVector<::llvm::StringRef, 8>> ins,
-    ::mlir::ArrayRef<::llvm::StringRef> out) {
-  ::llvm::SmallVector<::llvm::StringRef, 16> all;
-  ::llvm::SmallDenseSet<::llvm::StringRef, 32> seen;
-
-  for (auto x : out)
-    if (seen.insert(x).second)
-      all.push_back(x);
-
-  for (auto &vec : ins)
-    for (auto x : vec)
-      if (seen.insert(x).second)
-        all.push_back(x);
-
-  return all;
-}
 
 static ::llvm::SmallVector<::llvm::StringRef, 8>
 readLhsIndices(tensorium::mlir::DtAssignOp op) {
@@ -155,25 +85,6 @@ readLhsIndices(tensorium::mlir::DtAssignOp op) {
   return toRefs(lhsIdx);
 }
 
-static void appendAll(::llvm::SmallVector<::llvm::StringRef, 32> &dst,
-                      ::llvm::ArrayRef<::llvm::StringRef> src) {
-  dst.append(src.begin(), src.end());
-}
-
-static ::llvm::SmallVector<::llvm::StringRef, 32>
-contractOnce(::llvm::ArrayRef<::llvm::StringRef> in) {
-  ::llvm::MapVector<::llvm::StringRef, int64_t> counts;
-  for (auto s : in)
-    counts[s] += 1;
-
-  ::llvm::SmallVector<::llvm::StringRef, 32> out;
-  out.reserve(in.size());
-  for (auto s : in)
-    if (counts[s] == 1)
-      out.push_back(s);
-
-  return out;
-}
 
 static DictionaryAttr makeRolesDictFromSemantic(
     ::mlir::OpBuilder &b,
@@ -219,12 +130,20 @@ static llvm::SmallVector<llvm::StringRef, 32> collectIndices(Value v) {
     return out;
   }
 
-  if (name == "tensorium.mul" || name == "tensorium.add" ||
-      name == "tensorium.sub" || name == "tensorium.div") {
+  if (name == "tensorium.mul") { 
     auto a = collectIndices(def->getOperand(0));
     auto b = collectIndices(def->getOperand(1));
     a.append(b.begin(), b.end());
     return a;
+  }
+
+  if (name == "tensorium.add" ||
+      name == "tensorium.sub") {
+    return collectIndices(def->getOperand(0));
+  }
+
+  if (name == "tensorium.div") {
+    return collectIndices(def->getOperand(0));
   }
 
   if (name == "tensorium.contract") {

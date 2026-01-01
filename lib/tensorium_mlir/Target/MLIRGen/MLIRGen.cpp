@@ -76,14 +76,18 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc, mlir::Type f64,
     if (it == fieldArg.end())
       return {};
 
-    auto r = b.create<tensorium::mlir::RefOp>(loc, f64, it->second,
-                                              b.getStringAttr("field"));
+    mlir::ArrayAttr indicesAttr;
     if (!v->tensorIndexNames.empty()) {
-      llvm::SmallVector<mlir::Attribute, 4> idxAttr;
+      llvm::SmallVector<mlir::Attribute, 4> idxList;
       for (const auto &s : v->tensorIndexNames)
-        idxAttr.push_back(b.getStringAttr(s));
-      r->setAttr("indices", b.getArrayAttr(idxAttr));
+        idxList.push_back(b.getStringAttr(s));
+      indicesAttr = b.getArrayAttr(idxList);
     }
+
+    auto r = b.create<tensorium::mlir::RefOp>(loc, f64, it->second,
+                                              b.getStringAttr("field"),
+                                              indicesAttr, mlir::ArrayAttr());
+
     return r.getResult();
   }
   case ExprIR::Kind::Binary: {
@@ -107,7 +111,8 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc, mlir::Type f64,
       if (c->args.empty())
         return {};
       auto arg0 = emitExpr(b, loc, f64, c->args[0].get(), fieldArg);
-      auto deriv = b.create<tensorium::mlir::DerivOp>(loc, f64, arg0);
+      auto deriv =
+          b.create<tensorium::mlir::DerivOp>(loc, arg0.getType(), arg0);
       deriv->setAttr("index", b.getStringAttr(std::string(1, c->callee[2])));
       return deriv.getResult();
     }
@@ -124,6 +129,40 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc, mlir::Type f64,
   }
 }
 } // namespace
+
+static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
+                                    const MLIRGenOptions &opts) {
+
+  if (opts.enableEinsteinLoweringPass) {
+    pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());
+  }
+
+  const bool needValidity = opts.enableEinsteinValidityPass;
+  const bool needCanon = opts.enableEinsteinCanonicalizePass;
+  const bool needAnalyze = opts.enableEinsteinAnalyzeEinsumPass || needValidity;
+  const bool needIndex = opts.enableIndexAnalyzePass || needValidity;
+
+  if (needIndex) {
+    pm.addPass(tensorium::mlir::createTensoriumIndexAnalyzePass());
+  }
+
+  if (needAnalyze) {
+    pm.addPass(tensorium::mlir::createTensoriumEinsteinAnalyzeEinsumPass());
+  }
+
+  if (needCanon) {
+    pm.addPass(tensorium::mlir::createTensoriumEinsteinCanonicalizePass());
+  }
+
+  if (needValidity) {
+    pm.addPass(tensorium::mlir::createTensoriumEinsteinValidityPass());
+  }
+
+  if (opts.enableStencilLoweringPass) {
+    pm.addPass(tensorium::mlir::createTensoriumStencilLoweringPass(opts.dx,
+                                                                   opts.order));
+  }
+}
 
 void emitMLIR(const tensorium::backend::ModuleIR &module,
               const MLIRGenOptions &opts) {
@@ -169,21 +208,21 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
   b.create<mlir::func::ReturnOp>(loc);
   moduleOp.push_back(f);
 
-  mlir::PassManager pm(&ctx);
+  MLIRGenOptions pipelineOpts = opts;
+  if (module.simulation) {
+    pipelineOpts.order = module.simulation->spatial.order;
+    if (!module.simulation->resolution.empty() &&
+        module.simulation->resolution[0] > 0) {
+      pipelineOpts.dx =
+          1.0 / static_cast<double>(module.simulation->resolution[0]);
+    }
+  }
 
-  if (opts.enableEinsteinLoweringPass)
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());
-  if (opts.enableIndexAnalyzePass)
-    pm.addPass(tensorium::mlir::createTensoriumIndexAnalyzePass());
-  if (opts.enableEinsteinAnalyzeEinsumPass)
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinAnalyzeEinsumPass());
-  if (opts.enableEinsteinCanonicalizePass)
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinCanonicalizePass());
-  if (opts.enableEinsteinValidityPass)
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinValidityPass());
+  mlir::PassManager pm(&ctx);
+  addEinsteinPipelineSafe(pm, pipelineOpts);
+
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
-
   if (mlir::failed(pm.run(moduleOp))) {
     llvm::errs() << "Pipeline failed\n";
   }

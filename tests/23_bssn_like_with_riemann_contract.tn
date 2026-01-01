@@ -1,0 +1,34 @@
+field scalar K
+field scalar alpha
+field cov_tensor2 gamma[i,j]
+field cov_tensor2 Atilde[i,j]
+field cov_tensor4 Riemann[i,j,k,l]
+field cov_tensor2 Ricci[i,j]
+field scalar trA
+
+simulation {
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.01
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution BSSNLike {
+
+  dt trA = contract( gamma[i,j] * Atilde[i,j] )
+
+  dt K = -alpha * K * K + alpha * trA
+
+  dt Ricci[i,j] = contract( Riemann[k,i,k,j] )
+
+  dt Atilde[i,j] = alpha * contract( gamma[i,k] * Atilde[k,j] )
+}

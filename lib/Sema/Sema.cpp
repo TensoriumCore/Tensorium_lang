@@ -166,18 +166,127 @@ struct IndexCollector {
   std::unordered_map<std::string, int> &counter;
   IndexCollector(std::unordered_map<std::string, int> &c) : counter(c) {}
 
-  void walk(const IndexedExpr *expr) {
+  static bool isSpatialIdx(const std::string &s) {
+    return s == "i" || s == "j" || s == "k" || s == "l" || s == "m" || s == "n";
+  }
+
+  static bool isPartialDerivName(const std::string &s) {
+    return s.size() == 3 && s[0] == 'd' && s[1] == '_' &&
+           isSpatialIdx(std::string(1, s[2]));
+  }
+
+  static bool isNablaName(const std::string &s, char &idx) {
+    if (s.size() == 7 && s.rfind("nabla_", 0) == 0) {
+      idx = s[6];
+      return isSpatialIdx(std::string(1, idx));
+    }
+    if (s.size() == 7 && s.rfind("nabla^", 0) == 0) {
+      idx = s[6];
+      return isSpatialIdx(std::string(1, idx));
+    }
+    return false;
+  }
+
+  void bumpLocalCounts(const IndexedExpr *expr,
+                       std::unordered_map<std::string, int> &local) {
+    if (!expr)
+      return;
+
     if (auto v = dynamic_cast<const IndexedVar *>(expr)) {
       for (auto &idx : v->tensorIndexNames)
-        counter[idx]++;
+        if (!idx.empty() && isSpatialIdx(idx))
+          local[idx] += 1;
+      return;
     }
+
+    if (auto b = dynamic_cast<const IndexedBinary *>(expr)) {
+      bumpLocalCounts(b->lhs.get(), local);
+      bumpLocalCounts(b->rhs.get(), local);
+      return;
+    }
+
+    if (auto c = dynamic_cast<const IndexedCall *>(expr)) {
+      for (auto &arg : c->args)
+        bumpLocalCounts(arg.get(), local);
+
+      const std::string &cal = c->callee;
+
+      if (isPartialDerivName(cal)) {
+        std::string idx(1, cal[2]);
+        local[idx] += 1;
+        return;
+      }
+
+      char nidx = 0;
+      if (isNablaName(cal, nidx)) {
+        std::string idx(1, nidx);
+        local[idx] += 1;
+        return;
+      }
+
+      return;
+    }
+  }
+
+  void walk(const IndexedExpr *expr) {
+    if (!expr)
+      return;
+
+    if (auto v = dynamic_cast<const IndexedVar *>(expr)) {
+      for (auto &idx : v->tensorIndexNames)
+        if (!idx.empty() && isSpatialIdx(idx))
+          counter[idx] += 1;
+      return;
+    }
+
     if (auto b = dynamic_cast<const IndexedBinary *>(expr)) {
       walk(b->lhs.get());
       walk(b->rhs.get());
+      return;
     }
+
     if (auto c = dynamic_cast<const IndexedCall *>(expr)) {
+      if (c->callee == "contract") {
+        if (c->args.size() != 1)
+          throw std::runtime_error("contract() expects 1 argument");
+
+        std::unordered_map<std::string, int> local;
+        bumpLocalCounts(c->args[0].get(), local);
+
+        for (auto &kv : local) {
+          const std::string &idx = kv.first;
+          int cnt = kv.second;
+          if (cnt == 1) {
+            counter[idx] += 1;
+          } else if (cnt == 2) {
+          } else if (cnt > 2) {
+            throw std::runtime_error("Ambiguous contraction: index '" + idx +
+                                     "' appears " + std::to_string(cnt) +
+                                     " times.");
+          }
+        }
+        return;
+      }
+
       for (auto &arg : c->args)
         walk(arg.get());
+
+      const std::string &cal = c->callee;
+
+      if (isPartialDerivName(cal)) {
+        std::string idx(1, cal[2]);
+        counter[idx] += 1;
+        return;
+      }
+
+      char nidx = 0;
+      if (isNablaName(cal, nidx)) {
+        std::string idx(1, nidx);
+        counter[idx] += 1;
+        return;
+      }
+
+      return;
     }
   }
 };
@@ -247,17 +356,15 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
                                  "' appears only in RHS and not LHS.");
       }
 
-      if (count > 2) {
+      if (count > 2 && !lhsIndices.count(idx)) {
         throw std::runtime_error("Ambiguous contraction: index '" + idx +
                                  "' appears " + std::to_string(count) +
                                  " times.");
       }
     }
 
-
-TensorType lhsType = {fd->up, fd->down};
-checker.checkAssignmentVariance(lhsType, ie.indices, ie.rhs.get());
-
+    TensorType lhsType = {fd->up, fd->down};
+    checker.checkAssignmentVariance(lhsType, ie.indices, ie.rhs.get());
 
     out.equations.push_back(std::move(ie));
   }

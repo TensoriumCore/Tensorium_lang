@@ -1,0 +1,54 @@
+field scalar      phi
+
+field cov_tensor2 flat_gamma[i,j]
+field con_tensor2 flat_gammaU[i,j]
+
+field cov_tensor2 gamma[i,j]
+field con_tensor2 gammaU[i,j]
+
+field con_tensor3 d_gammaU[i,j,k]
+field con_tensor3 GammaU[i,j,k]
+
+field con_tensor2 Ricci[i,j]
+
+simulation {
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.01
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution RicciConformalFlat {
+
+  dt gamma[i,j] =
+      ( (1 + phi) * (1 + phi) * (1 + phi) * (1 + phi) )
+      * flat_gamma[i,j]
+
+  dt gammaU[i,j] =
+      (1.0 / ( (1 + phi) * (1 + phi) * (1 + phi) * (1 + phi) ))
+      * flat_gammaU[i,j]
+
+
+  dt GammaU[i,j,k] =
+      0.5 * (
+        contract( flat_gammaU[j,l] * d_gammaU[i,k,l] )
+      + contract( flat_gammaU[k,l] * d_gammaU[i,j,l] )
+      - contract( flat_gammaU[i,l] * d_gammaU[j,k,l] )
+      )
+
+
+  dt Ricci[i,j] =
+      contract( d_k( GammaU[k,i,j] ) )
+    - contract( d_j( GammaU[k,i,k] ) )
+    + contract( GammaU[k,i,j] * GammaU[l,k,l] )
+    - contract( GammaU[k,i,l] * GammaU[l,j,k] )
+}

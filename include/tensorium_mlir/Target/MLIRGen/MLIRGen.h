@@ -13,6 +13,9 @@ struct MLIRGenOptions {
   bool enableIndexAnalyzePass = false;
   bool enableEinsteinCanonicalizePass = false;
   bool enableEinsteinAnalyzeEinsumPass = false;
+  bool enableStencilLoweringPass = false;
+  double dx = 0.1;
+  int order = 2;
 };
 
 void emitMLIR(const tensorium::backend::ModuleIR &module,

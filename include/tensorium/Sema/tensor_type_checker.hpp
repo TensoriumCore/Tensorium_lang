@@ -29,6 +29,14 @@ class TensorTypeChecker {
             c == 'n');
   }
 
+  bool isScalarExpr(const IndexedExpr *e) const {
+    try {
+      return inferImpl(e, true).isScalar();
+    } catch (...) {
+      return false;
+    }
+  }
+
   bool isCovariantDerivative(const std::string &name, bool &contravariant,
                              char &index) const {
     if (name.size() == 7 && name.rfind("nabla_", 0) == 0) {
@@ -71,7 +79,9 @@ class TensorTypeChecker {
     }
 
     if (auto c = dynamic_cast<const IndexedCall *>(e)) {
-      if (c->callee == "contract") {
+      const std::string &cal = c->callee;
+
+      if (cal == "contract") {
         if (c->args.size() != 1)
           throw std::runtime_error("contract() expects 1 argument");
 
@@ -83,7 +93,7 @@ class TensorTypeChecker {
           if (cc == 0)
             continue;
           if (cc == 1) {
-            counts[(unsigned char)idx] += 1;
+            counts[(unsigned char)idx]++;
             continue;
           }
           if (cc == 2)
@@ -97,8 +107,59 @@ class TensorTypeChecker {
 
       for (const auto &arg : c->args)
         collectIndexCounts(arg.get(), counts);
+
+      if (isPartialDerivative(cal)) {
+        char idx = cal[2];
+        counts[(unsigned char)idx]++;
+        return;
+      }
+
+      bool contra = false;
+      char nidx = 0;
+      if (isCovariantDerivative(cal, contra, nidx)) {
+        counts[(unsigned char)nidx]++;
+        return;
+      }
+
       return;
     }
+  }
+
+  void collectAdditiveTerms(const IndexedExpr *e,
+                            std::vector<const IndexedExpr *> &out) const {
+    if (!e)
+      return;
+
+    if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
+      if (b->op == '+' || b->op == '-') {
+        collectAdditiveTerms(b->lhs.get(), out);
+        collectAdditiveTerms(b->rhs.get(), out);
+        return;
+      }
+
+      if (b->op == '*') {
+        const IndexedExpr *L = b->lhs.get();
+        const IndexedExpr *R = b->rhs.get();
+        if (isScalarExpr(L)) {
+          collectAdditiveTerms(R, out);
+          return;
+        }
+        if (isScalarExpr(R)) {
+          collectAdditiveTerms(L, out);
+          return;
+        }
+      }
+
+      if (b->op == '/') {
+        const IndexedExpr *R = b->rhs.get();
+        if (isScalarExpr(R)) {
+          collectAdditiveTerms(b->lhs.get(), out);
+          return;
+        }
+      }
+    }
+
+    out.push_back(e);
   }
 
 public:
@@ -238,9 +299,7 @@ public:
         if (call->args.size() != 1)
           throw std::runtime_error("d_* expects exactly 1 argument");
         TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
-        if (!argT.isScalar())
-          throw std::runtime_error("d_* expects scalar argument");
-        return TensorType{0, 1};
+        return TensorType{argT.up, argT.down + 1};
       }
 
       bool contra = false;
@@ -292,58 +351,44 @@ public:
       lhsSet[(unsigned char)c] = true;
     }
 
-    int counts[256] = {0};
-    collectIndexCounts(rhs, counts);
-    int contracted = 0;
-    for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
-      int c = counts[(unsigned char)idx];
-      bool inLhs = lhsSet[(unsigned char)idx];
+    std::vector<const IndexedExpr *> terms;
+    collectAdditiveTerms(rhs, terms);
 
-      if (c == 0)
-        continue;
+    for (const IndexedExpr *t : terms) {
+      int counts[256] = {0};
+      collectIndexCounts(t, counts);
 
-      if (c >= 3) {
-        throw std::runtime_error(std::string("Ambiguous contraction: index '") +
-                                 idx + "' appears " + std::to_string(c) +
-                                 " times.");
-      }
+      for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
+        int c = counts[(unsigned char)idx];
+        bool inLhs = lhsSet[(unsigned char)idx];
 
-      if (inLhs) {
-        if (c != 1) {
+        if (c == 0)
+          continue;
+
+        if (c >= 3) {
           throw std::runtime_error(
-              std::string("Invalid Einstein: LHS index '") + idx +
-              "' must appear exactly once in RHS.");
+              std::string("Ambiguous contraction: index '") + idx +
+              "' appears " + std::to_string(c) + " times.");
         }
-      } else {
-        if (c == 1) {
-          throw std::runtime_error(std::string("Free index '") + idx +
-                                   "' appears only in RHS and not LHS.");
+
+        if (inLhs) {
+          if (c != 1) {
+            throw std::runtime_error(
+                std::string("Invalid Einstein: LHS index '") + idx +
+                "' must appear exactly once in RHS.");
+          }
+        } else {
+          if (c == 1) {
+            throw std::runtime_error(std::string("Free index '") + idx +
+                                     "' appears only in RHS and not LHS.");
+          }
         }
-        contracted += 1;
       }
     }
 
-    int remove = 2 * contracted;
-
-    int up = rhsRaw.up;
-    int down = rhsRaw.down;
-
-    int rem = remove;
-
-    int takeDown = (down < rem) ? down : rem;
-    down -= takeDown;
-    rem -= takeDown;
-
-    int takeUp = (up < rem) ? up : rem;
-    up -= takeUp;
-    rem -= takeUp;
-
-    if (rem != 0) {
-      throw std::runtime_error("internal error: Einstein contraction could not "
-                               "remove requested rank");
-    }
-
-    TensorType rhsEff{up, down};
+    // Variance/type check: rely on infer(rhs) which already accounts for
+    // contract() and derivative arity rules.
+    TensorType rhsEff = rhsRaw;
 
     if (!lhs.sameVariance(rhsEff)) {
       throw std::runtime_error(

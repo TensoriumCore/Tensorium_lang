@@ -37,10 +37,17 @@ def Tensorium_ConstOp : Tensorium_Op<"const"> {
 }
 
 def Tensorium_RefOp : Tensorium_Op<"ref"> {
-  let arguments = (ins AnyType:$source, StrAttr:$kind);
+  let arguments = (ins 
+    AnyType:$source, 
+    StrAttr:$kind, 
+    OptionalAttr<ArrayAttr>:$indices,
+    OptionalAttr<I64ArrayAttr>:$offsets 
+  );
   let results = (outs F64:$result);
-  let assemblyFormat =
-    "$source attr-dict `:` type($source) `->` type($result)";
+  
+  let assemblyFormat = [{
+    $source attr-dict `:` type($source) `->` type($result)
+  }];
 }
 
 def Tensorium_AddOp : Tensorium_Op<"add"> {
@@ -89,6 +96,7 @@ def Tensorium_DtAssignOp : Tensorium_Op<"dt_assign"> {
   let assemblyFormat =
     "$field `,` $rhs attr-dict `:` type($field) `,` type($rhs)";
 }
+
 
 
 def Tensorium_EinsumOp : Tensorium_Op<"einsum"> {

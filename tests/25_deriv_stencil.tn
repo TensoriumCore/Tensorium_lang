@@ -1,0 +1,22 @@
+field scalar phi
+field covector dphi[i]
+simulation {
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.01
+    integrator = rk4
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+
+evolution StencilTest {
+    dt dphi[i] = d_i(phi)
+}

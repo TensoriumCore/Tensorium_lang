@@ -103,6 +103,7 @@ int main(int argc, char **argv) {
   bool enableIndexAnalyzePass = false;
   bool enableEinsteinCanonicalizePass = false;
   bool enableEinsteinAnalyzeEinsumPass = false;
+  bool enableStencilLoweringPass = false;
 
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
@@ -138,6 +139,8 @@ int main(int argc, char **argv) {
       enableEinsteinCanonicalizePass = true;
     } else if (arg == "--tensorium-einstein-analyze-einsum") {
       enableEinsteinAnalyzeEinsumPass = true;
+    } else if (arg == "--tensorium-stencil-lower") {
+      enableStencilLoweringPass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
     } else if (arg == "--validate") {
@@ -268,11 +271,11 @@ int main(int argc, char **argv) {
         opts.enableAnalysisPass = enableAnalysisPass;
 
         opts.enableEinsteinLoweringPass = enableEinsteinLoweringPass;
-        // opts.enableIndexRoleAnalysisPass = enableIndexRoleAnalysisPass;
         opts.enableEinsteinValidityPass = enableEinsteinValidityPass;
         opts.enableIndexAnalyzePass = enableIndexAnalyzePass;
         opts.enableEinsteinCanonicalizePass = enableEinsteinCanonicalizePass;
-		opts.enableEinsteinAnalyzeEinsumPass = enableEinsteinAnalyzeEinsumPass;
+        opts.enableEinsteinAnalyzeEinsumPass = enableEinsteinAnalyzeEinsumPass;
+        opts.enableStencilLoweringPass = enableStencilLoweringPass;
         tensorium_mlir::emitMLIR(mod, opts);
         std::cout << "==============================\n";
       }

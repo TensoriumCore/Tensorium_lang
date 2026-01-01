@@ -14,4 +14,9 @@ def TensoriumEinsteinLowering : Pass<"tensorium-einstein-lowering", "mlir::Modul
   let summary = "Lower tensorium.contract into tensorium.einsum (Einstein symbolic lowering)";
   let constructor = "tensorium::mlir::createTensoriumEinsteinLoweringPass()";
 }
+
+def TensoriumStencilLowering : Pass<"tensorium-stencil-lower", "mlir::ModuleOp"> {
+  let summary = "Lower derivatives to finite difference stencils";
+  let constructor = "tensorium::mlir::createTensoriumStencilLoweringPass()";
+}
 #endif // TENSORIUM_TRANSFORM_PASSES_TD
