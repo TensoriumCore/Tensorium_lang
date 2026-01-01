@@ -162,6 +162,10 @@ static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
     pm.addPass(tensorium::mlir::createTensoriumStencilLoweringPass(opts.dx,
                                                                    opts.order));
   }
+  if (opts.enableDissipationPass) {
+    pm.addPass(tensorium::mlir::createTensoriumDissipationPass(
+        opts.dissipationStrength, opts.dx));
+  }
 }
 
 void emitMLIR(const tensorium::backend::ModuleIR &module,

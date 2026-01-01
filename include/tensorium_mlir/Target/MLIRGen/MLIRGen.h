@@ -16,6 +16,8 @@ struct MLIRGenOptions {
   bool enableStencilLoweringPass = false;
   double dx = 0.1;
   int order = 2;
+  bool enableDissipationPass = false;
+  double dissipationStrength = 0.1;
 };
 
 void emitMLIR(const tensorium::backend::ModuleIR &module,

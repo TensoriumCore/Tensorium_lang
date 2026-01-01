@@ -67,6 +67,7 @@ add_library(tensorium_mlir_backend
   tensorium_mlir/Semantic/Einstein.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinAnalyzeEinsumPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/StencilLoweringPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/DissipationPass.cpp
 )
 
 add_dependencies(tensorium_mlir_backend

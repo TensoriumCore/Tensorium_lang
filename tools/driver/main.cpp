@@ -104,6 +104,7 @@ int main(int argc, char **argv) {
   bool enableEinsteinCanonicalizePass = false;
   bool enableEinsteinAnalyzeEinsumPass = false;
   bool enableStencilLoweringPass = false;
+  bool enableDissipationPass = false;
 
   if (argc < 2) {
     std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
@@ -141,6 +142,8 @@ int main(int argc, char **argv) {
       enableEinsteinAnalyzeEinsumPass = true;
     } else if (arg == "--tensorium-stencil-lower") {
       enableStencilLoweringPass = true;
+    } else if (arg == "--tensorium-dissipation") {
+      enableDissipationPass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
     } else if (arg == "--validate") {
@@ -276,6 +279,7 @@ int main(int argc, char **argv) {
         opts.enableEinsteinCanonicalizePass = enableEinsteinCanonicalizePass;
         opts.enableEinsteinAnalyzeEinsumPass = enableEinsteinAnalyzeEinsumPass;
         opts.enableStencilLoweringPass = enableStencilLoweringPass;
+		opts.enableDissipationPass = enableDissipationPass;
         tensorium_mlir::emitMLIR(mod, opts);
         std::cout << "==============================\n";
       }
