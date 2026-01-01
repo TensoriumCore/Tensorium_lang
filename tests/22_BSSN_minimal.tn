@@ -5,8 +5,8 @@ field cov_tensor2 Ricci[i,j]
 field cov_tensor4 Riemann[i,j,k,l]
 field cov_tensor3 DAtilde[i,j,k]
 simulation {
-  dimension = 3
-  resolution = [16,16,16]
+  dimension = 1
+  resolution = [16]
 
   time {
     dt = 0.01
