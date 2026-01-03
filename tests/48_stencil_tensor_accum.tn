@@ -1,0 +1,22 @@
+field scalar phi
+field covector grad_phi[i]
+
+simulation {
+  dimension = 1
+  resolution = [8]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution StencilAccum {
+  dt grad_phi[i] = d_i(phi)
+}

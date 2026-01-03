@@ -1,0 +1,22 @@
+field scalar phi
+field covector grad_phi[i]
+
+simulation {
+  dimension = 1
+  resolution = [4]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution TensorSum {
+  dt grad_phi[i] = grad_phi[i] + phi * grad_phi[i]
+}

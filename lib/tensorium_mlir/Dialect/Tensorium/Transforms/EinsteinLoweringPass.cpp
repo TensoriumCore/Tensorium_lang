@@ -77,6 +77,15 @@ struct LowerContractToEinsum final
     : OpRewritePattern<tensorium::mlir::DtAssignOp> {
   using OpRewritePattern::OpRewritePattern;
 
+  static void collectAddTerms(Value expr, SmallVector<Value, 8> &terms) {
+    if (auto add = expr.getDefiningOp<tensorium::mlir::AddOp>()) {
+      collectAddTerms(add.getLhs(), terms);
+      collectAddTerms(add.getRhs(), terms);
+      return;
+    }
+    terms.push_back(expr);
+  }
+
   LogicalResult matchAndRewrite(tensorium::mlir::DtAssignOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
@@ -88,7 +97,7 @@ struct LowerContractToEinsum final
     llvm::SmallVector<Operation *, 8> tensorRefs;
     llvm::SmallVector<Value, 8> scalars;
 
-    auto process = [&](Value expr) -> LogicalResult {
+    auto lowerProduct = [&](Value expr) -> FailureOr<Value> {
       tensorRefs.clear();
       scalars.clear();
 
@@ -155,13 +164,32 @@ struct LowerContractToEinsum final
                   .create<tensorium::mlir::MulOp>(loc, resultType, out, s)
                   .getResult();
 
-      rewriter.create<tensorium::mlir::DtAssignOp>(loc, destField, out,
-                                                   lhsIdxAttr);
-
-      return success();
+      return out;
     };
-    if (failed(process(rhs)))
+
+    SmallVector<Value, 8> addTerms;
+    collectAddTerms(rhs, addTerms);
+
+    Value accumulator;
+    bool firstTerm = true;
+    for (Value term : addTerms) {
+      FailureOr<Value> lowered = lowerProduct(term);
+      if (failed(lowered))
+        return failure();
+      if (firstTerm) {
+        accumulator = *lowered;
+        firstTerm = false;
+        continue;
+      }
+      accumulator = rewriter.create<tensorium::mlir::AddOp>(
+          loc, destField.getType(), accumulator, *lowered);
+    }
+
+    if (!accumulator)
       return failure();
+
+    rewriter.create<tensorium::mlir::DtAssignOp>(loc, destField, accumulator,
+                                                 lhsIdxAttr);
 
     rewriter.eraseOp(op);
     return success();

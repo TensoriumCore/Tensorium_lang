@@ -77,8 +77,8 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
 
     Location loc = op.getLoc();
     auto resultType = op.getType();
-    Value sum = rewriter.create<ConstOp>(loc, resultType,
-                                         rewriter.getF64FloatAttr(0.0));
+    Value sum;
+    bool firstTerm = true;
     for (const auto &pt : stencil) {
       auto offAttr =
           rewriter.getI64ArrayAttr(makeOffsets(spatialDim, dim, pt.offset));
@@ -92,6 +92,11 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
       Value term =
           rewriter.create<MulOp>(loc, input.getType(), val, weight);
 
+      if (firstTerm) {
+        sum = term;
+        firstTerm = false;
+        continue;
+      }
       sum = rewriter.create<AddOp>(loc, resultType, sum, term);
     }
 
