@@ -89,6 +89,10 @@ FieldKind BackendBuilder::lowerFieldKind(TensorKind k) {
     return FieldKind::ConTensor4;
   case TensorKind::MixedTensor:
     return FieldKind::MixedTensor;
+  case TensorKind::Metric:
+    return FieldKind::CovTensor2;
+  case TensorKind::InverseMetric:
+    return FieldKind::ConTensor2;
   }
   return FieldKind::Scalar;
 }

@@ -29,6 +29,89 @@ int SemanticAnalyzer::resolveIndex(const std::string &name) {
   return it->second;
 }
 
+bool SemanticAnalyzer::isSimpleIndexSwap(const IndexedExpr *lhs,
+                                         const IndexedExpr *rhs) const {
+  auto lVar = dynamic_cast<const IndexedVar *>(lhs);
+  auto rVar = dynamic_cast<const IndexedVar *>(rhs);
+  if (!lVar || !rVar)
+    return false;
+  if (lVar->name != rVar->name)
+    return false;
+  if (lVar->tensorIndexNames.size() != 2 ||
+      rVar->tensorIndexNames.size() != 2)
+    return false;
+  return lVar->tensorIndexNames[0] == rVar->tensorIndexNames[1] &&
+         lVar->tensorIndexNames[1] == rVar->tensorIndexNames[0];
+}
+
+bool SemanticAnalyzer::isNegatedSwap(const IndexedExpr *lhs,
+                                     const IndexedExpr *rhs) const {
+  auto bin = dynamic_cast<const IndexedBinary *>(rhs);
+  if (!bin || bin->op != '*')
+    return false;
+  const IndexedExpr *other = nullptr;
+  double coeff = 0.0;
+  if (auto num = dynamic_cast<const IndexedNumber *>(bin->lhs.get())) {
+    coeff = num->value;
+    other = bin->rhs.get();
+  } else if (auto num = dynamic_cast<const IndexedNumber *>(bin->rhs.get())) {
+    coeff = num->value;
+    other = bin->lhs.get();
+  }
+  if (coeff == -1.0 && other)
+    return isSimpleIndexSwap(lhs, other);
+  return false;
+}
+
+bool SemanticAnalyzer::containsExplicitMetricAntisymmetry(
+    const IndexedExpr *expr) const {
+  if (!expr)
+    return false;
+  if (auto bin = dynamic_cast<const IndexedBinary *>(expr)) {
+    if (bin->op == '-') {
+      if (isSimpleIndexSwap(bin->lhs.get(), bin->rhs.get()))
+        return true;
+    }
+    if (bin->op == '+') {
+      if (isNegatedSwap(bin->lhs.get(), bin->rhs.get()) ||
+          isNegatedSwap(bin->rhs.get(), bin->lhs.get()))
+        return true;
+    }
+    return containsExplicitMetricAntisymmetry(bin->lhs.get()) ||
+           containsExplicitMetricAntisymmetry(bin->rhs.get());
+  }
+  if (auto call = dynamic_cast<const IndexedCall *>(expr)) {
+    for (const auto &arg : call->args)
+      if (containsExplicitMetricAntisymmetry(arg.get()))
+        return true;
+  }
+  return false;
+}
+
+void SemanticAnalyzer::enforceMetricFieldRules(const FieldDecl &field) {
+  if (field.isMetric) {
+    if (field.up != 0 || field.down != 2) {
+      throw std::runtime_error("metric field '" + field.name +
+                               "' must be covariant rank-2");
+    }
+    if (field.indices.size() != 2) {
+      throw std::runtime_error("metric field '" + field.name +
+                               "' must declare exactly two indices");
+    }
+    metricFieldCount++;
+  } else if (field.isInverseMetric) {
+    if (field.up != 2 || field.down != 0) {
+      throw std::runtime_error("inverse_metric field '" + field.name +
+                               "' must be contravariant rank-2");
+    }
+    if (field.indices.size() != 2) {
+      throw std::runtime_error("inverse_metric field '" + field.name +
+                               "' must declare exactly two indices");
+    }
+    inverseMetricFieldCount++;
+  }
+}
+
 std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
   if (auto n = dynamic_cast<const NumberExpr *>(e))
     return std::make_unique<IndexedNumber>(n->value);
@@ -87,6 +170,7 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
     out->up = fd->up;
     out->down = fd->down;
 
+    size_t pos = 0;
     for (auto &idx : iv->indices) {
       if (!coordIndex.count(idx)) {
         validateSpatialIndex(idx);
@@ -95,6 +179,9 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       int off = resolveIndex(idx);
       out->tensorIndices.push_back(off);
       out->tensorIndexNames.push_back(idx);
+      bool isUp = pos < static_cast<size_t>(fd->up);
+      out->tensorIndexIsUp.push_back(isUp);
+      ++pos;
     }
     return out;
   }
@@ -162,7 +249,15 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
   for (const auto &f : prog.fields) {
     if (fields.count(f.name))
       throw std::runtime_error("Field redeclared: " + f.name);
+    enforceMetricFieldRules(f);
     fields[f.name] = &f;
+  }
+
+  if (metricFieldCount > 0 && inverseMetricFieldCount == 0) {
+    std::cerr << "[Tensorium] warning: inverse_metric field is missing while metrics are declared\n";
+  }
+  if (inverseMetricFieldCount > 0 && metricFieldCount == 0) {
+    std::cerr << "[Tensorium] warning: metric field is missing while inverse_metric fields are declared\n";
   }
 
   for (const auto &m : prog.metrics) {
@@ -274,9 +369,19 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
     ie.indices = eq.indices;
     ie.rhs = transformExpr(eq.rhs.get());
 
+    if (fd->isMetric || fd->isInverseMetric) {
+      if (containsExplicitMetricAntisymmetry(ie.rhs.get())) {
+        throw std::runtime_error("metric field '" + fd->name +
+                                 "' assignments must be symmetric");
+      }
+    }
+
     TensorType lhsType = {fd->up, fd->down};
     checker.checkAssignmentVariance(lhsType, ie.indices, ie.rhs.get());
     checker.infer(ie.rhs.get());
+    ie.rhs->inferredType.kind = fd->kind;
+    ie.rhs->inferredType.up = fd->up;
+    ie.rhs->inferredType.down = fd->down;
 
     out.equations.push_back(std::move(ie));
   }

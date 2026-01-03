@@ -90,6 +90,8 @@ Token Lexer::next() {
       return {TokenType::KwSpacetime, t, line, col};
     if (t == "metric")
       return {TokenType::KwMetric, t, line, col};
+    if (t == "inverse_metric")
+      return {TokenType::KwInverseMetric, t, line, col};
     if (t == "evolution")
       return {TokenType::KwEvolution, t, line, col};
     if (t == "dt")

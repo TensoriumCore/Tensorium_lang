@@ -1,0 +1,16 @@
+field metric g[i]
+field scalar phi
+
+simulation {
+  dimension = 1
+  resolution = [4]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+}
+
+evolution BadMetric {
+  dt phi = phi
+}

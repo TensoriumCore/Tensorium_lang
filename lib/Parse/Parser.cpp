@@ -281,6 +281,12 @@ FieldDecl Parser::parseFieldDecl() {
   } else if (cur.type == TokenType::KwConTensor4) {
     k = TensorKind::ConTensor4;
     u = 4;
+  } else if (cur.type == TokenType::KwMetric) {
+    k = TensorKind::Metric;
+    d = 2;
+  } else if (cur.type == TokenType::KwInverseMetric) {
+    k = TensorKind::InverseMetric;
+    u = 2;
   } else {
     syntaxError("Unknown field type '" + cur.text + "'");
   }
@@ -293,6 +299,8 @@ FieldDecl Parser::parseFieldDecl() {
   f.kind = k;
   f.up = u;
   f.down = d;
+  f.isMetric = (k == TensorKind::Metric);
+  f.isInverseMetric = (k == TensorKind::InverseMetric);
   f.name = cur.text;
   advance();
   if (cur.type == TokenType::LBracket) {

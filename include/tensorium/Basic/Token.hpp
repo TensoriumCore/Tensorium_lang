@@ -41,6 +41,7 @@ enum class TokenType {
   KwConTensor3,
   KwCovTensor4,
   KwConTensor4,
+  KwInverseMetric,
   KwEq,
   KwEvolution,
   KwDt,

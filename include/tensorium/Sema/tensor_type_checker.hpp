@@ -1,6 +1,8 @@
 #pragma once
 #include "tensorium/AST/AST.hpp"
 #include "tensorium/AST/IndexedAST.hpp"
+#include <algorithm>
+#include <array>
 #include <stdexcept>
 #include <string>
 
@@ -19,6 +21,11 @@ struct TensorType {
 };
 
 class TensorTypeChecker {
+  struct IndexVarianceInfo {
+    int contravariant = 0;
+    int covariant = 0;
+    bool metricCoupling = false;
+  };
   static TensorKind deduceKind(int up, int down) {
     if (up == 0 && down == 0)
       return TensorKind::Scalar;
@@ -158,6 +165,47 @@ class TensorTypeChecker {
     }
   }
 
+  void collectIndexVariance(const IndexedExpr *e,
+                            std::array<IndexVarianceInfo, 256> &info) const {
+    if (!e)
+      return;
+
+    if (auto v = dynamic_cast<const IndexedVar *>(e)) {
+      for (size_t i = 0; i < v->tensorIndexNames.size(); ++i) {
+        const auto &name = v->tensorIndexNames[i];
+        if (name.empty())
+          continue;
+        char c = name[0];
+        if (!isTensorIndexChar(c))
+          continue;
+        auto &entry = info[(unsigned char)c];
+        bool isUp = false;
+        if (i < v->tensorIndexIsUp.size())
+          isUp = v->tensorIndexIsUp[i];
+        if (isUp)
+          entry.contravariant += 1;
+        else
+          entry.covariant += 1;
+        if (v->tensorKind == TensorKind::Metric ||
+            v->tensorKind == TensorKind::InverseMetric)
+          entry.metricCoupling = true;
+      }
+      return;
+    }
+
+    if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
+      collectIndexVariance(b->lhs.get(), info);
+      collectIndexVariance(b->rhs.get(), info);
+      return;
+    }
+
+    if (auto c = dynamic_cast<const IndexedCall *>(e)) {
+      for (const auto &arg : c->args)
+        collectIndexVariance(arg.get(), info);
+      return;
+    }
+  }
+
   void collectAdditiveTerms(const IndexedExpr *e,
                             std::vector<const IndexedExpr *> &out) const {
     if (!e)
@@ -251,6 +299,12 @@ public:
         break;
       case TensorKind::MixedTensor:
         t = {v->up, v->down};
+        break;
+      case TensorKind::Metric:
+        t = {0, 2};
+        break;
+      case TensorKind::InverseMetric:
+        t = {2, 0};
         break;
       }
       annotateType(e, t);
@@ -426,7 +480,6 @@ public:
                                const std::vector<std::string> &lhsIndexNames,
                                const IndexedExpr *rhs) const {
     TensorType rhsRaw = infer(rhs);
-
     bool lhsSet[256] = {false};
     for (const auto &nm : lhsIndexNames) {
       if (nm.empty())
@@ -443,6 +496,8 @@ public:
     for (const IndexedExpr *t : terms) {
       int counts[256] = {0};
       collectIndexCounts(t, counts);
+      std::array<IndexVarianceInfo, 256> variance{};
+      collectIndexVariance(t, variance);
 
       for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
         int c = counts[(unsigned char)idx];
@@ -468,14 +523,22 @@ public:
             throw std::runtime_error(std::string("Free index '") + idx +
                                      "' appears only in RHS and not LHS.");
           }
+          if (c == 2) {
+            const auto &info = variance[(unsigned char)idx];
+            bool mixedVariance =
+                (info.contravariant > 0 && info.covariant > 0);
+            if (!mixedVariance && !info.metricCoupling) {
+              throw std::runtime_error(std::string("Implicit contraction of index '") +
+                                       idx +
+                                       "' requires explicit metric or inverse metric");
+            }
+          }
         }
       }
+
     }
 
-    // Variance/type check: rely on infer(rhs) which already accounts for
-    // contract() and derivative arity rules.
     TensorType rhsEff = rhsRaw;
-
     if (!lhs.sameVariance(rhsEff)) {
       throw std::runtime_error(
           "tensor assignment mismatch: LHS(" + std::to_string(lhs.up) + "," +

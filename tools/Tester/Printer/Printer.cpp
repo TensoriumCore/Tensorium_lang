@@ -26,8 +26,26 @@ void printField(const FieldDecl &f) {
   case TensorKind::ConTensor2:
     std::cout << "con_tensor2 ";
     break;
+  case TensorKind::CovTensor3:
+    std::cout << "cov_tensor3 ";
+    break;
+  case TensorKind::ConTensor3:
+    std::cout << "con_tensor3 ";
+    break;
+  case TensorKind::CovTensor4:
+    std::cout << "cov_tensor4 ";
+    break;
+  case TensorKind::ConTensor4:
+    std::cout << "con_tensor4 ";
+    break;
   case TensorKind::MixedTensor:
     std::cout << "mixed_tensor ";
+    break;
+  case TensorKind::Metric:
+    std::cout << "metric ";
+    break;
+  case TensorKind::InverseMetric:
+    std::cout << "inverse_metric ";
     break;
   }
   std::cout << f.name << "  (up=" << f.up << ", down=" << f.down << ")";

@@ -23,11 +23,17 @@ class SemanticAnalyzer {
   std::unordered_map<std::string, int> indexUseCount;
   std::unordered_set<std::string> lhsIndices;
   bool simulationMissing = false;
+  int metricFieldCount = 0;
+  int inverseMetricFieldCount = 0;
 
   void validateSpatialIndex(const std::string &idx);
   int resolveIndex(const std::string &name);
   std::unique_ptr<IndexedExpr> transformExpr(const Expr *e);
   void validateSimulation(const SimulationConfig &sim);
+  void enforceMetricFieldRules(const FieldDecl &field);
+  bool containsExplicitMetricAntisymmetry(const IndexedExpr *expr) const;
+  bool isSimpleIndexSwap(const IndexedExpr *lhs, const IndexedExpr *rhs) const;
+  bool isNegatedSwap(const IndexedExpr *lhs, const IndexedExpr *rhs) const;
 
 public:
   explicit SemanticAnalyzer(const Program &p,

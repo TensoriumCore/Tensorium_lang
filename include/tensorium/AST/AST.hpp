@@ -16,7 +16,9 @@ enum class TensorKind {
   ConTensor3,
   ConTensor4,
   CovTensor4,
-  MixedTensor
+  MixedTensor,
+  Metric,
+  InverseMetric
 };
 
 struct NumberExpr;
@@ -110,6 +112,8 @@ struct FieldDecl {
   std::vector<std::string> indices;
   int up = 0;
   int down = 0;
+  bool isMetric = false;
+  bool isInverseMetric = false;
 };
 
 struct MetricDecl {

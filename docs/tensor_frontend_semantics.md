@@ -171,6 +171,36 @@ respect variance, and implicit contractions remove the repeated `k`.
 These cases are covered by `tests/52_error_tensor_add_variance.tn`,
 `tests/53_error_contract_free_index.tn`, and `tests/54_error_dt_assign_rank.tn`.
 
+## Metrics (v1)
+
+Metric-aware fields introduce explicit raising/lowering semantics:
+
+```
+field metric gamma[i,j]
+field inverse_metric gammaU[i,j]
+```
+
+* `metric` fields are covariant rank-2 tensors and must declare exactly two
+  indices. `inverse_metric` fields are contravariant rank-2 tensors with two
+  indices. Any other shape triggers a front-end error
+  (`tests/57_error_metric_rank.tn`).
+* Assignments to metric or inverse metric fields must remain symmetric. Simple
+  antisymmetric patterns such as `gamma[i,j] - gamma[j,i]` or
+  `gamma[i,j] + (-1)*gamma[j,i]` are rejected.
+* Implicit scalar contractions that reuse an index twice **without** mixing
+  covariant/contravariant slots now require an explicit metric factor. For
+  example `v[i] * v[i]` is illegal; the correct form is
+  `gamma[i,j] * v[i] * v[j]`. This rule is enforced by
+  `tests/55_error_implicit_contraction.tn`.
+* Explicit metrics enable controlled raising/lowering: expressions such as
+  `gammaU[i,j] * v[j]` or `gamma[i,j] * w[j]` are valid and covered by
+  `tests/56_metric_decl_ok.tn`.
+* Programs that declare only metrics or only inverse metrics receive a warning,
+  encouraging authors to provide the matching counterpart.
+
+Symmetry detection currently targets the most common antisymmetric forms; more
+advanced validation will be added in future revisions.
+
 ## Invariants Before MLIRGen
 
 After semantic analysis (and before MLIR generation), the following invariants

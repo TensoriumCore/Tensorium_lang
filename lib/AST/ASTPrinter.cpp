@@ -89,6 +89,12 @@ void printProgram(const Program &prog) {
       case TensorKind::MixedTensor:
         std::cout << "mixed_tensor(up=" << t.up << ",down=" << t.down << ")";
         return;
+      case TensorKind::Metric:
+        std::cout << "metric";
+        return;
+      case TensorKind::InverseMetric:
+        std::cout << "inverse_metric";
+        return;
       }
     };
     for (const auto &ext : prog.externs) {
@@ -138,6 +144,12 @@ void printProgram(const Program &prog) {
         break;
       case TensorKind::MixedTensor:
         std::cout << "mixed_tensor";
+        break;
+      case TensorKind::Metric:
+        std::cout << "metric";
+        break;
+      case TensorKind::InverseMetric:
+        std::cout << "inverse_metric";
         break;
       }
 

@@ -29,6 +29,7 @@ struct IndexedVar : IndexedExpr {
 
   std::vector<int> tensorIndices;
   std::vector<std::string> tensorIndexNames;
+  std::vector<bool> tensorIndexIsUp;
 
   IndexedVar(std::string n, IndexedVarKind k, int cidx = -1)
       : name(std::move(n)), kind(k), coordIndex(cidx) {}

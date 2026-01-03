@@ -1,0 +1,23 @@
+field metric gamma[i,j]
+field inverse_metric gammaU[i,j]
+field vector v[i]
+
+simulation {
+  dimension = 2
+  resolution = [8, 8]
+
+  time {
+    dt = 0.05
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+evolution MetricFlow {
+  dt v[i] = contract(gammaU[i,j] * v[j])
+}
