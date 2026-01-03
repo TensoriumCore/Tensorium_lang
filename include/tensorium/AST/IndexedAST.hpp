@@ -9,6 +9,7 @@ namespace tensorium {
 
 struct IndexedExpr {
   virtual ~IndexedExpr() = default;
+  TensorTypeDesc inferredType{TensorKind::Scalar, 0, 0};
 };
 
 struct IndexedNumber : IndexedExpr {
@@ -47,6 +48,8 @@ struct IndexedCall : IndexedExpr {
   std::vector<std::unique_ptr<IndexedExpr>> args;
   bool isExtern = false;
   size_t declaredArity = 0;
+  TensorTypeDesc returnType;
+  std::vector<TensorTypeDesc> paramTypes;
 };
 
 struct IndexedAssignment {

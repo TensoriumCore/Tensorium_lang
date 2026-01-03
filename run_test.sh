@@ -46,6 +46,11 @@ VALID_TESTS=(
   tests/31_temp_valid_scalar.tn
 )
 
+EXTERN_TESTS=(
+  tests/34_executable_extern_declared.tn
+  tests/39_valid_extern_call.tn
+)
+
 ERROR_TESTS=(
   tests/08_error_invalid_index.tn
   tests/09_error_bad_resolution.tn
@@ -60,15 +65,26 @@ ERROR_TESTS=(
   tests/35_executable_extern_missing.tn
   tests/32_temp_invalid_tensor_rhs.tn
   tests/33_temp_use_before_def.tn
+  tests/38_error_extern_mixedtensor_duplicate_attr.tn
+  tests/40_error_extern_arity.tn
+  tests/41_error_extern_variance.tn
+  tests/43_error_extern_tensor_return_exec.tn
 )
 
 SYMBOLIC_VALID_TESTS=(
   tests/28_symbolic_unknown_scalar_call_ok.tn
   tests/36_symbolic_unknown_scalar_call_ok.tn
+  tests/37_valid_extern_tensor_type.tn
+  tests/42_symbolic_extern_tensor_return.tn
 )
 
 SYMBOLIC_ERROR_TESTS=(
   tests/30_symbolic_call_nonscalar_arg_error.tn
+)
+
+SYMBOLIC_MLIR_TESTS=()
+SYMBOLIC_TENSOR_FAIL_TESTS=(
+  tests/44_symbolic_extern_tensor_mlir.tn
 )
 
 echo "=============================="
@@ -81,30 +97,36 @@ for f in "${VALID_TESTS[@]}"; do
     > "$OUT/$(basename "$f").mlir"
 done
 
-EXTERN_TEST=tests/34_executable_extern_declared.tn
+PRIMARY_MLIR="$OUT/$(basename ${VALID_TESTS[0]}).mlir"
+if ! grep -q "tensorium.field" "$PRIMARY_MLIR"; then
+  echo "ERROR: expected tensorium.field types in $PRIMARY_MLIR"
+  exit 1
+fi
 
 echo
 echo "=============================="
 echo " RUN EXTERN DECL TESTS"
 echo "=============================="
 
-echo "[OK EXPECTED - NO MLIR] $EXTERN_TEST"
-"$BIN" "$EXTERN_TEST" > /dev/null
-
-echo "[FAIL EXPECTED - MLIR EXTERN LOWERING] $EXTERN_TEST"
-TMP_ERR=$(mktemp)
-if "$BIN" "${PIPELINE_BASE[@]}" "$EXTERN_TEST" > "$TMP_ERR" 2>&1; then
-  echo "ERROR: $EXTERN_TEST was expected to fail during MLIR emission"
+for f in "${EXTERN_TESTS[@]}"; do
+  echo "[OK EXPECTED - NO MLIR] $f"
+  "$BIN" "$f" > /dev/null
+  echo "[FAIL EXPECTED - MLIR EXTERN LOWERING] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" "${PIPELINE_BASE[@]}" "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail during MLIR emission"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "extern function" "$TMP_ERR"; then
+    echo "ERROR: expected extern lowering error message"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
   rm -f "$TMP_ERR"
-  exit 1
-fi
-if ! grep -q "extern function 'foo' lowering is not implemented yet" "$TMP_ERR"; then
-  echo "ERROR: expected extern lowering error message, got:"
-  cat "$TMP_ERR"
-  rm -f "$TMP_ERR"
-  exit 1
-fi
-rm -f "$TMP_ERR"
+done
 
 echo
 echo "=============================="
@@ -129,12 +151,66 @@ for f in "${SYMBOLIC_VALID_TESTS[@]}"; do
   "$BIN" --symbolic "$f" > /dev/null
 done
 
+echo
+echo "=============================="
+echo " RUN TYPE ANNOTATION TEST"
+echo "=============================="
+
+TYPE_TEST=tests/45_type_annotation.tn
+TYPE_OUT="$OUT/type_annotation.log"
+"$BIN" --symbolic --dump-indexed --dump-backend-expr "$TYPE_TEST" \
+  > "$TYPE_OUT"
+if ! grep -F -q "v[field;i][u=1,d=0]" "$TYPE_OUT"; then
+  echo "ERROR: missing indexed type annotation in $TYPE_TEST"
+  exit 1
+fi
+if ! grep -F -q "phi[field][u=0,d=0]" "$TYPE_OUT"; then
+  echo "ERROR: missing scalar type annotation in $TYPE_TEST"
+  exit 1
+fi
+
 for f in "${SYMBOLIC_ERROR_TESTS[@]}"; do
   echo "[SYMBOLIC FAIL EXPECTED] $f"
   if "$BIN" --symbolic "$f" > /dev/null 2>&1; then
     echo "ERROR: $f was expected to fail but passed"
     exit 1
   fi
+done
+
+if ((${#SYMBOLIC_MLIR_TESTS[@]})); then
+  echo
+  echo "=============================="
+  echo " RUN SYMBOLIC MLIR TESTS"
+  echo "=============================="
+
+  for f in "${SYMBOLIC_MLIR_TESTS[@]}"; do
+    echo "[SYMBOLIC MLIR EXPECTED] $f"
+    "$BIN" --symbolic --dump-mlir "$f" \
+      > "$OUT/$(basename "$f").symbolic.mlir"
+  done
+fi
+
+echo
+echo "=============================="
+echo " RUN SYMBOLIC TENSOR FAIL TESTS"
+echo "=============================="
+
+for f in "${SYMBOLIC_TENSOR_FAIL_TESTS[@]}"; do
+  echo "[SYMBOLIC MLIR FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --symbolic --dump-mlir "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail during MLIR emission"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "extern function" "$TMP_ERR"; then
+    echo "ERROR: expected extern tensor lowering error, got:"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
 done
 
 echo

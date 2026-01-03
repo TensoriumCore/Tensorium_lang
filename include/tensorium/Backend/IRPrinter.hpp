@@ -11,10 +11,16 @@ inline void printExprIR(const ExprIR *e) {
     return;
   }
 
+  auto printType = [&]() {
+    std::cout << "[u=" << e->exprType.up << ",d=" << e->exprType.down
+              << "]";
+  };
+
   switch (e->kind) {
   case ExprIR::Kind::Number: {
     auto *n = static_cast<const NumberIR *>(e);
     std::cout << n->value;
+    printType();
     return;
   }
   case ExprIR::Kind::Var: {
@@ -35,6 +41,7 @@ inline void printExprIR(const ExprIR *e) {
       break;
     }
     std::cout << "]";
+    printType();
     if (!v->tensorIndexNames.empty()) {
       std::cout << "{";
       for (size_t i = 0; i < v->tensorIndexNames.size(); ++i) {
@@ -53,6 +60,7 @@ inline void printExprIR(const ExprIR *e) {
     std::cout << " " << b->op << " ";
     printExprIR(b->rhs.get());
     std::cout << ")";
+    printType();
     return;
   }
   case ExprIR::Kind::Call: {
@@ -64,6 +72,7 @@ inline void printExprIR(const ExprIR *e) {
         std::cout << ", ";
     }
     std::cout << ")";
+    printType();
     return;
   }
   }

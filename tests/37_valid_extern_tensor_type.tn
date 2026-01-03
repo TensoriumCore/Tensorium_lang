@@ -1,0 +1,23 @@
+extern mixed_tensor(up=1,down=2) compute_tensor(vector, cov_tensor2)
+
+field scalar phi
+
+simulation {
+  dimension = 1
+  resolution = [4]
+
+  time {
+    dt = 0.1
+    integrator = rk4
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution ValidExternTensorType {
+  dt phi = 0
+}

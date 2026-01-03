@@ -14,13 +14,13 @@ namespace mlir {
 enum class Variance : uint8_t { Scalar, Contravariant, Covariant, Mixed };
 
 struct FieldTypeStorage : public ::mlir::TypeStorage {
-  using KeyTy = std::tuple<::mlir::Type, unsigned, Variance>;
+  using KeyTy = std::tuple<::mlir::Type, unsigned, unsigned>;
 
-  FieldTypeStorage(::mlir::Type elementType, unsigned rank, Variance variance)
-      : elementType(elementType), rank(rank), variance(variance) {}
+  FieldTypeStorage(::mlir::Type elementType, unsigned up, unsigned down)
+      : elementType(elementType), up(up), down(down) {}
 
   bool operator==(const KeyTy &key) const {
-    return key == KeyTy(elementType, rank, variance);
+    return key == KeyTy(elementType, up, down);
   }
 
   static FieldTypeStorage *construct(::mlir::TypeStorageAllocator &alloc,
@@ -30,8 +30,8 @@ struct FieldTypeStorage : public ::mlir::TypeStorage {
   }
 
   ::mlir::Type elementType;
-  unsigned rank;
-  Variance variance;
+  unsigned up;
+  unsigned down;
 };
 
 class FieldType
@@ -42,10 +42,12 @@ public:
   static constexpr ::llvm::StringLiteral name = "tensorium.field";
 
   static FieldType get(::mlir::MLIRContext *ctx, ::mlir::Type elementType,
-                       unsigned rank, Variance variance);
+                       unsigned up, unsigned down);
 
   ::mlir::Type getElementType() const;
   unsigned getRank() const;
+  unsigned getUp() const;
+  unsigned getDown() const;
   Variance getVariance() const;
 };
 

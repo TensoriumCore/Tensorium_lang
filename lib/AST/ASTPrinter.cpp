@@ -57,11 +57,47 @@ void printProgram(const Program &prog) {
   std::cout << "=== Program AST ===\n";
   if (!prog.externs.empty()) {
     std::cout << "\nExtern Functions:\n";
-    for (const auto &ext : prog.externs) {
-      std::cout << "  extern scalar " << ext.name << "(";
-      for (size_t i = 0; i < ext.paramCount; ++i) {
+    auto printTensorType = [](const TensorTypeDesc &t) {
+      switch (t.kind) {
+      case TensorKind::Scalar:
         std::cout << "scalar";
-        if (i + 1 < ext.paramCount)
+        return;
+      case TensorKind::Vector:
+        std::cout << "vector";
+        return;
+      case TensorKind::Covector:
+        std::cout << "covector";
+        return;
+      case TensorKind::CovTensor2:
+        std::cout << "cov_tensor2";
+        return;
+      case TensorKind::ConTensor2:
+        std::cout << "con_tensor2";
+        return;
+      case TensorKind::CovTensor3:
+        std::cout << "cov_tensor3";
+        return;
+      case TensorKind::ConTensor3:
+        std::cout << "con_tensor3";
+        return;
+      case TensorKind::CovTensor4:
+        std::cout << "cov_tensor4";
+        return;
+      case TensorKind::ConTensor4:
+        std::cout << "con_tensor4";
+        return;
+      case TensorKind::MixedTensor:
+        std::cout << "mixed_tensor(up=" << t.up << ",down=" << t.down << ")";
+        return;
+      }
+    };
+    for (const auto &ext : prog.externs) {
+      std::cout << "  extern ";
+      printTensorType(ext.returnType);
+      std::cout << " " << ext.name << "(";
+      for (size_t i = 0; i < ext.params.size(); ++i) {
+        printTensorType(ext.params[i]);
+        if (i + 1 < ext.params.size())
           std::cout << ", ";
       }
       std::cout << ")\n";

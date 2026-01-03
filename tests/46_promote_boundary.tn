@@ -1,0 +1,22 @@
+field scalar phi
+field scalar psi
+
+simulation {
+  dimension = 1
+  resolution = [4]
+
+  time {
+    dt = 0.05
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution PromoteBridge {
+  dt psi = phi
+}

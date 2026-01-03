@@ -7,6 +7,14 @@
 
 namespace tensorium {
 
+static TensorType tensorTypeFromDesc(const TensorTypeDesc &desc) {
+  return TensorType{desc.up, desc.down};
+}
+
+static bool isScalarDesc(const TensorTypeDesc &desc) {
+  return desc.up == 0 && desc.down == 0 && desc.kind == TensorKind::Scalar;
+}
+
 void SemanticAnalyzer::validateSpatialIndex(const std::string &idx) {
   if (!SPATIAL_INDICES.count(idx)) {
     throw std::runtime_error("Invalid tensor index '" + idx +
@@ -92,33 +100,47 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
   }
 
   if (auto c = dynamic_cast<const CallExpr *>(e)) {
-    bool isExternCall = false;
-    size_t externArity = 0;
-    if (auto itExt = externScalarFuncs.find(c->callee);
-        itExt != externScalarFuncs.end()) {
-      isExternCall = true;
-      externArity = itExt->second;
-      if (c->args.size() != externArity) {
+    const ExternDecl *externDecl = nullptr;
+    if (auto itExt = externSignatures.find(c->callee);
+        itExt != externSignatures.end()) {
+      externDecl = itExt->second;
+      if (c->args.size() != externDecl->params.size()) {
         throw std::runtime_error("extern function '" + c->callee +
                                  "' expects " +
-                                 std::to_string(externArity) +
+                                 std::to_string(externDecl->params.size()) +
                                  " arguments, got " +
                                  std::to_string(c->args.size()));
       }
     }
 
     if (mode == CompilationMode::Executable &&
-        !isExecutableBuiltin(c->callee) && !isExternCall) {
+        !isExecutableBuiltin(c->callee) && !externDecl) {
       throw std::runtime_error(
           "executable mode requires implementation for function '" +
           c->callee + "'");
     }
     auto out = std::make_unique<IndexedCall>();
     out->callee = c->callee;
-    out->isExtern = isExternCall;
-    out->declaredArity = externArity;
-    for (auto &arg : c->args)
-      out->args.push_back(transformExpr(arg.get()));
+    out->isExtern = externDecl != nullptr;
+    out->declaredArity = c->args.size();
+    if (externDecl) {
+      out->returnType = externDecl->returnType;
+      out->paramTypes = externDecl->params;
+    }
+    TensorTypeChecker argChecker;
+    for (size_t i = 0; i < c->args.size(); ++i) {
+      auto transformed = transformExpr(c->args[i].get());
+      if (externDecl) {
+        TensorType actual = argChecker.infer(transformed.get());
+        TensorType expected = tensorTypeFromDesc(externDecl->params[i]);
+        if (!actual.sameVariance(expected)) {
+          throw std::runtime_error("extern function '" + c->callee +
+                                   "' argument " + std::to_string(i + 1) +
+                                   " variance mismatch");
+        }
+      }
+      out->args.push_back(std::move(transformed));
+    }
     return out;
   }
 
@@ -128,8 +150,12 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
 SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
     : prog(p), mode(m) {
   for (const auto &ext : prog.externs) {
-    if (!externScalarFuncs.emplace(ext.name, ext.paramCount).second) {
+    if (!externSignatures.emplace(ext.name, &ext).second) {
       throw std::runtime_error("Extern function redeclared: " + ext.name);
+    }
+    if (mode == CompilationMode::Executable && !isScalarDesc(ext.returnType)) {
+      throw std::runtime_error("executable mode extern '" + ext.name +
+                               "' must return scalar");
     }
   }
 
@@ -193,6 +219,7 @@ IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
 
     a.rhs = transformExpr(entry.rhs.get());
     checker.checkMetricAssignment(a);
+    checker.infer(a.rhs.get());
     out.assignments.push_back(std::move(a));
   }
 
@@ -249,6 +276,7 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
 
     TensorType lhsType = {fd->up, fd->down};
     checker.checkAssignmentVariance(lhsType, ie.indices, ie.rhs.get());
+    checker.infer(ie.rhs.get());
 
     out.equations.push_back(std::move(ie));
   }
@@ -257,6 +285,7 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
     auto rhs = transformExpr(tmp.rhs.get());
     TensorType lhsType{0, 0};
     checker.checkAssignmentVariance(lhsType, tmp.lhs.indices, rhs.get());
+    checker.infer(rhs.get());
 
     IndexedAssignment ia;
     ia.tensor = tmp.lhs.base;

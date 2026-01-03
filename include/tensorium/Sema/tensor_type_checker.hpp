@@ -19,6 +19,39 @@ struct TensorType {
 };
 
 class TensorTypeChecker {
+  static TensorKind deduceKind(int up, int down) {
+    if (up == 0 && down == 0)
+      return TensorKind::Scalar;
+    if (up == 1 && down == 0)
+      return TensorKind::Vector;
+    if (up == 0 && down == 1)
+      return TensorKind::Covector;
+    if (up == 0 && down == 2)
+      return TensorKind::CovTensor2;
+    if (up == 2 && down == 0)
+      return TensorKind::ConTensor2;
+    if (up == 0 && down == 3)
+      return TensorKind::CovTensor3;
+    if (up == 3 && down == 0)
+      return TensorKind::ConTensor3;
+    if (up == 0 && down == 4)
+      return TensorKind::CovTensor4;
+    if (up == 4 && down == 0)
+      return TensorKind::ConTensor4;
+    return TensorKind::MixedTensor;
+  }
+
+  static void annotateType(const IndexedExpr *expr, const TensorType &tt) {
+    auto *mut = const_cast<IndexedExpr *>(expr);
+    mut->inferredType.kind = deduceKind(tt.up, tt.down);
+    mut->inferredType.up = tt.up;
+    mut->inferredType.down = tt.down;
+  }
+
+  TensorType tensorTypeFromDesc(const TensorTypeDesc &desc) const {
+    return TensorType{desc.up, desc.down};
+  }
+
   bool isPartialDerivative(const std::string &name) const {
     if (name.size() != 3)
       return false;
@@ -167,8 +200,11 @@ public:
     if (!e)
       throw std::runtime_error("null expression in tensor type inference");
 
-    if (dynamic_cast<const IndexedNumber *>(e))
-      return TensorType{0, 0};
+    if (dynamic_cast<const IndexedNumber *>(e)) {
+      TensorType t{0, 0};
+      annotateType(e, t);
+      return t;
+    }
 
     if (auto v = dynamic_cast<const IndexedVar *>(e)) {
       if (!allowRepeated) {
@@ -184,28 +220,41 @@ public:
         }
       }
 
+      TensorType t;
       switch (v->tensorKind) {
       case TensorKind::Scalar:
-        return TensorType{0, 0};
+        t = {0, 0};
+        break;
       case TensorKind::Vector:
-        return TensorType{1, 0};
+        t = {1, 0};
+        break;
       case TensorKind::Covector:
-        return TensorType{0, 1};
+        t = {0, 1};
+        break;
       case TensorKind::CovTensor2:
-        return TensorType{0, 2};
+        t = {0, 2};
+        break;
       case TensorKind::ConTensor2:
-        return TensorType{2, 0};
+        t = {2, 0};
+        break;
       case TensorKind::CovTensor3:
-        return TensorType{0, 3};
+        t = {0, 3};
+        break;
       case TensorKind::ConTensor3:
-        return TensorType{3, 0};
+        t = {3, 0};
+        break;
       case TensorKind::CovTensor4:
-        return TensorType{0, 4};
+        t = {0, 4};
+        break;
       case TensorKind::ConTensor4:
-        return TensorType{4, 0};
+        t = {4, 0};
+        break;
       case TensorKind::MixedTensor:
-        return TensorType{v->up, v->down};
+        t = {v->up, v->down};
+        break;
       }
+      annotateType(e, t);
+      return t;
     }
 
     if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
@@ -216,19 +265,25 @@ public:
         if (!lt.sameVariance(rt))
           throw std::runtime_error(
               "tensor addition/subtraction requires identical variance");
+        annotateType(e, lt);
         return lt;
       }
 
-      if (b->op == '*')
-        return TensorType{lt.up + rt.up, lt.down + rt.down};
+      if (b->op == '*') {
+        TensorType res{lt.up + rt.up, lt.down + rt.down};
+        annotateType(e, res);
+        return res;
+      }
 
       if (b->op == '/') {
         if (!rt.isScalar())
           throw std::runtime_error(
               "division by non-scalar tensor is not allowed");
+        annotateType(e, lt);
         return lt;
       }
 
+      annotateType(e, lt);
       return lt;
     }
 
@@ -269,11 +324,17 @@ public:
           throw std::runtime_error(
               "contract() expects at least one repeated index");
 
-        if (t.up == 0 && t.down > 0)
-          return TensorType{0, freeCount};
+        if (t.up == 0 && t.down > 0) {
+          TensorType res{0, freeCount};
+          annotateType(e, res);
+          return res;
+        }
 
-        if (t.down == 0 && t.up > 0)
-          return TensorType{freeCount, 0};
+        if (t.down == 0 && t.up > 0) {
+          TensorType res{freeCount, 0};
+          annotateType(e, res);
+          return res;
+        }
 
         int remove = 2 * contracted;
         int up = t.up;
@@ -292,14 +353,18 @@ public:
           throw std::runtime_error(
               "internal error: contract() could not remove requested rank");
 
-        return TensorType{up, down};
+        TensorType res{up, down};
+        annotateType(e, res);
+        return res;
       }
 
       if (isPartialDerivative(cal)) {
         if (call->args.size() != 1)
           throw std::runtime_error("d_* expects exactly 1 argument");
         TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
-        return TensorType{argT.up, argT.down + 1};
+        TensorType res{argT.up, argT.down + 1};
+        annotateType(e, res);
+        return res;
       }
 
       bool contra = false;
@@ -308,9 +373,10 @@ public:
         if (call->args.size() != 1)
           throw std::runtime_error("nabla expects exactly 1 argument");
         TensorType t = inferImpl(call->args[0].get(), allowRepeated);
-        if (contra)
-          return TensorType{t.up + 1, t.down};
-        return TensorType{t.up, t.down + 1};
+        TensorType res = contra ? TensorType{t.up + 1, t.down}
+                                : TensorType{t.up, t.down + 1};
+        annotateType(e, res);
+        return res;
       }
 
       if (cal == "laplacian") {
@@ -319,7 +385,25 @@ public:
         TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
         if (!argT.isScalar())
           throw std::runtime_error("laplacian() expects scalar argument");
-        return TensorType{0, 0};
+        TensorType res{0, 0};
+        annotateType(e, res);
+        return res;
+      }
+
+      if (call->isExtern) {
+        if (call->paramTypes.size() != call->args.size())
+          throw std::runtime_error("extern call parameter mismatch");
+        for (size_t i = 0; i < call->args.size(); ++i) {
+          TensorType expected = tensorTypeFromDesc(call->paramTypes[i]);
+          TensorType actual = inferImpl(call->args[i].get(), allowRepeated);
+          if (!actual.sameVariance(expected)) {
+            throw std::runtime_error("extern function '" + cal +
+                                     "' argument variance mismatch");
+          }
+        }
+        TensorType ret = tensorTypeFromDesc(call->returnType);
+        annotateType(e, ret);
+        return ret;
       }
 
       for (auto &arg : call->args) {
@@ -329,7 +413,9 @@ public:
                                    "' expects scalar argument");
       }
 
-      return TensorType{0, 0};
+      TensorType res{0, 0};
+      annotateType(e, res);
+      return res;
     }
 
     throw std::runtime_error("unsupported expression in tensor type inference");

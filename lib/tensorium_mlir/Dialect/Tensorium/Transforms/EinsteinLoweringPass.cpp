@@ -58,7 +58,8 @@ collectTensorRefsAndScalars(mlir::Value v,
 namespace tensorium::mlir {
 namespace {
 
-static llvm::SmallVector<std::string, 4> arrayAttrToStrings(ArrayAttr a) {
+[[maybe_unused]] static llvm::SmallVector<std::string, 4>
+arrayAttrToStrings(ArrayAttr a) {
   llvm::SmallVector<std::string, 4> out;
   if (!a)
     return out;
@@ -143,13 +144,16 @@ struct LowerContractToEinsum final
       auto specAttr =
           rewriter.getNamedAttr("spec", rewriter.getStringAttr(spec));
 
+      auto resultType = destField.getType();
       auto eins = rewriter.create<tensorium::mlir::EinsumOp>(
-          loc, rewriter.getF64Type(), inputs,
+          loc, resultType, inputs,
           llvm::ArrayRef<NamedAttribute>{specAttr});
 
       Value out = eins.getResult();
       for (Value s : scalars)
-        out = rewriter.create<tensorium::mlir::MulOp>(loc, out, s).getResult();
+        out = rewriter
+                  .create<tensorium::mlir::MulOp>(loc, resultType, out, s)
+                  .getResult();
 
       rewriter.create<tensorium::mlir::DtAssignOp>(loc, destField, out,
                                                    lhsIdxAttr);
@@ -249,13 +253,15 @@ struct LowerContractOp final : OpRewritePattern<tensorium::mlir::ContractOp> {
     for (auto *o : tensorRefs)
       inputs.push_back(o->getResult(0));
 
+    auto resultType = op.getResult().getType();
     auto eins = rewriter.create<tensorium::mlir::EinsumOp>(
-        op.getLoc(), rewriter.getF64Type(), inputs,
+        op.getLoc(), resultType, inputs,
         rewriter.getNamedAttr("spec", rewriter.getStringAttr(spec)));
 
     Value out = eins.getResult();
     for (Value s : scalars)
-      out = rewriter.create<tensorium::mlir::MulOp>(op.getLoc(), out, s)
+      out = rewriter
+                .create<tensorium::mlir::MulOp>(op.getLoc(), resultType, out, s)
                 .getResult();
 
     rewriter.replaceOp(op, out);

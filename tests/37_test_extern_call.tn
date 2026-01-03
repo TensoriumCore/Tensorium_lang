@@ -1,0 +1,7 @@
+extern cov_tensor2 ricci(cov_tensor2, cov_tensor2)
+
+    field scalar phi
+
+    evolution Test {
+      dt phi = 0
+    }

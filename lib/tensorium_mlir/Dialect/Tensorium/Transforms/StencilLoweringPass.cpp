@@ -35,6 +35,10 @@ static SmallVector<int64_t> makeOffsets(unsigned spatialDim, int dim,
   return off;
 }
 
+static FieldType getScalarFieldType(MLIRContext *ctx) {
+  return FieldType::get(ctx, Float64Type::get(ctx), 0, 0);
+}
+
 struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
   double dx;
   int order;
@@ -72,26 +76,30 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
     unsigned spatialDim = (unsigned)dimAttr.getInt();
 
     Location loc = op.getLoc();
-    Value sum = rewriter.create<ConstOp>(loc, rewriter.getF64Type(),
+    auto resultType = op.getType();
+    Value sum = rewriter.create<ConstOp>(loc, resultType,
                                          rewriter.getF64FloatAttr(0.0));
     for (const auto &pt : stencil) {
       auto offAttr =
           rewriter.getI64ArrayAttr(makeOffsets(spatialDim, dim, pt.offset));
-      Value val = rewriter.create<RefOp>(loc, op.getType(), refOp.getSource(),
+      Value val = rewriter.create<RefOp>(loc, input.getType(), refOp.getSource(),
                                          refOp.getKindAttr(),
                                          refOp.getIndicesAttr(), offAttr);
 
+      auto scalarTy = getScalarFieldType(rewriter.getContext());
       Value weight = rewriter.create<ConstOp>(
-          loc, rewriter.getF64Type(), rewriter.getF64FloatAttr(pt.weight));
-      Value term = rewriter.create<MulOp>(loc, val, weight);
+          loc, scalarTy, rewriter.getF64FloatAttr(pt.weight));
+      Value term =
+          rewriter.create<MulOp>(loc, input.getType(), val, weight);
 
-      sum = rewriter.create<AddOp>(loc, sum, term);
+      sum = rewriter.create<AddOp>(loc, resultType, sum, term);
     }
 
     double invDx = (dx > 1e-12) ? (1.0 / dx) : 1.0;
-    Value invDxVal = rewriter.create<ConstOp>(loc, rewriter.getF64Type(),
+    auto scalarTy = getScalarFieldType(rewriter.getContext());
+    Value invDxVal = rewriter.create<ConstOp>(loc, scalarTy,
                                               rewriter.getF64FloatAttr(invDx));
-    Value res = rewriter.create<MulOp>(loc, sum, invDxVal);
+    Value res = rewriter.create<MulOp>(loc, resultType, sum, invDxVal);
 
     rewriter.replaceOp(op, res);
     return success();

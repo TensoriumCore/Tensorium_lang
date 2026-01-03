@@ -30,6 +30,10 @@ static SmallVector<int64_t> makeOffsets(unsigned dim, int dir, int delta) {
   return off;
 }
 
+static FieldType getScalarFieldType(MLIRContext *ctx) {
+  return FieldType::get(ctx, Float64Type::get(ctx), 0, 0);
+}
+
 struct AddDissipation : public OpRewritePattern<DtAssignOp> {
   double strength;
   double dx;
@@ -99,34 +103,38 @@ struct AddDissipation : public OpRewritePattern<DtAssignOp> {
     double invDx = (dx > 1e-12) ? (1.0 / dx) : 1.0;
     double factor = strength * invDx * invDx * invDx * invDx * invDx;
 
+    auto fieldTy = currentRHS.getType();
+    auto scalarTy = getScalarFieldType(rewriter.getContext());
     Value dissipationTotal = rewriter.create<ConstOp>(
-        loc, rewriter.getF64Type(), rewriter.getF64FloatAttr(0.0));
+        loc, fieldTy, rewriter.getF64FloatAttr(0.0));
 
     for (unsigned dir = 0; dir < spatialDim; ++dir) {
-      Value dirSum = rewriter.create<ConstOp>(loc, rewriter.getF64Type(),
+      Value dirSum = rewriter.create<ConstOp>(loc, fieldTy,
                                               rewriter.getF64FloatAttr(0.0));
 
       for (const auto &pt : stencil) {
         auto offAttr =
             rewriter.getI64ArrayAttr(makeOffsets(spatialDim, dir, pt.offset));
 
-        Value val = rewriter.create<RefOp>(loc, rewriter.getF64Type(), field,
+        Value val = rewriter.create<RefOp>(loc, field.getType(), field,
                                            rewriter.getStringAttr("field"),
                                            tensorIndices, offAttr);
 
-        Value w = rewriter.create<ConstOp>(loc, rewriter.getF64Type(),
+        Value w = rewriter.create<ConstOp>(loc, scalarTy,
                                            rewriter.getF64FloatAttr(pt.weight));
-        Value term = rewriter.create<MulOp>(loc, val, w);
-        dirSum = rewriter.create<AddOp>(loc, dirSum, term);
+        Value term = rewriter.create<MulOp>(loc, fieldTy, val, w);
+        dirSum = rewriter.create<AddOp>(loc, fieldTy, dirSum, term);
       }
-      dissipationTotal = rewriter.create<AddOp>(loc, dissipationTotal, dirSum);
+      dissipationTotal =
+          rewriter.create<AddOp>(loc, fieldTy, dissipationTotal, dirSum);
     }
 
-    Value sigmaVal = rewriter.create<ConstOp>(loc, rewriter.getF64Type(),
+    Value sigmaVal = rewriter.create<ConstOp>(loc, scalarTy,
                                               rewriter.getF64FloatAttr(factor));
     Value dissipationScaled =
-        rewriter.create<MulOp>(loc, dissipationTotal, sigmaVal);
-    Value newRHS = rewriter.create<AddOp>(loc, currentRHS, dissipationScaled);
+        rewriter.create<MulOp>(loc, fieldTy, dissipationTotal, sigmaVal);
+    Value newRHS = rewriter.create<AddOp>(loc, fieldTy, currentRHS,
+                                          dissipationScaled);
 
     rewriter.modifyOpInPlace(op, [&] {
       op.setOperand(1, newRHS);

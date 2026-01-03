@@ -18,7 +18,7 @@ class SemanticAnalyzer {
   std::unordered_map<std::string, int> coordIndex;
   std::unordered_map<std::string, bool> locals;
   std::unordered_map<std::string, const FieldDecl *> fields;
-  std::unordered_map<std::string, size_t> externScalarFuncs;
+  std::unordered_map<std::string, const ExternDecl *> externSignatures;
   std::vector<FieldDecl> syntheticMetricFields;
   std::unordered_map<std::string, int> indexUseCount;
   std::unordered_set<std::string> lhsIndices;

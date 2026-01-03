@@ -101,5 +101,119 @@ void EinsumOp::print(OpAsmPrinter &p) {
 } // namespace mlir
 } // namespace tensorium
 
+using tensorium::mlir::FieldType;
+
+static LogicalResult requireFieldType(Value v, Operation *op,
+                                      StringRef what, FieldType &out) {
+  if (auto ty = mlir::dyn_cast<FieldType>(v.getType())) {
+    out = ty;
+    return success();
+  }
+  return op->emitOpError() << what << " must be tensorium.field";
+}
+
+LogicalResult tensorium::mlir::ConstOp::verify() {
+  FieldType type;
+  if (failed(requireFieldType(getResult(), *this, "result", type)))
+    return failure();
+  return success();
+}
+
+LogicalResult tensorium::mlir::RefOp::verify() {
+  FieldType srcTy, resTy;
+  if (failed(requireFieldType(getSource(), *this, "source", srcTy)) ||
+      failed(requireFieldType(getResult(), *this, "result", resTy)))
+    return failure();
+  if (srcTy != resTy)
+    return emitOpError("source/result types must match");
+  return success();
+}
+
+LogicalResult tensorium::mlir::AddOp::verify() {
+  FieldType lhsTy, rhsTy, resTy;
+  if (failed(requireFieldType(getLhs(), *this, "lhs", lhsTy)) ||
+      failed(requireFieldType(getRhs(), *this, "rhs", rhsTy)) ||
+      failed(requireFieldType(getRes(), *this, "result", resTy)))
+    return failure();
+  if (lhsTy != rhsTy || lhsTy != resTy)
+    return emitOpError("lhs, rhs, result must share identical tensor type");
+  return success();
+}
+
+LogicalResult tensorium::mlir::SubOp::verify() {
+  FieldType lhsTy, rhsTy, resTy;
+  if (failed(requireFieldType(getLhs(), *this, "lhs", lhsTy)) ||
+      failed(requireFieldType(getRhs(), *this, "rhs", rhsTy)) ||
+      failed(requireFieldType(getRes(), *this, "result", resTy)))
+    return failure();
+  if (lhsTy != rhsTy || lhsTy != resTy)
+    return emitOpError("lhs, rhs, result must share identical tensor type");
+  return success();
+}
+
+LogicalResult tensorium::mlir::MulOp::verify() {
+  FieldType lhsTy, rhsTy, resTy;
+  if (failed(requireFieldType(getLhs(), *this, "lhs", lhsTy)) ||
+      failed(requireFieldType(getRhs(), *this, "rhs", rhsTy)) ||
+      failed(requireFieldType(getRes(), *this, "result", resTy)))
+    return failure();
+  if (resTy.getRank() != lhsTy.getRank() + rhsTy.getRank())
+    return emitOpError("result rank must equal operand rank sum");
+  return success();
+}
+
+LogicalResult tensorium::mlir::DivOp::verify() {
+  FieldType lhsTy, rhsTy, resTy;
+  if (failed(requireFieldType(getLhs(), *this, "lhs", lhsTy)) ||
+      failed(requireFieldType(getRhs(), *this, "rhs", rhsTy)) ||
+      failed(requireFieldType(getRes(), *this, "result", resTy)))
+    return failure();
+  if (rhsTy.getRank() != 0)
+    return emitOpError("rhs must be scalar");
+  if (resTy != lhsTy)
+    return emitOpError("result must match lhs tensor type");
+  return success();
+}
+
+LogicalResult tensorium::mlir::DerivOp::verify() {
+  FieldType inTy, outTy;
+  if (failed(requireFieldType(getIn(), *this, "input", inTy)) ||
+      failed(requireFieldType(getOut(), *this, "result", outTy)))
+    return failure();
+  if (outTy.getRank() != inTy.getRank() + 1)
+    return emitOpError("derivative must add one covariant index");
+  return success();
+}
+
+LogicalResult tensorium::mlir::ContractOp::verify() {
+  FieldType inTy, outTy;
+  if (failed(requireFieldType(getIn(), *this, "input", inTy)) ||
+      failed(requireFieldType(getOut(), *this, "result", outTy)))
+    return failure();
+  if (inTy.getRank() < outTy.getRank())
+    return emitOpError("result cannot have more indices than input");
+  return success();
+}
+
+LogicalResult tensorium::mlir::PromoteOp::verify() {
+  FieldType inTy, outTy;
+  if (failed(requireFieldType(getIn(), *this, "input", inTy)) ||
+      failed(requireFieldType(getOut(), *this, "result", outTy)))
+    return failure();
+  if (inTy.getRank() != 0)
+    return emitOpError("input must be scalar");
+  return success();
+}
+
+LogicalResult tensorium::mlir::DtAssignOp::verify() {
+  FieldType fieldTy, rhsTy;
+  if (failed(requireFieldType(getField(), *this, "field", fieldTy)) ||
+      failed(requireFieldType(getRhs(), *this, "rhs", rhsTy)))
+    return failure();
+  if (fieldTy != rhsTy)
+    return emitOpError("rhs tensor type must match field type");
+  return success();
+}
+
 #define GET_OP_CLASSES
 #include "TensoriumOps.cpp.inc"

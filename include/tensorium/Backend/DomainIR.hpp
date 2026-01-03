@@ -1,5 +1,6 @@
 
 #pragma once
+#include "tensorium/AST/AST.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -59,6 +60,7 @@ enum class VarKind { Field, Param, Local, Coord };
 struct ExprIR {
   enum class Kind { Number, Var, Binary, Call };
   Kind kind;
+  TensorTypeDesc exprType{TensorKind::Scalar, 0, 0};
 
   virtual ~ExprIR() = default;
   explicit ExprIR(Kind k) : kind(k) {}
@@ -92,6 +94,8 @@ struct CallIR final : ExprIR {
   std::vector<std::unique_ptr<ExprIR>> args;
   bool isExtern = false;
   size_t externArity = 0;
+  TensorTypeDesc returnType;
+  std::vector<TensorTypeDesc> paramTypes;
   explicit CallIR(std::string c) : ExprIR(Kind::Call), callee(std::move(c)) {}
 };
 

@@ -1,0 +1,8 @@
+extern vector ext_force(scalar)
+
+field scalar phi
+field vector v[i]
+
+evolution SymbolicExternVector {
+  dt v[i] = ext_force(phi)
+}

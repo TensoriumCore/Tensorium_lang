@@ -91,8 +91,16 @@ struct Assignment {
   std::unique_ptr<Expr> rhs;
 };
 
-struct ExternScalarDecl {
+struct TensorTypeDesc {
+  TensorKind kind = TensorKind::Scalar;
+  int up = 0;
+  int down = 0;
+};
+
+struct ExternDecl {
   std::string name;
+  TensorTypeDesc returnType;
+  std::vector<TensorTypeDesc> params;
   size_t paramCount = 0;
 };
 
@@ -150,7 +158,7 @@ struct SimulationConfig {
 };
 
 struct Program {
-  std::vector<ExternScalarDecl> externs;
+  std::vector<ExternDecl> externs;
   std::vector<FieldDecl> fields;
   std::vector<MetricDecl> metrics;
   std::vector<EvolutionDecl> evolutions;

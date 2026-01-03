@@ -22,7 +22,7 @@ using namespace mlir;
 namespace tensorium::mlir {
 namespace {
 
-static bool isStringArray(ArrayAttr a) {
+[[maybe_unused]] static bool isStringArray(ArrayAttr a) {
   if (!a) return false;
   for (Attribute x : a)
     if (!isa<StringAttr>(x))

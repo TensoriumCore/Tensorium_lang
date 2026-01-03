@@ -28,9 +28,17 @@ static std::string readFile(const std::string &path) {
   return ss.str();
 }
 
+static void printIndexedType(const IndexedExpr *e) {
+  if (!e)
+    return;
+  std::cout << "[u=" << e->inferredType.up
+            << ",d=" << e->inferredType.down << "]";
+}
+
 static void printIndexedExpr(const IndexedExpr *e) {
   if (auto n = dynamic_cast<const IndexedNumber *>(e)) {
     std::cout << n->value;
+    printIndexedType(e);
     return;
   }
 
@@ -62,6 +70,7 @@ static void printIndexedExpr(const IndexedExpr *e) {
     }
 
     std::cout << "]";
+    printIndexedType(e);
     return;
   }
 
@@ -71,6 +80,7 @@ static void printIndexedExpr(const IndexedExpr *e) {
     std::cout << " " << b->op << " ";
     printIndexedExpr(b->rhs.get());
     std::cout << ")";
+    printIndexedType(e);
     return;
   }
 
@@ -82,6 +92,7 @@ static void printIndexedExpr(const IndexedExpr *e) {
         std::cout << ", ";
     }
     std::cout << ")";
+    printIndexedType(e);
     return;
   }
 }
@@ -227,12 +238,6 @@ int main(int argc, char **argv) {
         std::cout << "==============================\n";
       }
       auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
-      const bool isSymbolicMode = compilationMode == CompilationMode::Symbolic;
-      const bool executableRequested = validateOnly || dumpMLIR || runCpu;
-      if (isSymbolicMode && executableRequested) {
-        std::cerr << "Symbolically valid but not executable: missing simulation metadata\n";
-        continue;
-      }
       if (validateOnly) {
         auto result = tensorium::sema::validateProgram(mod);
 

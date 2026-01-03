@@ -145,23 +145,98 @@ Assignment Parser::parseAssignment() {
   return a;
 }
 
-ExternScalarDecl Parser::parseExternDecl() {
+TensorTypeDesc Parser::parseTensorTypeDesc() {
+  TensorTypeDesc desc;
+  auto simple = [&](TensorKind kind, int up, int down) {
+    desc.kind = kind;
+    desc.up = up;
+    desc.down = down;
+    advance();
+    return desc;
+  };
+
+  switch (cur.type) {
+  case TokenType::KwScalar:
+    return simple(TensorKind::Scalar, 0, 0);
+  case TokenType::KwVector:
+    return simple(TensorKind::Vector, 1, 0);
+  case TokenType::KwCovector:
+    return simple(TensorKind::Covector, 0, 1);
+  case TokenType::KwCovTensor2:
+    return simple(TensorKind::CovTensor2, 0, 2);
+  case TokenType::KwConTensor2:
+    return simple(TensorKind::ConTensor2, 2, 0);
+  case TokenType::KwCovTensor3:
+    return simple(TensorKind::CovTensor3, 0, 3);
+  case TokenType::KwConTensor3:
+    return simple(TensorKind::ConTensor3, 3, 0);
+  case TokenType::KwCovTensor4:
+    return simple(TensorKind::CovTensor4, 0, 4);
+  case TokenType::KwConTensor4:
+    return simple(TensorKind::ConTensor4, 4, 0);
+  default:
+    break;
+  }
+
+  if (cur.type == TokenType::Identifier && cur.text == "mixed_tensor") {
+    desc.kind = TensorKind::MixedTensor;
+    advance();
+    expect(TokenType::LParen);
+    bool haveUp = false;
+    bool haveDown = false;
+    while (cur.type != TokenType::RParen) {
+      if (cur.type != TokenType::Identifier)
+        syntaxError("expected mixed_tensor attribute");
+      const std::string attr = cur.text;
+      advance();
+      expect(TokenType::Equals);
+      if (cur.type != TokenType::Number)
+        syntaxError("mixed_tensor attribute expects integer");
+      int value = std::stoi(cur.text);
+      if (attr == "up") {
+        if (haveUp)
+          syntaxError("duplicate up attribute in mixed_tensor");
+        desc.up = value;
+        haveUp = true;
+      } else if (attr == "down") {
+        if (haveDown)
+          syntaxError("duplicate down attribute in mixed_tensor");
+        desc.down = value;
+        haveDown = true;
+      } else {
+        syntaxError("unknown mixed_tensor attribute");
+      }
+      advance();
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      if (cur.type != TokenType::RParen)
+        syntaxError("expected ',' or ')' in mixed_tensor");
+    }
+    expect(TokenType::RParen);
+    if (!haveUp && !haveDown)
+      syntaxError("mixed_tensor requires up or down attribute");
+    return desc;
+  }
+
+  syntaxError("Expected tensor type");
+  return desc;
+}
+
+ExternDecl Parser::parseExternDecl() {
   expect(TokenType::KwExtern);
-  expect(TokenType::KwScalar);
+  ExternDecl decl;
+  decl.returnType = parseTensorTypeDesc();
   if (cur.type != TokenType::Identifier)
     syntaxError("Expected extern function name");
-
-  ExternScalarDecl decl;
   decl.name = cur.text;
   advance();
 
   expect(TokenType::LParen);
   if (cur.type != TokenType::RParen) {
     while (true) {
-      if (cur.type != TokenType::KwScalar)
-        syntaxError("extern arguments must be scalar");
-      ++decl.paramCount;
-      advance();
+      decl.params.push_back(parseTensorTypeDesc());
       if (cur.type == TokenType::Comma) {
         advance();
         continue;
@@ -170,6 +245,7 @@ ExternScalarDecl Parser::parseExternDecl() {
     }
   }
   expect(TokenType::RParen);
+  decl.paramCount = decl.params.size();
   return decl;
 }
 

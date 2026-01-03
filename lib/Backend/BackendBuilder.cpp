@@ -11,7 +11,9 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
     return nullptr;
 
   if (auto n = dynamic_cast<const IndexedNumber *>(e)) {
-    return std::make_unique<NumberIR>(n->value);
+    auto out = std::make_unique<NumberIR>(n->value);
+    out->exprType = n->inferredType;
+    return out;
   }
 
   if (auto v = dynamic_cast<const IndexedVar *>(e)) {
@@ -36,23 +38,29 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
     auto out = std::make_unique<VarIR>(v->name, k);
     out->coordIndex = coord;
     out->tensorIndexNames = v->tensorIndexNames;
+    out->exprType = v->inferredType;
     return out;
   }
 
   if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
-
-    return std::make_unique<BinaryIR>(std::string(1, b->op),
-                                      lowerIndexedExpr(b->lhs.get()),
-                                      lowerIndexedExpr(b->rhs.get()));
+    auto lhs = lowerIndexedExpr(b->lhs.get());
+    auto rhs = lowerIndexedExpr(b->rhs.get());
+    auto out = std::make_unique<BinaryIR>(std::string(1, b->op),
+                                          std::move(lhs), std::move(rhs));
+    out->exprType = b->inferredType;
+    return out;
   }
 
   if (auto c = dynamic_cast<const IndexedCall *>(e)) {
     auto out = std::make_unique<CallIR>(c->callee);
     out->isExtern = c->isExtern;
     out->externArity = c->declaredArity;
+    out->returnType = c->returnType;
+    out->paramTypes = c->paramTypes;
     out->args.reserve(c->args.size());
     for (const auto &a : c->args)
       out->args.push_back(lowerIndexedExpr(a.get()));
+    out->exprType = c->inferredType;
     return out;
   }
 
