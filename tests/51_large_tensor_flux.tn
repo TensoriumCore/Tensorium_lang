@@ -1,0 +1,25 @@
+field scalar lapse
+field covector W[i]
+field cov_tensor2 R[i,j]
+
+simulation {
+  dimension = 2
+  resolution = [32, 32]
+
+  time {
+    dt = 0.005
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+evolution FluxSystem {
+  dt lapse = lapse * contract(R[i,j] * R[i,j]) + contract(W[i] * W[i])
+  dt W[i] = d_i(lapse) + contract(R[i,j] * W[j]) + lapse * W[i]
+  dt R[i,j] = d_i(W[j]) + d_j(W[i]) + contract(R[i,k] * R[k,j]) + W[i] * W[j]
+}

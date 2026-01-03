@@ -1,0 +1,25 @@
+field scalar phi
+field covector beta[i]
+field cov_tensor2 gamma[i,j]
+
+simulation {
+  dimension = 3
+  resolution = [16, 16, 16]
+
+  time {
+    dt = 0.01
+    integrator = rk4
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+evolution LargeTensorMix {
+  dt phi = contract(gamma[i,j] * beta[i] * beta[j]) + phi * phi
+  dt beta[i] = d_i(phi) + contract(gamma[i,j] * beta[j]) + phi * beta[i]
+  dt gamma[i,j] = d_i(beta[j]) + d_j(beta[i]) + contract(gamma[i,k] * gamma[k,j])
+}

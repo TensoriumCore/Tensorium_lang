@@ -1,0 +1,16 @@
+field covector beta[i]
+field scalar phi
+
+simulation {
+  dimension = 1
+  resolution = [8]
+
+  time {
+    dt = 0.05
+    integrator = rk4
+  }
+}
+
+evolution BadAssign {
+  dt beta[i] = phi
+}

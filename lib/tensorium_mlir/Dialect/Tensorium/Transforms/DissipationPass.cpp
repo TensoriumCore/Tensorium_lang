@@ -105,12 +105,12 @@ struct AddDissipation : public OpRewritePattern<DtAssignOp> {
 
     auto fieldTy = currentRHS.getType();
     auto scalarTy = getScalarFieldType(rewriter.getContext());
-    Value dissipationTotal = rewriter.create<ConstOp>(
-        loc, fieldTy, rewriter.getF64FloatAttr(0.0));
+    Value dissipationTotal;
+    bool haveDirection = false;
 
     for (unsigned dir = 0; dir < spatialDim; ++dir) {
-      Value dirSum = rewriter.create<ConstOp>(loc, fieldTy,
-                                              rewriter.getF64FloatAttr(0.0));
+      Value dirSum;
+      bool firstTerm = true;
 
       for (const auto &pt : stencil) {
         auto offAttr =
@@ -123,11 +123,26 @@ struct AddDissipation : public OpRewritePattern<DtAssignOp> {
         Value w = rewriter.create<ConstOp>(loc, scalarTy,
                                            rewriter.getF64FloatAttr(pt.weight));
         Value term = rewriter.create<MulOp>(loc, fieldTy, val, w);
+        if (firstTerm) {
+          dirSum = term;
+          firstTerm = false;
+          continue;
+        }
         dirSum = rewriter.create<AddOp>(loc, fieldTy, dirSum, term);
+      }
+      if (!dirSum)
+        continue;
+      if (!haveDirection) {
+        dissipationTotal = dirSum;
+        haveDirection = true;
+        continue;
       }
       dissipationTotal =
           rewriter.create<AddOp>(loc, fieldTy, dissipationTotal, dirSum);
     }
+
+    if (!haveDirection)
+      return failure();
 
     Value sigmaVal = rewriter.create<ConstOp>(loc, scalarTy,
                                               rewriter.getF64FloatAttr(factor));

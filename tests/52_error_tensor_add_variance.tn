@@ -1,0 +1,16 @@
+field scalar phi
+field vector v[i]
+
+simulation {
+  dimension = 1
+  resolution = [4]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+}
+
+evolution BadAdd {
+  dt v[i] = phi + v[i]
+}

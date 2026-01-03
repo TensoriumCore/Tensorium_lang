@@ -43,6 +43,8 @@ VALID_TESTS=(
   tests/23_bssn_like_with_riemann_contract.tn
   tests/24_Ricci_conformal_flat.tn
   tests/25_deriv_stencil.tn
+  tests/50_large_tensor_mix.tn
+  tests/51_large_tensor_flux.tn
   tests/31_temp_valid_scalar.tn
 )
 
@@ -69,6 +71,9 @@ ERROR_TESTS=(
   tests/40_error_extern_arity.tn
   tests/41_error_extern_variance.tn
   tests/43_error_extern_tensor_return_exec.tn
+  tests/52_error_tensor_add_variance.tn
+  tests/53_error_contract_free_index.tn
+  tests/54_error_dt_assign_rank.tn
 )
 
 SYMBOLIC_VALID_TESTS=(

@@ -1,0 +1,15 @@
+field covector beta[i]
+
+simulation {
+  dimension = 1
+  resolution = [8]
+
+  time {
+    dt = 0.1
+    integrator = rk3
+  }
+}
+
+evolution BadContract {
+  dt beta[i] = contract(beta[i])
+}

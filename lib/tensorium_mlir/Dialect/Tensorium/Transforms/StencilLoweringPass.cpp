@@ -92,6 +92,14 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
       Value term =
           rewriter.create<MulOp>(loc, input.getType(), val, weight);
 
+      if (term.getType() != resultType) {
+        auto termTy = llvm::dyn_cast<FieldType>(term.getType());
+        auto resTy = llvm::dyn_cast<FieldType>(resultType);
+        if (!termTy || !resTy || termTy.getRank() != 0)
+          return failure();
+        term = rewriter.create<PromoteOp>(loc, resultType, term).getResult();
+      }
+
       if (firstTerm) {
         sum = term;
         firstTerm = false;
