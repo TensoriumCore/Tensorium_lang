@@ -3,7 +3,7 @@
 
 Tensorium_lang is a domain-specific language and compiler frontend designed
 to express tensorial equations arising in numerical relativity
-(Einstein equations, BSSN-like formulations, tensor contractions).
+(Einstein equations, BSSN-like/Z4/Z4C formulations and 3+1 decomposition, tensor contractions, differeciations etc..).
 
 The compiler is implemented in C++20 and built on top of LLVM/MLIR 20.
 It performs semantic analysis of tensor indices (variance, contractions),
