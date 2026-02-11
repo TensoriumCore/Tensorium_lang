@@ -614,3 +614,18 @@ Planned commit sequence (one intention per commit):
 - Reduces accidental coupling (unused args cannot be read/written by construction).
 - Preserves semantics: `init3p1` is retained (still explicit in init path),
   while stores remain split between `assign` (init) and `dt_assign` (rhs).
+
+### 14.C IR invariants (init/rhs)
+- RHS write path guard:
+  - `@tensorium_rhs` must not contain init-only ops
+    (`metric4`, `decompose3p1_from_metric`, `init3p1`, `assign`),
+    and may write only via `dt_assign`.
+- GammaU provenance guard:
+  - In Schwarzschild structural verification, the `gammaU` value used by
+    `contract(...)` must come from a `tensorium.ref` sourcing a field that was
+    assigned by `@tensorium_init` through entry-call forwarding.
+  - `@tensorium_rhs` is rejected by test if it constructs local `gammaU`
+    tensors (e.g. `build_con_tensor2`) for the contraction path.
+- Front-end guard:
+  - Non-`dt` writes to declared fields inside `evolution` are rejected
+    semantically (`Cannot redeclare field ... as local`).

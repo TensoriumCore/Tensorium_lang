@@ -590,6 +590,7 @@ static bool verifyInitRhsLayout(::mlir::ModuleOp module, InitRhsLayout &layout,
     rhsHasForbiddenOps |= llvm::isa<tensorium::mlir::Metric4Op>(&op);
     rhsHasForbiddenOps |=
         llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op);
+    rhsHasForbiddenOps |= llvm::isa<tensorium::mlir::Init3P1Op>(&op);
     rhsHasForbiddenOps |= llvm::isa<tensorium::mlir::AssignOp>(&op);
   }
   if (!rhsHasDtAssign || rhsHasForbiddenOps) {
@@ -886,7 +887,23 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
 
-  ::mlir::Value gammaURef;
+  auto valueFeedsContract = [](::mlir::Value v) {
+    for (::mlir::Operation *user : v.getUsers()) {
+      auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(user);
+      if (!mul)
+        continue;
+      for (::mlir::Operation *mulUser : mul.getRes().getUsers()) {
+        if (llvm::isa<tensorium::mlir::ContractOp>(mulUser))
+          return true;
+      }
+    }
+    return false;
+  };
+
+  bool gammaUFromInitAssignedFeedsContract = false;
+  bool gammaUContractUsesNonInitSource = false;
+  bool rhsBuildsLocalGammaU = false;
+  bool sawGammaURef = false;
   ::mlir::Value alphaRef;
   ::mlir::Value gammaRef;
   auto isScalarField = [](::mlir::Value v) {
@@ -894,6 +911,9 @@ static bool testSchwarzschildMLIRVerification() {
     return ty && ty.getRank() == 0;
   };
   for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
+    if (llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op))
+      rhsBuildsLocalGammaU = true;
+
     auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op);
     if (!ref)
       continue;
@@ -901,13 +921,44 @@ static bool testSchwarzschildMLIRVerification() {
     if (!srcTy)
       continue;
     auto idx = ref.getIndices();
-    if (srcTy.getUp() == 2 && srcTy.getDown() == 0 && idx && idx->size() == 2)
-      gammaURef = ref.getResult();
+    if (srcTy.getUp() == 2 && srcTy.getDown() == 0 && idx && idx->size() == 2) {
+      sawGammaURef = true;
+      if (valueFeedsContract(ref.getResult())) {
+        bool fromInitAssignedField = false;
+        if (auto arg = llvm::dyn_cast<::mlir::BlockArgument>(ref.getSource())) {
+          if (arg.getArgNumber() < layout.rhsCall.getNumOperands()) {
+            ::mlir::Value entryOperand =
+                layout.rhsCall.getOperand(arg.getArgNumber());
+            fromInitAssignedField =
+                llvm::find(initAssignedEntryValues, entryOperand) !=
+                initAssignedEntryValues.end();
+          }
+        }
+
+        if (fromInitAssignedField) {
+          gammaUFromInitAssignedFeedsContract = true;
+        } else {
+          gammaUContractUsesNonInitSource = true;
+        }
+      }
+    }
     if (srcTy.getUp() == 0 && srcTy.getDown() == 2 && idx && idx->size() == 2)
       gammaRef = ref.getResult();
   }
-  if (!gammaURef || !gammaRef) {
+  if (!sawGammaURef || !gammaRef) {
     std::cerr << "FAIL: expected gamma/gammaU refs in tensorium_rhs\n";
+    return false;
+  }
+  if (rhsBuildsLocalGammaU) {
+    std::cerr << "FAIL: tensorium_rhs must not construct local gammaU values\n";
+    return false;
+  }
+  if (!gammaUFromInitAssignedFeedsContract) {
+    std::cerr << "FAIL: contract must consume gammaU loaded from init-assigned field\n";
+    return false;
+  }
+  if (gammaUContractUsesNonInitSource) {
+    std::cerr << "FAIL: contract must not consume gammaU from non-init source\n";
     return false;
   }
 
@@ -922,25 +973,6 @@ static bool testSchwarzschildMLIRVerification() {
   }
   if (!alphaRef) {
     std::cerr << "FAIL: expected alpha scalar ref multiplied with gamma in tensorium_rhs\n";
-    return false;
-  }
-
-  bool gammaUFeedsContract = false;
-  for (::mlir::Operation *user : gammaURef.getUsers()) {
-    auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(user);
-    if (!mul)
-      continue;
-    for (::mlir::Operation *mulUser : mul.getRes().getUsers()) {
-      if (llvm::isa<tensorium::mlir::ContractOp>(mulUser)) {
-        gammaUFeedsContract = true;
-        break;
-      }
-    }
-    if (gammaUFeedsContract)
-      break;
-  }
-  if (!gammaUFeedsContract) {
-    std::cerr << "FAIL: gammaU field is not used in contract use-def chain\n";
     return false;
   }
 
