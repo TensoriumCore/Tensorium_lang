@@ -89,7 +89,7 @@ inline void printModuleIR(const ModuleIR &m) {
 
   std::cout << "  Fields:\n";
   for (const auto &f : m.fields) {
-    std::cout << "    " << f.name << " (up=" << f.up << ",down=" << f.down
+    std::cout << "    " << f.name << " (up=" << f.tensorType.up << ",down=" << f.tensorType.down
               << ")\n";
   }
 

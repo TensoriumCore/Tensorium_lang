@@ -3,6 +3,13 @@
 
 namespace tensorium::backend {
 
+static tensorium::ir::TensorType lowerTensorType(const tensorium::TensorTypeDesc &d) {
+  tensorium::ir::TensorType out;
+  out.up = d.up;
+  out.down = d.down;
+  return out;
+}
+
 static std::unique_ptr<ExprIR>
 lowerIndexedExpr(const tensorium::IndexedExpr *e) {
   using namespace tensorium;
@@ -12,7 +19,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
 
   if (auto n = dynamic_cast<const IndexedNumber *>(e)) {
     auto out = std::make_unique<NumberIR>(n->value);
-    out->exprType = n->inferredType;
+    out->exprType = lowerTensorType(n->inferredType);
     return out;
   }
 
@@ -38,7 +45,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
     auto out = std::make_unique<VarIR>(v->name, k);
     out->coordIndex = coord;
     out->tensorIndexNames = v->tensorIndexNames;
-    out->exprType = v->inferredType;
+    out->exprType = lowerTensorType(v->inferredType);
     return out;
   }
 
@@ -47,7 +54,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
     auto rhs = lowerIndexedExpr(b->rhs.get());
     auto out = std::make_unique<BinaryIR>(std::string(1, b->op),
                                           std::move(lhs), std::move(rhs));
-    out->exprType = b->inferredType;
+    out->exprType = lowerTensorType(b->inferredType);
     return out;
   }
 
@@ -55,12 +62,14 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e) {
     auto out = std::make_unique<CallIR>(c->callee);
     out->isExtern = c->isExtern;
     out->externArity = c->declaredArity;
-    out->returnType = c->returnType;
-    out->paramTypes = c->paramTypes;
+    out->returnType = lowerTensorType(c->returnType);
+    out->paramTypes.reserve(c->paramTypes.size());
+    for (const auto &paramType : c->paramTypes)
+      out->paramTypes.push_back(lowerTensorType(paramType));
     out->args.reserve(c->args.size());
     for (const auto &a : c->args)
       out->args.push_back(lowerIndexedExpr(a.get()));
-    out->exprType = c->inferredType;
+    out->exprType = lowerTensorType(c->inferredType);
     return out;
   }
 
@@ -157,8 +166,8 @@ ModuleIR BackendBuilder::build(const Program &prog,
     FieldIR out;
     out.name = f.name;
     out.kind = lowerFieldKind(f.kind);
-    out.up = f.up;
-    out.down = f.down;
+    out.tensorType.up = f.up;
+    out.tensorType.down = f.down;
     mod.fields.push_back(std::move(out));
   }
 

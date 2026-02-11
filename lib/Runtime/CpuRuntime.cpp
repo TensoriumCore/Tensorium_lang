@@ -19,7 +19,7 @@ CpuState1D initState1D(const backend::ModuleIR& mod,
   st.n = static_cast<std::size_t>(mod.simulation->resolution.at(0));
 
   for (const auto& f : mod.fields) {
-    require(f.up == 0 && f.down == 0, "only scalar fields supported (got " + f.name + ")");
+    require(f.tensorType.isScalar(), "only scalar fields supported (got " + f.name + ")");
     st.fields[f.name] = std::vector<double>(st.n, initScalar);
   }
 

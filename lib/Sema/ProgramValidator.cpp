@@ -7,7 +7,7 @@ using namespace tensorium::backend;
 using namespace tensorium::sema;
 
 static int fieldRank(const FieldIR &f) {
-  return f.up + f.down;
+  return f.tensorType.rank();
 }
 
 ValidationResult sema::validateProgram(const ModuleIR &m) {

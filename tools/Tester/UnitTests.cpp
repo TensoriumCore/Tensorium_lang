@@ -39,7 +39,7 @@ static bool testConTensor3Lowering() {
       std::cerr << "FAIL: expected backend kind ConTensor3 for field A\n";
       return false;
     }
-    if (field.up != 3 || field.down != 0) {
+    if (field.tensorType.up != 3 || field.tensorType.down != 0) {
       std::cerr << "FAIL: expected field A variance up=3 down=0\n";
       return false;
     }
@@ -85,10 +85,63 @@ static bool testIndexSetPolicy() {
   return true;
 }
 
+static bool testIRTensorTypeMappingForExternCall() {
+  static const char *kSource = R"(
+    extern cov_tensor3 foo_cov(cov_tensor3)
+    extern con_tensor3 foo_con(con_tensor3)
+    field cov_tensor3 C[i,j,k]
+    field con_tensor3 U[i,j,k]
+
+    evolution E {
+      dt C[i,j,k] = foo_cov(C[i,j,k])
+      dt U[i,j,k] = foo_con(U[i,j,k])
+    }
+  )";
+
+  Lexer lex(kSource);
+  Parser parser(lex);
+  Program prog = parser.parseProgram();
+  SemanticAnalyzer sem(prog, CompilationMode::Symbolic);
+  backend::ModuleIR mod = backend::BackendBuilder::build(prog, sem);
+
+  if (mod.evolutions.empty() || mod.evolutions[0].equations.size() != 2) {
+    std::cerr << "FAIL: expected two equations in IR extern mapping test\n";
+    return false;
+  }
+
+  auto checkCall = [](const backend::EquationIR &eq, int retUp, int retDown,
+                      int argUp, int argDown) {
+    auto *call = dynamic_cast<const backend::CallIR *>(eq.rhs.get());
+    if (!call)
+      return false;
+    if (call->returnType.up != retUp || call->returnType.down != retDown)
+      return false;
+    if (call->paramTypes.size() != 1)
+      return false;
+    if (call->paramTypes[0].up != argUp || call->paramTypes[0].down != argDown)
+      return false;
+    return true;
+  };
+
+  const auto &covEq = mod.evolutions[0].equations[0];
+  const auto &conEq = mod.evolutions[0].equations[1];
+  if (!checkCall(covEq, 0, 3, 0, 3)) {
+    std::cerr << "FAIL: covariant extern tensor signature mapping mismatch\n";
+    return false;
+  }
+  if (!checkCall(conEq, 3, 0, 3, 0)) {
+    std::cerr << "FAIL: contravariant extern tensor signature mapping mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
 int main() {
   bool ok = true;
   ok &= testConTensor3Lowering();
   ok &= testIndexSetPolicy();
+  ok &= testIRTensorTypeMappingForExternCall();
 
   if (!ok)
     return 1;

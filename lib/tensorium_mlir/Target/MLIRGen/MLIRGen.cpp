@@ -36,7 +36,7 @@ static mlir::ArrayAttr makeIndexArrayAttr(mlir::OpBuilder &b,
 }
 
 static tensorium::mlir::FieldType
-asFieldType(mlir::OpBuilder &b, const tensorium::TensorTypeDesc &desc) {
+asFieldType(mlir::OpBuilder &b, const tensorium::ir::TensorType &desc) {
   auto *ctx = b.getContext();
   auto elementType = b.getF64Type();
   unsigned up = desc.up < 0 ? 0u : static_cast<unsigned>(desc.up);
@@ -55,8 +55,8 @@ extractFields(const tensorium::backend::ModuleIR &module) {
   for (const auto &f : module.fields) {
     FieldDesc d;
     d.name = f.name;
-    d.up = static_cast<unsigned>(std::max(0, f.up));
-    d.down = static_cast<unsigned>(std::max(0, f.down));
+    d.up = static_cast<unsigned>(std::max(0, f.tensorType.up));
+    d.down = static_cast<unsigned>(std::max(0, f.tensorType.down));
     out.push_back(std::move(d));
   }
   return out;

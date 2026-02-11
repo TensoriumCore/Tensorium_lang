@@ -265,7 +265,7 @@ int main(int argc, char **argv) {
 
         std::cout << "Fields:\n";
         for (const auto &f : mod.fields) {
-          std::cout << "  " << f.name << " (up=" << f.up << ",down=" << f.down
+          std::cout << "  " << f.name << " (up=" << f.tensorType.up << ",down=" << f.tensorType.down
                     << ")\n";
         }
 
