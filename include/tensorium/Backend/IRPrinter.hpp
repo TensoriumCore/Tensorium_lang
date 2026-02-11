@@ -75,6 +75,108 @@ inline void printExprIR(const ExprIR *e) {
     printType();
     return;
   }
+  case ExprIR::Kind::TensorProduct: {
+    auto *p = static_cast<const TensorProductIR *>(e);
+    std::cout << "tensor_product(";
+    printExprIR(p->lhs.get());
+    std::cout << ", ";
+    printExprIR(p->rhs.get());
+    std::cout << ")";
+    printType();
+    return;
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *c = static_cast<const ContractionIR *>(e);
+    std::cout << "contraction(";
+    printExprIR(c->in.get());
+    if (!c->summedIndices.empty()) {
+      std::cout << "; sum=[";
+      for (size_t i = 0; i < c->summedIndices.size(); ++i) {
+        std::cout << c->summedIndices[i];
+        if (i + 1 < c->summedIndices.size())
+          std::cout << ",";
+      }
+      std::cout << "]";
+    }
+    std::cout << ")";
+    printType();
+    return;
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *r = static_cast<const IndexRenameIR *>(e);
+    std::cout << "index_rename(";
+    printExprIR(r->in.get());
+    std::cout << "; " << r->from << "->" << r->to << ")";
+    printType();
+    return;
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *p = static_cast<const IndexPermuteIR *>(e);
+    std::cout << "index_permute(";
+    printExprIR(p->in.get());
+    std::cout << "; order=[";
+    for (size_t i = 0; i < p->order.size(); ++i) {
+      std::cout << p->order[i];
+      if (i + 1 < p->order.size())
+        std::cout << ",";
+    }
+    std::cout << "])";
+    printType();
+    return;
+  }
+  case ExprIR::Kind::Trace: {
+    auto *t = static_cast<const TraceIR *>(e);
+    std::cout << "trace(";
+    printExprIR(t->in.get());
+    if (!t->tracedIndices.empty()) {
+      std::cout << "; idx=[";
+      for (size_t i = 0; i < t->tracedIndices.size(); ++i) {
+        std::cout << t->tracedIndices[i];
+        if (i + 1 < t->tracedIndices.size())
+          std::cout << ",";
+      }
+      std::cout << "]";
+    }
+    std::cout << ")";
+    printType();
+    return;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *d = static_cast<const PartialDerivativeIR *>(e);
+    std::cout << "partial_" << d->coordIndex << "(";
+    printExprIR(d->in.get());
+    std::cout << ")";
+    printType();
+    return;
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *g = static_cast<const GradientIR *>(e);
+    std::cout << "gradient(";
+    printExprIR(g->in.get());
+    std::cout << ")";
+    printType();
+    return;
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    auto *d = static_cast<const CovariantDerivativeIR *>(e);
+    std::cout << "covariant_" << d->derivIndex << "(";
+    printExprIR(d->in.get());
+    std::cout << "; contra=" << (d->contravariant ? "true" : "false")
+              << ", gamma="
+              << (d->hasConnectionTensor ? "present" : "missing") << ")";
+    printType();
+    return;
+  }
+  case ExprIR::Kind::Divergence: {
+    auto *d = static_cast<const DivergenceIR *>(e);
+    std::cout << "divergence(";
+    printExprIR(d->in.get());
+    if (!d->contractedIndex.empty())
+      std::cout << "; idx=" << d->contractedIndex;
+    std::cout << ")";
+    printType();
+    return;
+  }
   }
 }
 

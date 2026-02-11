@@ -57,7 +57,21 @@ struct FieldIR {
 enum class VarKind { Field, Param, Local, Coord };
 
 struct ExprIR {
-  enum class Kind { Number, Var, Binary, Call };
+  enum class Kind {
+    Number,
+    Var,
+    Binary,
+    Call,
+    TensorProduct,
+    Contraction,
+    IndexRename,
+    IndexPermute,
+    Trace,
+    PartialDerivative,
+    Gradient,
+    CovariantDerivative,
+    Divergence
+  };
   Kind kind;
   tensorium::ir::TensorType exprType;
 
@@ -96,6 +110,76 @@ struct CallIR final : ExprIR {
   tensorium::ir::TensorType returnType;
   std::vector<tensorium::ir::TensorType> paramTypes;
   explicit CallIR(std::string c) : ExprIR(Kind::Call), callee(std::move(c)) {}
+};
+
+struct TensorProductIR final : ExprIR {
+  std::unique_ptr<ExprIR> lhs;
+  std::unique_ptr<ExprIR> rhs;
+  TensorProductIR(std::unique_ptr<ExprIR> L, std::unique_ptr<ExprIR> R)
+      : ExprIR(Kind::TensorProduct), lhs(std::move(L)), rhs(std::move(R)) {}
+};
+
+struct ContractionIR final : ExprIR {
+  std::unique_ptr<ExprIR> in;
+  std::vector<std::string> summedIndices;
+  explicit ContractionIR(std::unique_ptr<ExprIR> expr)
+      : ExprIR(Kind::Contraction), in(std::move(expr)) {}
+};
+
+struct IndexRenameIR final : ExprIR {
+  std::unique_ptr<ExprIR> in;
+  std::string from;
+  std::string to;
+  IndexRenameIR(std::unique_ptr<ExprIR> expr, std::string fromIndex,
+                std::string toIndex)
+      : ExprIR(Kind::IndexRename), in(std::move(expr)),
+        from(std::move(fromIndex)), to(std::move(toIndex)) {}
+};
+
+struct IndexPermuteIR final : ExprIR {
+  std::unique_ptr<ExprIR> in;
+  std::vector<std::string> order;
+  IndexPermuteIR(std::unique_ptr<ExprIR> expr, std::vector<std::string> outOrder)
+      : ExprIR(Kind::IndexPermute), in(std::move(expr)),
+        order(std::move(outOrder)) {}
+};
+
+struct TraceIR final : ExprIR {
+  std::unique_ptr<ExprIR> in;
+  std::vector<std::string> tracedIndices;
+  explicit TraceIR(std::unique_ptr<ExprIR> expr)
+      : ExprIR(Kind::Trace), in(std::move(expr)) {}
+};
+
+struct PartialDerivativeIR final : ExprIR {
+  std::unique_ptr<ExprIR> in;
+  std::string coordIndex;
+  PartialDerivativeIR(std::unique_ptr<ExprIR> expr, std::string idx)
+      : ExprIR(Kind::PartialDerivative), in(std::move(expr)),
+        coordIndex(std::move(idx)) {}
+};
+
+struct GradientIR final : ExprIR {
+  std::unique_ptr<ExprIR> in;
+  explicit GradientIR(std::unique_ptr<ExprIR> expr)
+      : ExprIR(Kind::Gradient), in(std::move(expr)) {}
+};
+
+struct CovariantDerivativeIR final : ExprIR {
+  std::unique_ptr<ExprIR> in;
+  std::string derivIndex;
+  bool contravariant = false;
+  bool hasConnectionTensor = false;
+  CovariantDerivativeIR(std::unique_ptr<ExprIR> expr, std::string idx)
+      : ExprIR(Kind::CovariantDerivative), in(std::move(expr)),
+        derivIndex(std::move(idx)) {}
+};
+
+struct DivergenceIR final : ExprIR {
+  std::unique_ptr<ExprIR> in;
+  std::string contractedIndex;
+  explicit DivergenceIR(std::unique_ptr<ExprIR> expr)
+      : ExprIR(Kind::Divergence), in(std::move(expr)) {}
 };
 
 struct EquationIR {

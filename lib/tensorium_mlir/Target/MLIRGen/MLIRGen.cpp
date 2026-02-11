@@ -181,6 +181,74 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
     emitUnsupportedExprError(loc, "call to '" + c->callee +
                                        "' is not supported during MLIR emission");
   }
+  case ExprIR::Kind::TensorProduct: {
+    auto *p = static_cast<const TensorProductIR *>(e);
+    auto L = emitExpr(b, loc, p->lhs.get(), fieldArg, localTemps);
+    auto R = emitExpr(b, loc, p->rhs.get(), fieldArg, localTemps);
+    return tensorium::mlir::MulOp::create(b, loc, desiredType, L, R).getResult();
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *c = static_cast<const ContractionIR *>(e);
+    auto in = emitExpr(b, loc, c->in.get(), fieldArg, localTemps);
+    auto out = tensorium::mlir::ContractOp::create(b, loc, desiredType, in);
+    if (!c->summedIndices.empty()) {
+      out->setAttr("sum_indices", makeIndexArrayAttr(b, c->summedIndices));
+    }
+    return out.getResult();
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *r = static_cast<const IndexRenameIR *>(e);
+    return emitExpr(b, loc, r->in.get(), fieldArg, localTemps);
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *p = static_cast<const IndexPermuteIR *>(e);
+    return emitExpr(b, loc, p->in.get(), fieldArg, localTemps);
+  }
+  case ExprIR::Kind::Trace: {
+    auto *t = static_cast<const TraceIR *>(e);
+    auto in = emitExpr(b, loc, t->in.get(), fieldArg, localTemps);
+    auto out = tensorium::mlir::ContractOp::create(b, loc, desiredType, in);
+    if (!t->tracedIndices.empty()) {
+      out->setAttr("sum_indices", makeIndexArrayAttr(b, t->tracedIndices));
+    }
+    return out.getResult();
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *d = static_cast<const PartialDerivativeIR *>(e);
+    auto in = emitExpr(b, loc, d->in.get(), fieldArg, localTemps);
+    auto deriv = tensorium::mlir::DerivOp::create(b, loc, desiredType, in);
+    deriv->setAttr("index", b.getStringAttr(d->coordIndex));
+    return deriv.getResult();
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *g = static_cast<const GradientIR *>(e);
+    (void)g;
+    emitUnsupportedExprError(
+        loc, "gradient lowering requires explicit coordinate index; use d_i(...)");
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    auto *d = static_cast<const CovariantDerivativeIR *>(e);
+    if (!d->hasConnectionTensor) {
+      emitUnsupportedExprError(
+          loc, "covariant derivative requires connection tensor Gamma");
+    }
+    auto in = emitExpr(b, loc, d->in.get(), fieldArg, localTemps);
+    auto deriv = tensorium::mlir::DerivOp::create(b, loc, desiredType, in);
+    deriv->setAttr("index", b.getStringAttr(d->derivIndex));
+    deriv->setAttr("covariant", b.getBoolAttr(true));
+    deriv->setAttr("contravariant", b.getBoolAttr(d->contravariant));
+    return deriv.getResult();
+  }
+  case ExprIR::Kind::Divergence: {
+    auto *d = static_cast<const DivergenceIR *>(e);
+    auto in = emitExpr(b, loc, d->in.get(), fieldArg, localTemps);
+    auto out = tensorium::mlir::ContractOp::create(b, loc, desiredType, in);
+    if (!d->contractedIndex.empty()) {
+      std::vector<std::string> idx = {d->contractedIndex};
+      out->setAttr("sum_indices", makeIndexArrayAttr(b, idx));
+    }
+    return out.getResult();
+  }
   }
 
   emitUnsupportedExprError(loc, "unknown expression kind");
