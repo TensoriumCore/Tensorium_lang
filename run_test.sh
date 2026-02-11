@@ -109,6 +109,7 @@ INITIAL_DATA_ERROR_TESTS=(
 INITIAL_DATA_MLIR_ERROR_TESTS=(
   "tests/semantic/initial_data/03_missing_gammau_binding.tn|split_3p1 does not bind gammaU"
   "tests/semantic/initial_data/04_nonsymmetric_metric_not_supported.tn|decompose3p1_from_metric requires symmetric metric components"
+  "tests/semantic/initial_data/05_shift_metric_not_supported.tn|decompose3p1_from_metric requires g_ti = 0 (beta unsupported)"
 )
 
 INITIAL_DATA_VALID_TESTS=(
