@@ -29,6 +29,11 @@ struct FieldDesc {
 
 [[noreturn]] static void emitUnsupportedExprError(mlir::Location loc,
                                                  const std::string &detail);
+static mlir::Value
+emitExpr(mlir::OpBuilder &b, mlir::Location loc,
+         const tensorium::backend::ExprIR *e,
+         const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg,
+         llvm::StringMap<mlir::Value> *localTemps);
 
 static mlir::ArrayAttr makeIndexArrayAttr(mlir::OpBuilder &b,
                                           const std::vector<std::string> &idx) {
@@ -88,6 +93,19 @@ static bool isZeroInitExpr(const tensorium::backend::InitExprIR *expr) {
     return n->value == 0.0;
   }
   return false;
+}
+
+static bool metric4IsDiagonalAndZeroShift(const tensorium::backend::InitialDataIR &init) {
+  if (!init.hasMetric4 || init.metric4.components.size() != 16)
+    return false;
+
+  const int offDiagIndices[] = {
+      1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14};
+  for (int idx : offDiagIndices) {
+    if (!isZeroInitExpr(init.metric4.components[idx].get()))
+      return false;
+  }
+  return true;
 }
 
 static bool exprUsesFieldName(const tensorium::backend::ExprIR *expr,
@@ -293,14 +311,6 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
              "was provided");
   }
 
-  if (!init.hasMetric4)
-    return;
-
-  if (init.metric4.components.size() != 16) {
-    emitUnsupportedExprError(
-        loc, "metric4 initial_data must provide 16 component expressions");
-  }
-
   llvm::StringMap<mlir::Value> paramValues;
   llvm::StringMap<mlir::Value> coordValues;
 
@@ -312,93 +322,151 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
   auto gammaTy = tensorium::mlir::FieldType::get(ctx, elemTy, 0, 2);
   auto gammaUTy = tensorium::mlir::FieldType::get(ctx, elemTy, 2, 0);
 
-  llvm::SmallVector<mlir::Value, 16> metricComps;
-  metricComps.reserve(16);
-  for (const auto &comp : init.metric4.components) {
-    metricComps.push_back(emitInitExpr(b, loc, comp.get(), fieldArg, paramValues,
-                                       coordValues));
-  }
+  tensorium::mlir::Init3P1Op init3p1;
 
-  auto metric = tensorium::mlir::Metric4Op::create(
-      b, loc, metricTy, metricComps, b.getStringAttr(init.metric4.name),
-      b.getStringAttr(init.metric4.coordSystem),
-      makeStringArrayAttr(b, init.metric4.indices),
-      b.getBoolAttr(init.metric4.enforceSymmetry));
+  if (init.hasMetric4) {
+    if (init.metric4.components.size() != 16) {
+      emitUnsupportedExprError(
+          loc, "metric4 initial_data must provide 16 component expressions");
+    }
+    if (!metric4IsDiagonalAndZeroShift(init)) {
+      emitUnsupportedExprError(
+          loc, "decompose3p1_from_metric: not implemented for non-diagonal or beta!=0");
+    }
 
-  const bool betaZero = isZeroInitExpr(init.metric4.components[1].get()) &&
-                        isZeroInitExpr(init.metric4.components[2].get()) &&
-                        isZeroInitExpr(init.metric4.components[3].get()) &&
-                        isZeroInitExpr(init.metric4.components[4].get()) &&
-                        isZeroInitExpr(init.metric4.components[8].get()) &&
-                        isZeroInitExpr(init.metric4.components[12].get());
-  if (!betaZero) {
-    emitUnsupportedExprError(
-        loc, "split3p1 with non-zero shift is not implemented yet");
-  }
+    llvm::SmallVector<mlir::Value, 16> metricComps;
+    metricComps.reserve(16);
+    for (const auto &comp : init.metric4.components) {
+      metricComps.push_back(emitInitExpr(b, loc, comp.get(), fieldArg, paramValues,
+                                         coordValues));
+    }
 
-  auto one = tensorium::mlir::ConstOp::create(b, loc, scalarTy,
-                                              b.getF64FloatAttr(1.0))
-                 .getResult();
-  auto zero = tensorium::mlir::ConstOp::create(b, loc, scalarTy,
-                                               b.getF64FloatAttr(0.0))
-                  .getResult();
-  auto negOne = tensorium::mlir::ConstOp::create(b, loc, scalarTy,
-                                                 b.getF64FloatAttr(-1.0))
+    auto metric = tensorium::mlir::Metric4Op::create(
+        b, loc, metricTy, metricComps, b.getStringAttr(init.metric4.name),
+        b.getStringAttr(init.metric4.coordSystem),
+        makeStringArrayAttr(b, init.metric4.indices),
+        b.getBoolAttr(init.metric4.enforceSymmetry));
+
+    auto decomp = tensorium::mlir::Decompose3P1FromMetricOp::create(
+        b, loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
+        metric.getMetric());
+
+    init3p1 = tensorium::mlir::Init3P1Op::create(
+        b, loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
+        decomp.getAlpha(), decomp.getBeta(), decomp.getGamma(), decomp.getGammaU());
+  } else if (init.hasDecomposed) {
+    if (!init.decomposed.alphaExpr || init.decomposed.betaExpr.size() != 3 ||
+        init.decomposed.gammaExpr.size() != 9 || init.decomposed.gammaUExpr.size() != 9) {
+      emitUnsupportedExprError(
+          loc, "decomposed initial_data requires alpha, beta[3], gamma[3x3], gammaU[3x3]");
+    }
+
+    auto alpha = emitInitExpr(b, loc, init.decomposed.alphaExpr.get(), fieldArg,
+                              paramValues, coordValues);
+
+    llvm::SmallVector<mlir::Value, 3> betaComponents;
+    betaComponents.reserve(3);
+    for (const auto &expr : init.decomposed.betaExpr) {
+      betaComponents.push_back(emitInitExpr(b, loc, expr.get(), fieldArg,
+                                            paramValues, coordValues));
+    }
+    auto beta = tensorium::mlir::BuildCovectorOp::create(b, loc, betaTy,
+                                                          betaComponents)
                     .getResult();
 
-  mlir::Value g00 = metricComps[0];
-  mlir::Value g01 = metricComps[1];
-  mlir::Value g02 = metricComps[2];
-  mlir::Value g03 = metricComps[3];
-  mlir::Value g11 = metricComps[5];
-  mlir::Value g22 = metricComps[10];
-  mlir::Value g33 = metricComps[15];
+    llvm::SmallVector<mlir::Value, 9> gammaComponents;
+    gammaComponents.reserve(9);
+    for (const auto &expr : init.decomposed.gammaExpr) {
+      gammaComponents.push_back(emitInitExpr(b, loc, expr.get(), fieldArg,
+                                             paramValues, coordValues));
+    }
+    auto gamma = tensorium::mlir::BuildCovTensor2Op::create(b, loc, gammaTy,
+                                                             gammaComponents)
+                     .getResult();
 
-  auto minusG00 =
-      tensorium::mlir::MulOp::create(b, loc, scalarTy, negOne, g00).getResult();
-  auto alpha =
-      tensorium::mlir::SqrtOp::create(b, loc, scalarTy, minusG00).getResult();
+    llvm::SmallVector<mlir::Value, 9> gammaUComponents;
+    gammaUComponents.reserve(9);
+    for (const auto &expr : init.decomposed.gammaUExpr) {
+      gammaUComponents.push_back(emitInitExpr(b, loc, expr.get(), fieldArg,
+                                              paramValues, coordValues));
+    }
+    auto gammaU = tensorium::mlir::BuildConTensor2Op::create(b, loc, gammaUTy,
+                                                              gammaUComponents)
+                      .getResult();
 
-  llvm::SmallVector<mlir::Value, 3> betaComponents = {g01, g02, g03};
-  auto beta = tensorium::mlir::BuildCovectorOp::create(b, loc, betaTy,
-                                                        betaComponents)
-                  .getResult();
-
-  llvm::SmallVector<mlir::Value, 9> gammaComponents = {g11, zero, zero, zero,
-                                                       g22, zero, zero, zero,
-                                                       g33};
-  auto gamma = tensorium::mlir::BuildCovTensor2Op::create(b, loc, gammaTy,
-                                                           gammaComponents)
-                   .getResult();
-
-  auto inv11 = tensorium::mlir::DivOp::create(b, loc, scalarTy, one, g11).getResult();
-  auto inv22 = tensorium::mlir::DivOp::create(b, loc, scalarTy, one, g22).getResult();
-  auto inv33 = tensorium::mlir::DivOp::create(b, loc, scalarTy, one, g33).getResult();
-  llvm::SmallVector<mlir::Value, 9> gammaUComponents = {
-      inv11, zero, zero, zero, inv22, zero, zero, zero, inv33};
-  auto gammaU = tensorium::mlir::BuildConTensor2Op::create(b, loc, gammaUTy,
-                                                            gammaUComponents)
-                    .getResult();
-
-  auto split = tensorium::mlir::Split3P1Op::create(
-      b, loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
-      metric.getMetric(), alpha, beta, gamma, gammaU);
+    init3p1 = tensorium::mlir::Init3P1Op::create(
+        b, loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
+        alpha, beta, gamma, gammaU);
+  }
 
   if (init.split3p1.enabled) {
+    auto bindToField = [&](llvm::StringRef name, mlir::Value rhs) {
+      auto it = fieldArg.find(name);
+      if (it == fieldArg.end()) {
+        emitUnsupportedExprError(
+            loc, "split_3p1 target field '" + name.str() +
+                     "' is not available in entry function arguments");
+      }
+      llvm::SmallVector<mlir::Attribute, 0> noIndices;
+      tensorium::mlir::AssignOp::create(b, loc, it->second, rhs,
+                                        b.getArrayAttr(noIndices));
+    };
+
     if (init.split3p1.hasAlpha && !init.split3p1.alphaField.empty())
-      fieldArg[init.split3p1.alphaField] = split.getAlpha();
+      bindToField(init.split3p1.alphaField, init3p1.getAlpha());
     if (init.split3p1.hasBeta && !init.split3p1.betaField.empty())
-      fieldArg[init.split3p1.betaField] = split.getBeta();
+      bindToField(init.split3p1.betaField, init3p1.getBeta());
     if (init.split3p1.hasGamma && !init.split3p1.gammaField.empty())
-      fieldArg[init.split3p1.gammaField] = split.getGamma();
+      bindToField(init.split3p1.gammaField, init3p1.getGamma());
     if (init.split3p1.hasGammaU && !init.split3p1.gammaUField.empty())
-      fieldArg[init.split3p1.gammaUField] = split.getGammaU();
+      bindToField(init.split3p1.gammaUField, init3p1.getGammaU());
   }
 
   if (moduleUsesFieldName(module, "gammaU")) {
     if (!(init.split3p1.enabled && init.split3p1.hasGammaU)) {
       emitUnsupportedExprError(
           loc, "field 'gammaU' is used in equations but split_3p1 does not bind gammaU");
+    }
+  }
+}
+
+static void emitEvolutionOps(
+    mlir::OpBuilder &b, mlir::Location loc,
+    const tensorium::backend::ModuleIR &module,
+    const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg) {
+  for (const auto &evo : module.evolutions) {
+    llvm::StringMap<mlir::Value> tempValues;
+
+    for (const auto &tmp : evo.temporaries) {
+      if (!tmp.indexOffsets.empty()) {
+        emitUnsupportedExprError(
+            loc, "non-scalar temporary '" + tmp.name +
+                     "' is not supported in executable mode");
+      }
+      auto rhsV = emitExpr(b, loc, tmp.rhs.get(), fieldArg, &tempValues);
+      tempValues[tmp.name] = rhsV;
+    }
+
+    for (const auto &eq : evo.equations) {
+      auto it = fieldArg.find(eq.fieldName);
+      if (it == fieldArg.end())
+        continue;
+      auto fieldTy = mlir::dyn_cast<tensorium::mlir::FieldType>(it->second.getType());
+      if (!fieldTy)
+        emitUnsupportedExprError(loc, "field argument lacks tensorium.field type");
+      auto rhsV = emitExpr(b, loc, eq.rhs.get(), fieldArg, &tempValues);
+      if (!rhsV)
+        continue;
+      auto rhsTy = mlir::dyn_cast<tensorium::mlir::FieldType>(rhsV.getType());
+      if (!rhsTy)
+        emitUnsupportedExprError(loc, "rhs expression did not produce tensorium.field type");
+      if (rhsTy.getRank() == 0) {
+        rhsV = tensorium::mlir::PromoteOp::create(b, loc, fieldTy, rhsV).getResult();
+      } else if (fieldTy != rhsTy) {
+        emitUnsupportedExprError(loc, "tensor assignment variance mismatch");
+      }
+      tensorium::mlir::DtAssignOp::create(b, loc, it->second, rhsV,
+                                          makeIndexArrayAttr(b, eq.indices));
     }
   }
 }
@@ -634,16 +702,16 @@ static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
   }
 }
 
-void emitMLIR(const tensorium::backend::ModuleIR &module,
-              const MLIRGenOptions &opts) {
-  mlir::MLIRContext ctx;
+mlir::OwningOpRef<mlir::ModuleOp>
+buildMLIRModule(const tensorium::backend::ModuleIR &module,
+                mlir::MLIRContext &ctx, const MLIRGenOptions &opts) {
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
   ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
   ctx.getOrLoadDialect<tensorium::mlir::TensoriumDialect>();
 
   mlir::OpBuilder b(&ctx);
   auto loc = b.getUnknownLoc();
-  auto moduleOp = mlir::ModuleOp::create(loc);
+  auto moduleOp = mlir::OwningOpRef<mlir::ModuleOp>(mlir::ModuleOp::create(loc));
 
   const auto fields = extractFields(module);
   llvm::SmallVector<mlir::Type, 8> argTypes;
@@ -653,59 +721,44 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
   }
 
   auto funcTy = b.getFunctionType(argTypes, {});
-  auto f = mlir::func::FuncOp::create(loc, "tensorium_entry", funcTy);
-  auto *entry = f.addEntryBlock();
-  b.setInsertionPointToEnd(entry);
+  auto initFunc = mlir::func::FuncOp::create(loc, "tensorium_init", funcTy);
+  auto rhsFunc = mlir::func::FuncOp::create(loc, "tensorium_rhs", funcTy);
+  auto entryFunc = mlir::func::FuncOp::create(loc, "tensorium_entry", funcTy);
 
-  llvm::DenseMap<llvm::StringRef, mlir::Value> fieldArg;
-  for (unsigned i = 0; i < fields.size(); ++i) {
-    fieldArg[fields[i].name] = entry->getArgument(i);
-  }
-
-  emitInitialDataOps(b, loc, module, fieldArg);
-
-  for (const auto &evo : module.evolutions) {
-    llvm::StringMap<mlir::Value> tempValues;
-
-    for (const auto &tmp : evo.temporaries) {
-      if (!tmp.indexOffsets.empty()) {
-        emitUnsupportedExprError(
-            loc, "non-scalar temporary '" + tmp.name +
-                     "' is not supported in executable mode");
-      }
-      auto rhsV = emitExpr(b, loc, tmp.rhs.get(), fieldArg, &tempValues);
-      tempValues[tmp.name] = rhsV;
+  auto mapFieldArgs = [&](mlir::Block *block) {
+    llvm::DenseMap<llvm::StringRef, mlir::Value> fieldArg;
+    for (unsigned i = 0; i < fields.size(); ++i) {
+      fieldArg[fields[i].name] = block->getArgument(i);
     }
+    return fieldArg;
+  };
 
-    for (const auto &eq : evo.equations) {
-      auto it = fieldArg.find(eq.fieldName);
-      if (it == fieldArg.end())
-        continue;
-      auto fieldTy = mlir::dyn_cast<tensorium::mlir::FieldType>(it->second.getType());
-      if (!fieldTy)
-        emitUnsupportedExprError(loc, "field argument lacks tensorium.field type");
-      auto rhsV = emitExpr(b, loc, eq.rhs.get(), fieldArg, &tempValues);
-      if (!rhsV)
-        continue;
-      auto rhsTy = mlir::dyn_cast<tensorium::mlir::FieldType>(rhsV.getType());
-      if (!rhsTy)
-        emitUnsupportedExprError(loc, "rhs expression did not produce tensorium.field type");
-      if (rhsTy.getRank() == 0) {
-        rhsV =
-            tensorium::mlir::PromoteOp::create(b, loc, fieldTy, rhsV).getResult();
-      } else if (fieldTy != rhsTy) {
-        emitUnsupportedExprError(loc, "tensor assignment variance mismatch");
-      }
-      tensorium::mlir::DtAssignOp::create(b, loc, it->second, rhsV,
-                                          makeIndexArrayAttr(b, eq.indices));
-    }
-  }
-  if (module.simulation) {
-    moduleOp->setAttr("tensorium.sim.dim",
-                      b.getI64IntegerAttr(module.simulation->dimension));
-  }
+  auto *initBlock = initFunc.addEntryBlock();
+  b.setInsertionPointToEnd(initBlock);
+  auto initFieldArg = mapFieldArgs(initBlock);
+  emitInitialDataOps(b, loc, module, initFieldArg);
   mlir::func::ReturnOp::create(b, loc);
-  moduleOp.push_back(f);
+
+  auto *rhsBlock = rhsFunc.addEntryBlock();
+  b.setInsertionPointToEnd(rhsBlock);
+  auto rhsFieldArg = mapFieldArgs(rhsBlock);
+  emitEvolutionOps(b, loc, module, rhsFieldArg);
+  mlir::func::ReturnOp::create(b, loc);
+
+  auto *entryBlock = entryFunc.addEntryBlock();
+  b.setInsertionPointToEnd(entryBlock);
+  mlir::func::CallOp::create(b, loc, "tensorium_init", mlir::TypeRange{},
+                             entryBlock->getArguments());
+  mlir::func::CallOp::create(b, loc, "tensorium_rhs", mlir::TypeRange{},
+                             entryBlock->getArguments());
+  mlir::func::ReturnOp::create(b, loc);
+  if (module.simulation) {
+    moduleOp->getOperation()->setAttr("tensorium.sim.dim",
+                                      b.getI64IntegerAttr(module.simulation->dimension));
+  }
+  moduleOp->push_back(initFunc);
+  moduleOp->push_back(rhsFunc);
+  moduleOp->push_back(entryFunc);
 
   MLIRGenOptions pipelineOpts = opts;
   if (module.simulation) {
@@ -722,10 +775,17 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
 
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
-  if (mlir::failed(pm.run(moduleOp))) {
+  if (mlir::failed(pm.run(*moduleOp))) {
     llvm::errs() << "Pipeline failed\n";
   }
-  moduleOp.print(llvm::outs());
+  return moduleOp;
+}
+
+void emitMLIR(const tensorium::backend::ModuleIR &module,
+              const MLIRGenOptions &opts) {
+  mlir::MLIRContext ctx;
+  auto moduleOp = buildMLIRModule(module, ctx, opts);
+  moduleOp->print(llvm::outs());
 }
 
 } // namespace tensorium_mlir

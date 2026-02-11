@@ -441,6 +441,24 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
             "gamma[" + std::to_string(i) + "," + std::to_string(j) + "]");
       }
     }
+
+    if (!init.decomposed.gammaU.empty()) {
+      if (init.decomposed.gammaU.size() != 3) {
+        throw std::runtime_error("initial_data gammaU must be 3x3");
+      }
+      for (size_t i = 0; i < init.decomposed.gammaU.size(); ++i) {
+        if (init.decomposed.gammaU[i].size() != 3) {
+          throw std::runtime_error("initial_data gammaU row " +
+                                   std::to_string(i) +
+                                   " must have 3 entries");
+        }
+        for (size_t j = 0; j < init.decomposed.gammaU[i].size(); ++j) {
+          validateInitialDataExpr(
+              init.decomposed.gammaU[i][j].get(),
+              "gammaU[" + std::to_string(i) + "," + std::to_string(j) + "]");
+        }
+      }
+    }
   }
 
   if (init.hasMetric4) {
@@ -459,9 +477,9 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
   }
 
   if (init.split3p1.enabled) {
-    if (!init.hasMetric4) {
+    if (!init.hasMetric4 && !init.hasDecomposed) {
       throw std::runtime_error(
-          "split_3p1 mapping requires metric4 initial_data definition");
+          "split_3p1 mapping requires metric4 or decomposed initial_data definition");
     }
 
     auto validateTarget = [this](const TensorAccess &target, int expUp,

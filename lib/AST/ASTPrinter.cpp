@@ -209,6 +209,8 @@ void printProgram(const Program &prog) {
       std::cout << "\n";
       std::cout << "  beta = <3 entries>\n";
       std::cout << "  gamma = <3x3 matrix>\n";
+      if (!prog.initialData->decomposed.gammaU.empty())
+        std::cout << "  gammaU = <3x3 matrix>\n";
     }
     if (prog.initialData->split3p1.enabled) {
       std::cout << "  split_3p1 mappings:\n";

@@ -258,6 +258,16 @@ LogicalResult tensorium::mlir::DtAssignOp::verify() {
   return success();
 }
 
+LogicalResult tensorium::mlir::AssignOp::verify() {
+  FieldType fieldTy, rhsTy;
+  if (failed(requireFieldType(getField(), *this, "field", fieldTy)) ||
+      failed(requireFieldType(getRhs(), *this, "rhs", rhsTy)))
+    return failure();
+  if (fieldTy != rhsTy)
+    return emitOpError("rhs tensor type must match field type");
+  return success();
+}
+
 LogicalResult tensorium::mlir::Metric4Op::verify() {
   FieldType metricTy;
   if (failed(requireFieldType(getMetric(), *this, "metric result", metricTy)))
@@ -285,18 +295,13 @@ LogicalResult tensorium::mlir::Metric4Op::verify() {
   return success();
 }
 
-LogicalResult tensorium::mlir::Split3P1Op::verify() {
+LogicalResult tensorium::mlir::Decompose3P1FromMetricOp::verify() {
   FieldType metricTy, alphaTy, betaTy, gammaTy, gammaUTy;
-  FieldType alphaInTy, betaInTy, gammaInTy, gammaUInTy;
   if (failed(requireFieldType(getMetric4(), *this, "metric operand", metricTy)) ||
       failed(requireFieldType(getAlpha(), *this, "alpha result", alphaTy)) ||
       failed(requireFieldType(getBeta(), *this, "beta result", betaTy)) ||
       failed(requireFieldType(getGamma(), *this, "gamma result", gammaTy)) ||
-      failed(requireFieldType(getGammaU(), *this, "gammaU result", gammaUTy)) ||
-      failed(requireFieldType(getAlphaIn(), *this, "alpha input", alphaInTy)) ||
-      failed(requireFieldType(getBetaIn(), *this, "beta input", betaInTy)) ||
-      failed(requireFieldType(getGammaIn(), *this, "gamma input", gammaInTy)) ||
-      failed(requireFieldType(getGammaUIn(), *this, "gammaU input", gammaUInTy)))
+      failed(requireFieldType(getGammaU(), *this, "gammaU result", gammaUTy)))
     return failure();
 
   if (metricTy.getUp() != 0 || metricTy.getDown() != 2)
@@ -310,9 +315,34 @@ LogicalResult tensorium::mlir::Split3P1Op::verify() {
   if (gammaUTy.getUp() != 2 || gammaUTy.getDown() != 0)
     return emitOpError("gammaU result must be contravariant rank-2");
 
+  return success();
+}
+
+LogicalResult tensorium::mlir::Init3P1Op::verify() {
+  FieldType alphaTy, betaTy, gammaTy, gammaUTy;
+  FieldType alphaInTy, betaInTy, gammaInTy, gammaUInTy;
+  if (failed(requireFieldType(getAlpha(), *this, "alpha result", alphaTy)) ||
+      failed(requireFieldType(getBeta(), *this, "beta result", betaTy)) ||
+      failed(requireFieldType(getGamma(), *this, "gamma result", gammaTy)) ||
+      failed(requireFieldType(getGammaU(), *this, "gammaU result", gammaUTy)) ||
+      failed(requireFieldType(getAlphaIn(), *this, "alpha input", alphaInTy)) ||
+      failed(requireFieldType(getBetaIn(), *this, "beta input", betaInTy)) ||
+      failed(requireFieldType(getGammaIn(), *this, "gamma input", gammaInTy)) ||
+      failed(requireFieldType(getGammaUIn(), *this, "gammaU input", gammaUInTy)))
+    return failure();
+
+  if (alphaTy.getRank() != 0)
+    return emitOpError("alpha result must be scalar");
+  if (betaTy.getUp() != 0 || betaTy.getDown() != 1)
+    return emitOpError("beta result must be covector rank-1");
+  if (gammaTy.getUp() != 0 || gammaTy.getDown() != 2)
+    return emitOpError("gamma result must be covariant rank-2");
+  if (gammaUTy.getUp() != 2 || gammaUTy.getDown() != 0)
+    return emitOpError("gammaU result must be contravariant rank-2");
+
   if (alphaInTy != alphaTy || betaInTy != betaTy || gammaInTy != gammaTy ||
       gammaUInTy != gammaUTy)
-    return emitOpError("split3p1 inputs and outputs must have matching types");
+    return emitOpError("init3p1 inputs and outputs must have matching types");
 
   return success();
 }

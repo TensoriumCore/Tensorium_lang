@@ -5,12 +5,20 @@
 #include "tensorium/Sema/Sema.hpp"
 #include "tensorium/Validation/IRCanonicalize.hpp"
 #include "tensorium/Validation/IRVerifier.hpp"
+#include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
+#include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Operation.h"
 
+#include <cmath>
+#include <functional>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using namespace tensorium;
@@ -47,6 +55,66 @@ static bool verifyCanonicalIR(const backend::ModuleIR &mod,
   for (const auto &diag : verify.diags)
     std::cerr << "FAIL(" << label << "): " << diag.message << "\n";
   return false;
+}
+
+static tensorium_mlir::MLIRGenOptions makeExecutablePipelineOpts() {
+  tensorium_mlir::MLIRGenOptions opts;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableIndexAnalyzePass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+  return opts;
+}
+
+static ::mlir::OwningOpRef<::mlir::ModuleOp>
+buildMLIRModuleFromFile(const std::string &path, CompilationMode mode,
+                        ::mlir::MLIRContext &ctx) {
+  backend::ModuleIR mod = buildModuleFromFile(path, mode);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  auto verify = validation::verifyIR(mod);
+  if (!verify.ok()) {
+    std::ostringstream oss;
+    oss << "IR verification failed for " << path;
+    for (const auto &diag : verify.diags)
+      oss << "\n  - " << diag.message;
+    throw std::runtime_error(oss.str());
+  }
+  return tensorium_mlir::buildMLIRModule(mod, ctx, makeExecutablePipelineOpts());
+}
+
+static bool isConstValue(::mlir::Value v, double expected, double eps = 1e-12) {
+  auto c = v.getDefiningOp<tensorium::mlir::ConstOp>();
+  if (!c)
+    return false;
+  return std::abs(c.getValue().convertToDouble() - expected) <= eps;
+}
+
+static bool valueDependsOnImpl(
+    ::mlir::Value root,
+    const std::function<bool(::mlir::Operation *)> &predicate,
+    std::unordered_set<::mlir::Operation *> &visited) {
+  ::mlir::Operation *def = root.getDefiningOp();
+  if (!def)
+    return false;
+  if (predicate(def))
+    return true;
+  if (!visited.insert(def).second)
+    return false;
+  for (::mlir::Value operand : def->getOperands()) {
+    if (valueDependsOnImpl(operand, predicate, visited))
+      return true;
+  }
+  return false;
+}
+
+static bool valueDependsOn(
+    ::mlir::Value root,
+    const std::function<bool(::mlir::Operation *)> &predicate) {
+  std::unordered_set<::mlir::Operation *> visited;
+  return valueDependsOnImpl(root, predicate, visited);
 }
 
 struct IRStats {
@@ -457,6 +525,295 @@ static bool testSchwarzschildCanonicalPatterns() {
   return true;
 }
 
+static bool testSchwarzschildMLIRVerification() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
+                                        CompilationMode::Executable, ctx);
+
+  auto initFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
+  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  auto entryFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry");
+  if (!initFunc || !rhsFunc || !entryFunc) {
+    std::cerr << "FAIL: missing tensorium_init/tensorium_rhs/tensorium_entry in MLIR module\n";
+    return false;
+  }
+
+  bool entryCallsInit = false;
+  bool entryCallsRhs = false;
+  for (::mlir::Operation &op : entryFunc.getBody().front()) {
+    auto call = llvm::dyn_cast<::mlir::func::CallOp>(&op);
+    if (!call)
+      continue;
+    if (call.getCallee() == "tensorium_init")
+      entryCallsInit = true;
+    if (call.getCallee() == "tensorium_rhs")
+      entryCallsRhs = true;
+  }
+  if (!entryCallsInit || !entryCallsRhs) {
+    std::cerr << "FAIL: tensorium_entry must call tensorium_init then tensorium_rhs\n";
+    return false;
+  }
+
+  tensorium::mlir::Metric4Op metricOp;
+  tensorium::mlir::Decompose3P1FromMetricOp decomposeOp;
+  tensorium::mlir::Init3P1Op init3p1Op;
+  bool hasLegacySplitOp = false;
+  bool hasParamM = false;
+  bool hasCoordR = false;
+  bool hasCoordTheta = false;
+  bool hasSin = false;
+  bool initHasDtAssign = false;
+  bool initBindsAlpha = false;
+  bool initBindsGamma = false;
+  bool initBindsGammaU = false;
+  bool rhsHasAssign = false;
+  bool rhsHasMetric = false;
+  bool rhsHasDecompose = false;
+  bool rhsHasInit3p1 = false;
+  bool rhsDtTargetsOnlyHK = true;
+  int rhsDtAssignCount = 0;
+
+  for (::mlir::Operation &op : initFunc.getBody().front()) {
+    if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op))
+      metricOp = metric;
+    if (auto decomp = llvm::dyn_cast<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
+      decomposeOp = decomp;
+    if (auto init = llvm::dyn_cast<tensorium::mlir::Init3P1Op>(&op))
+      init3p1Op = init;
+    if (llvm::isa<tensorium::mlir::DtAssignOp>(&op))
+      initHasDtAssign = true;
+    if (auto assign = llvm::dyn_cast<tensorium::mlir::AssignOp>(&op)) {
+      if (assign.getRhs() == init3p1Op.getAlpha() &&
+          assign.getField() == initFunc.getArgument(2))
+        initBindsAlpha = true;
+      if (assign.getRhs() == init3p1Op.getGamma() &&
+          assign.getField() == initFunc.getArgument(5))
+        initBindsGamma = true;
+      if (assign.getRhs() == init3p1Op.getGammaU() &&
+          assign.getField() == initFunc.getArgument(6))
+        initBindsGammaU = true;
+    }
+    if (auto param = llvm::dyn_cast<tensorium::mlir::ParamOp>(&op)) {
+      if (param.getName() == "M")
+        hasParamM = true;
+    }
+    if (auto coord = llvm::dyn_cast<tensorium::mlir::CoordOp>(&op)) {
+      if (coord.getName() == "r")
+        hasCoordR = true;
+      if (coord.getName() == "theta")
+        hasCoordTheta = true;
+    }
+    if (llvm::isa<tensorium::mlir::SinOp>(&op))
+      hasSin = true;
+    if (op.getName().getStringRef() == "tensorium.split3p1")
+      hasLegacySplitOp = true;
+    if (op.hasAttr("alpha_expr") || op.hasAttr("gamma_diag") ||
+        op.hasAttr("components")) {
+      std::cerr << "FAIL: forbidden legacy string attr found on op '"
+                << op.getName().getStringRef().str() << "'\n";
+      return false;
+    }
+  }
+
+  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+    if (llvm::isa<tensorium::mlir::AssignOp>(&op))
+      rhsHasAssign = true;
+    if (llvm::isa<tensorium::mlir::Metric4Op>(&op))
+      rhsHasMetric = true;
+    if (llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
+      rhsHasDecompose = true;
+    if (llvm::isa<tensorium::mlir::Init3P1Op>(&op))
+      rhsHasInit3p1 = true;
+    if (auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op)) {
+      ++rhsDtAssignCount;
+      if (dt.getField() != rhsFunc.getArgument(4) &&
+          dt.getField() != rhsFunc.getArgument(7))
+        rhsDtTargetsOnlyHK = false;
+    }
+  }
+
+  if (!metricOp || !decomposeOp || !init3p1Op) {
+    std::cerr << "FAIL: expected metric4 + decompose3p1_from_metric + init3p1 in tensorium_init\n";
+    return false;
+  }
+  if (initHasDtAssign) {
+    std::cerr << "FAIL: tensorium_init must not use dt_assign\n";
+    return false;
+  }
+  if (!initBindsAlpha || !initBindsGamma || !initBindsGammaU) {
+    std::cerr << "FAIL: tensorium_init must bind alpha/gamma/gammaU via tensorium.assign\n";
+    return false;
+  }
+  if (rhsHasAssign || rhsHasMetric || rhsHasDecompose || rhsHasInit3p1) {
+    std::cerr << "FAIL: tensorium_rhs must not contain init-time metric/decompose/assign ops\n";
+    return false;
+  }
+  if (!rhsDtTargetsOnlyHK || rhsDtAssignCount != 2) {
+    std::cerr << "FAIL: tensorium_rhs dt_assign must target only H and K\n";
+    return false;
+  }
+  if (hasLegacySplitOp) {
+    std::cerr << "FAIL: legacy tensorium.split3p1 op should not be emitted\n";
+    return false;
+  }
+  if (decomposeOp->getNumOperands() != 1) {
+    std::cerr << "FAIL: decompose3p1_from_metric must take exactly one metric operand\n";
+    return false;
+  }
+  if (decomposeOp.getMetric4() != metricOp.getMetric()) {
+    std::cerr << "FAIL: decompose3p1_from_metric must consume metric4 result\n";
+    return false;
+  }
+  if (init3p1Op->getNumOperands() != 4) {
+    std::cerr << "FAIL: init3p1 must take exactly 4 operands\n";
+    return false;
+  }
+  if (init3p1Op.getAlphaIn() != decomposeOp.getAlpha() ||
+      init3p1Op.getBetaIn() != decomposeOp.getBeta() ||
+      init3p1Op.getGammaIn() != decomposeOp.getGamma() ||
+      init3p1Op.getGammaUIn() != decomposeOp.getGammaU()) {
+    std::cerr << "FAIL: init3p1 inputs must come from decompose3p1_from_metric outputs\n";
+    return false;
+  }
+  if (!hasParamM || !hasCoordR || !hasCoordTheta || !hasSin) {
+    std::cerr << "FAIL: expected param/coord/sin ops for Schwarzschild metric\n";
+    return false;
+  }
+
+  auto isParamMValue = [](::mlir::Value v) {
+    auto p = v.getDefiningOp<tensorium::mlir::ParamOp>();
+    return p && p.getName() == "M";
+  };
+  auto isCoordValue = [](::mlir::Value v, llvm::StringRef name) {
+    auto c = v.getDefiningOp<tensorium::mlir::CoordOp>();
+    return c && c.getName() == name;
+  };
+
+  auto metricComps = metricOp.getComponents();
+  if (metricComps.size() != 16) {
+    std::cerr << "FAIL: metric4 must carry 16 SSA components\n";
+    return false;
+  }
+  ::mlir::Value g00 = metricComps[0];
+  ::mlir::Value g33 = metricComps[15];
+
+  auto g00Neg = g00.getDefiningOp<tensorium::mlir::SubOp>();
+  if (!g00Neg || !isConstValue(g00Neg.getLhs(), 0.0)) {
+    std::cerr << "FAIL: expected g_tt = -(...) lowering form\n";
+    return false;
+  }
+
+  auto fSub = g00Neg.getRhs().getDefiningOp<tensorium::mlir::SubOp>();
+  if (!fSub || !isConstValue(fSub.getLhs(), 1.0)) {
+    std::cerr << "FAIL: expected f = 1 - 2*M/r in metric lowering\n";
+    return false;
+  }
+
+  auto twoMrDiv = fSub.getRhs().getDefiningOp<tensorium::mlir::DivOp>();
+  if (!twoMrDiv || !isCoordValue(twoMrDiv.getRhs(), "r")) {
+    std::cerr << "FAIL: expected 2*M/r denominator to be coordinate r\n";
+    return false;
+  }
+
+  auto twoMMul = twoMrDiv.getLhs().getDefiningOp<tensorium::mlir::MulOp>();
+  if (!twoMMul) {
+    std::cerr << "FAIL: expected 2*M multiplication in Schwarzschild factor\n";
+    return false;
+  }
+  const bool hasConst2ParamM =
+      (isConstValue(twoMMul.getLhs(), 2.0) && isParamMValue(twoMMul.getRhs())) ||
+      (isConstValue(twoMMul.getRhs(), 2.0) && isParamMValue(twoMMul.getLhs()));
+  if (!hasConst2ParamM) {
+    std::cerr << "FAIL: expected factor 2*M in Schwarzschild factor\n";
+    return false;
+  }
+  int twoMrCount = 0;
+  for (::mlir::Operation &op : initFunc.getBody().front()) {
+    auto div = llvm::dyn_cast<tensorium::mlir::DivOp>(&op);
+    if (!div || !isCoordValue(div.getRhs(), "r"))
+      continue;
+    auto mul = div.getLhs().getDefiningOp<tensorium::mlir::MulOp>();
+    if (!mul)
+      continue;
+    const bool match =
+        (isConstValue(mul.getLhs(), 2.0) && isParamMValue(mul.getRhs())) ||
+        (isConstValue(mul.getRhs(), 2.0) && isParamMValue(mul.getLhs()));
+    if (match)
+      ++twoMrCount;
+  }
+  if (twoMrCount != 1) {
+    std::cerr << "FAIL: expected CSE to keep a single 2*M/r computation, got "
+              << twoMrCount << "\n";
+    return false;
+  }
+
+  if (!valueDependsOn(g33, [](::mlir::Operation *op) {
+        return llvm::isa<tensorium::mlir::SinOp>(op);
+      }) ||
+      !valueDependsOn(g33, [](::mlir::Operation *op) {
+        auto coord = llvm::dyn_cast<tensorium::mlir::CoordOp>(op);
+        return coord && coord.getName() == "theta";
+      })) {
+    std::cerr << "FAIL: g_phph must depend on sin(theta)\n";
+    return false;
+  }
+
+  ::mlir::Value gammaURef;
+  ::mlir::Value alphaRef;
+  ::mlir::Value gammaRef;
+  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+    auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op);
+    if (!ref)
+      continue;
+    if (ref.getSource() == rhsFunc.getArgument(6))
+      gammaURef = ref.getResult();
+    if (ref.getSource() == rhsFunc.getArgument(2))
+      alphaRef = ref.getResult();
+    if (ref.getSource() == rhsFunc.getArgument(5))
+      gammaRef = ref.getResult();
+  }
+  if (!gammaURef || !alphaRef || !gammaRef) {
+    std::cerr << "FAIL: expected refs sourced from alpha/gamma/gammaU fields in tensorium_rhs\n";
+    return false;
+  }
+
+  bool gammaUFeedsContract = false;
+  for (::mlir::Operation *user : gammaURef.getUsers()) {
+    auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(user);
+    if (!mul)
+      continue;
+    for (::mlir::Operation *mulUser : mul.getRes().getUsers()) {
+      if (llvm::isa<tensorium::mlir::ContractOp>(mulUser)) {
+        gammaUFeedsContract = true;
+        break;
+      }
+    }
+    if (gammaUFeedsContract)
+      break;
+  }
+  if (!gammaUFeedsContract) {
+    std::cerr << "FAIL: gammaU field is not used in contract use-def chain\n";
+    return false;
+  }
+
+  bool alphaGammaMulFound = false;
+  for (::mlir::Operation *user : alphaRef.getUsers()) {
+    auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(user);
+    if (!mul)
+      continue;
+    if (mul.getLhs() == gammaRef || mul.getRhs() == gammaRef) {
+      alphaGammaMulFound = true;
+      break;
+    }
+  }
+  if (!alphaGammaMulFound) {
+    std::cerr << "FAIL: expected dt K to use alpha*gamma field values\n";
+    return false;
+  }
+
+  return true;
+}
+
 int main() {
   bool ok = true;
   ok &= testConTensor3Lowering();
@@ -468,6 +825,7 @@ int main() {
   ok &= testIRCanonicalEinsteinRenameInsert();
   ok &= testIRVerifierRejectsUncanonicalizedGradient();
   ok &= testSchwarzschildCanonicalPatterns();
+  ok &= testSchwarzschildMLIRVerification();
 
   if (!ok)
     return 1;

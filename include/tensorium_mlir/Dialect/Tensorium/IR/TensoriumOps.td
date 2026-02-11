@@ -29,6 +29,7 @@ def Tensorium_IndexOp : Tensorium_Op<"index"> {
 }
 
 def Tensorium_ConstOp : Tensorium_Op<"const"> {
+  let traits = [Pure];
   let arguments = (ins F64Attr:$value);
   let results = (outs Tensorium_FieldType:$result);
   let hasVerifier = 1;
@@ -48,12 +49,14 @@ def Tensorium_RefOp : Tensorium_Op<"ref"> {
 }
 
 def Tensorium_ParamOp : Tensorium_Op<"param"> {
+  let traits = [Pure];
   let arguments = (ins StrAttr:$name);
   let results = (outs Tensorium_FieldType:$result);
   let hasVerifier = 1;
 }
 
 def Tensorium_CoordOp : Tensorium_Op<"coord"> {
+  let traits = [Pure];
   let arguments = (ins StrAttr:$name);
   let results = (outs Tensorium_FieldType:$result);
   let hasVerifier = 1;
@@ -139,6 +142,14 @@ def Tensorium_DtAssignOp : Tensorium_Op<"dt_assign"> {
   let hasVerifier = 1;
 }
 
+def Tensorium_AssignOp : Tensorium_Op<"assign"> {
+
+  let arguments = (ins Tensorium_FieldType:$field, Tensorium_FieldType:$rhs,
+                   ArrayAttr:$indices);
+  let results = (outs);
+  let hasVerifier = 1;
+}
+
 def Tensorium_Metric4Op : Tensorium_Op<"metric4"> {
   let summary = "Carry explicit 4D metric initial data";
   let arguments = (ins Variadic<Tensorium_FieldType>:$components,
@@ -149,10 +160,19 @@ def Tensorium_Metric4Op : Tensorium_Op<"metric4"> {
   let hasVerifier = 1;
 }
 
-def Tensorium_Split3P1Op : Tensorium_Op<"split3p1"> {
-  let summary = "Split spacetime metric into alpha, beta, gamma, gammaU";
-  let arguments = (ins Tensorium_FieldType:$metric4,
-                   Tensorium_FieldType:$alpha_in,
+def Tensorium_Decompose3P1FromMetricOp : Tensorium_Op<"decompose3p1_from_metric"> {
+  let summary = "Decompose 4D metric into alpha, beta, gamma, gammaU";
+  let arguments = (ins Tensorium_FieldType:$metric4);
+  let results = (outs Tensorium_FieldType:$alpha,
+                      Tensorium_FieldType:$beta,
+                      Tensorium_FieldType:$gamma,
+                      Tensorium_FieldType:$gammaU);
+  let hasVerifier = 1;
+}
+
+def Tensorium_Init3P1Op : Tensorium_Op<"init3p1"> {
+  let summary = "Carry explicit 3+1 initial data values";
+  let arguments = (ins Tensorium_FieldType:$alpha_in,
                    Tensorium_FieldType:$beta_in,
                    Tensorium_FieldType:$gamma_in,
                    Tensorium_FieldType:$gammaU_in);
