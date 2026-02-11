@@ -526,42 +526,106 @@ static bool testSchwarzschildCanonicalPatterns() {
   return true;
 }
 
+struct InitRhsLayout {
+  ::mlir::func::FuncOp initFunc;
+  ::mlir::func::FuncOp rhsFunc;
+  ::mlir::func::FuncOp entryFunc;
+  ::mlir::func::CallOp initCall;
+  ::mlir::func::CallOp rhsCall;
+};
+
+static bool verifyInitRhsLayout(::mlir::ModuleOp module, InitRhsLayout &layout,
+                                std::string &error) {
+  layout.initFunc = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
+  layout.rhsFunc = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  layout.entryFunc = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_entry");
+  if (!layout.initFunc || !layout.rhsFunc || !layout.entryFunc) {
+    error = "missing tensorium_init/tensorium_rhs/tensorium_entry";
+    return false;
+  }
+
+  llvm::SmallVector<::mlir::func::CallOp, 2> calls;
+  for (::mlir::Operation &op : layout.entryFunc.getBody().front()) {
+    if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(&op)) {
+      calls.push_back(call);
+      continue;
+    }
+    if (!llvm::isa<::mlir::func::ReturnOp>(&op)) {
+      error = "tensorium_entry must only contain func.call + return";
+      return false;
+    }
+  }
+  if (calls.size() != 2) {
+    error = "tensorium_entry must contain exactly 2 calls";
+    return false;
+  }
+  if (calls[0].getCallee() != "tensorium_init" ||
+      calls[1].getCallee() != "tensorium_rhs") {
+    error = "tensorium_entry call order must be init then rhs";
+    return false;
+  }
+  layout.initCall = calls[0];
+  layout.rhsCall = calls[1];
+
+  bool initHasMetric = false;
+  bool initHasDecompose = false;
+  bool initHasAssign = false;
+  bool initHasDtAssign = false;
+  for (::mlir::Operation &op : layout.initFunc.getBody().front()) {
+    initHasMetric |= llvm::isa<tensorium::mlir::Metric4Op>(&op);
+    initHasDecompose |=
+        llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op);
+    initHasAssign |= llvm::isa<tensorium::mlir::AssignOp>(&op);
+    initHasDtAssign |= llvm::isa<tensorium::mlir::DtAssignOp>(&op);
+  }
+  if (!initHasMetric || !initHasDecompose || !initHasAssign || initHasDtAssign) {
+    error = "tensorium_init placement invariant failed";
+    return false;
+  }
+
+  bool rhsHasDtAssign = false;
+  bool rhsHasForbiddenOps = false;
+  for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
+    rhsHasDtAssign |= llvm::isa<tensorium::mlir::DtAssignOp>(&op);
+    rhsHasForbiddenOps |= llvm::isa<tensorium::mlir::Metric4Op>(&op);
+    rhsHasForbiddenOps |=
+        llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op);
+    rhsHasForbiddenOps |= llvm::isa<tensorium::mlir::AssignOp>(&op);
+  }
+  if (!rhsHasDtAssign || rhsHasForbiddenOps) {
+    error = "tensorium_rhs placement invariant failed";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildMLIRVerification() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
                                         CompilationMode::Executable, ctx);
 
-  auto initFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
-  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
-  auto entryFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry");
-  if (!initFunc || !rhsFunc || !entryFunc) {
-    std::cerr << "FAIL: missing tensorium_init/tensorium_rhs/tensorium_entry in MLIR module\n";
+  InitRhsLayout layout;
+  std::string layoutError;
+  if (!verifyInitRhsLayout(*module, layout, layoutError)) {
+    std::cerr << "FAIL: " << layoutError << "\n";
     return false;
   }
 
-  if (initFunc.getNumArguments() != 3) {
+  if (layout.initFunc.getNumArguments() != 3) {
     std::cerr << "FAIL: expected tensorium_init signature to have 3 arguments for Schwarzschild fixture\n";
     return false;
   }
-  if (rhsFunc.getNumArguments() != 6) {
+  if (layout.rhsFunc.getNumArguments() != 6) {
     std::cerr << "FAIL: expected tensorium_rhs signature to have 6 arguments for Schwarzschild fixture\n";
     return false;
   }
-
-  std::vector<std::string> entryCalls;
-  for (::mlir::Operation &op : entryFunc.getBody().front()) {
-    if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(&op)) {
-      entryCalls.emplace_back(call.getCallee().str());
-      continue;
-    }
-    if (!llvm::isa<::mlir::func::ReturnOp>(&op)) {
-      std::cerr << "FAIL: tensorium_entry must only contain function calls + return\n";
-      return false;
-    }
+  if (layout.initCall.getNumOperands() != layout.initFunc.getNumArguments()) {
+    std::cerr << "FAIL: entry->init call arity mismatch\n";
+    return false;
   }
-  if (entryCalls.size() != 2 || entryCalls[0] != "tensorium_init" ||
-      entryCalls[1] != "tensorium_rhs") {
-    std::cerr << "FAIL: tensorium_entry must call tensorium_init then tensorium_rhs\n";
+  if (layout.rhsCall.getNumOperands() != layout.rhsFunc.getNumArguments()) {
+    std::cerr << "FAIL: entry->rhs call arity mismatch\n";
     return false;
   }
 
@@ -573,37 +637,38 @@ static bool testSchwarzschildMLIRVerification() {
   bool hasCoordR = false;
   bool hasCoordTheta = false;
   bool hasSin = false;
-  bool initHasDtAssign = false;
-  int initAssignCount = 0;
-  ::mlir::Value initAssignedAlphaField;
-  ::mlir::Value initAssignedGammaField;
-  ::mlir::Value initAssignedGammaUField;
-  bool rhsHasAssign = false;
-  bool rhsHasMetric = false;
-  bool rhsHasDecompose = false;
-  bool rhsHasInit3p1 = false;
-  bool rhsDtTargetsValid = true;
-  int rhsDtAssignCount = 0;
-  int rhsScalarDtAssignCount = 0;
-  int rhsTensorDtAssignCount = 0;
 
-  for (::mlir::Operation &op : initFunc.getBody().front()) {
+  int initAssignCount = 0;
+  std::vector<::mlir::Value> initAssignedEntryValues;
+  auto pushUniqueValue = [](std::vector<::mlir::Value> &vals, ::mlir::Value v) {
+    if (llvm::find(vals, v) == vals.end())
+      vals.push_back(v);
+  };
+
+  for (::mlir::Operation &op : layout.initFunc.getBody().front()) {
     if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op))
       metricOp = metric;
     if (auto decomp = llvm::dyn_cast<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
       decomposeOp = decomp;
     if (auto init = llvm::dyn_cast<tensorium::mlir::Init3P1Op>(&op))
       init3p1Op = init;
-    if (llvm::isa<tensorium::mlir::DtAssignOp>(&op))
-      initHasDtAssign = true;
     if (auto assign = llvm::dyn_cast<tensorium::mlir::AssignOp>(&op)) {
       ++initAssignCount;
-      if (assign.getRhs() == init3p1Op.getAlpha())
-        initAssignedAlphaField = assign.getField();
-      if (assign.getRhs() == init3p1Op.getGamma())
-        initAssignedGammaField = assign.getField();
-      if (assign.getRhs() == init3p1Op.getGammaU())
-        initAssignedGammaUField = assign.getField();
+      if (assign.getRhs() == init3p1Op.getAlpha() ||
+          assign.getRhs() == init3p1Op.getGamma() ||
+          assign.getRhs() == init3p1Op.getGammaU()) {
+        auto arg = llvm::dyn_cast<::mlir::BlockArgument>(assign.getField());
+        if (!arg) {
+          std::cerr << "FAIL: init assign target must be a block argument\n";
+          return false;
+        }
+        if (arg.getArgNumber() >= layout.initCall.getNumOperands()) {
+          std::cerr << "FAIL: init assign target arg out of init call bounds\n";
+          return false;
+        }
+        pushUniqueValue(initAssignedEntryValues,
+                        layout.initCall.getOperand(arg.getArgNumber()));
+      }
     }
     if (auto param = llvm::dyn_cast<tensorium::mlir::ParamOp>(&op)) {
       if (param.getName() == "M")
@@ -627,15 +692,13 @@ static bool testSchwarzschildMLIRVerification() {
     }
   }
 
-  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
-    if (llvm::isa<tensorium::mlir::AssignOp>(&op))
-      rhsHasAssign = true;
-    if (llvm::isa<tensorium::mlir::Metric4Op>(&op))
-      rhsHasMetric = true;
-    if (llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
-      rhsHasDecompose = true;
-    if (llvm::isa<tensorium::mlir::Init3P1Op>(&op))
-      rhsHasInit3p1 = true;
+  bool rhsDtTargetsValid = true;
+  int rhsDtAssignCount = 0;
+  int rhsScalarDtAssignCount = 0;
+  int rhsTensorDtAssignCount = 0;
+  std::vector<::mlir::Value> rhsReadEntryValues;
+
+  for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
     if (auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op)) {
       ++rhsDtAssignCount;
       if (!llvm::isa<::mlir::BlockArgument>(dt.getField()))
@@ -653,30 +716,29 @@ static bool testSchwarzschildMLIRVerification() {
         rhsDtTargetsValid = false;
       }
     }
+    if (auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op)) {
+      if (auto arg = llvm::dyn_cast<::mlir::BlockArgument>(ref.getSource())) {
+        if (arg.getArgNumber() < layout.rhsCall.getNumOperands()) {
+          pushUniqueValue(rhsReadEntryValues,
+                          layout.rhsCall.getOperand(arg.getArgNumber()));
+        }
+      }
+    }
   }
 
   if (!metricOp || !decomposeOp || !init3p1Op) {
     std::cerr << "FAIL: expected metric4 + decompose3p1_from_metric + init3p1 in tensorium_init\n";
     return false;
   }
-  if (initHasDtAssign) {
-    std::cerr << "FAIL: tensorium_init must not use dt_assign\n";
-    return false;
-  }
-  if (initAssignCount != 3 || !initAssignedAlphaField || !initAssignedGammaField ||
-      !initAssignedGammaUField) {
+  if (initAssignCount != 3 || initAssignedEntryValues.size() != 3) {
     std::cerr << "FAIL: tensorium_init must bind alpha/gamma/gammaU via tensorium.assign\n";
     return false;
   }
-  if (!llvm::isa<::mlir::BlockArgument>(initAssignedAlphaField) ||
-      !llvm::isa<::mlir::BlockArgument>(initAssignedGammaField) ||
-      !llvm::isa<::mlir::BlockArgument>(initAssignedGammaUField)) {
-    std::cerr << "FAIL: tensorium_init assign targets must be function arguments\n";
-    return false;
-  }
-  if (rhsHasAssign || rhsHasMetric || rhsHasDecompose || rhsHasInit3p1) {
-    std::cerr << "FAIL: tensorium_rhs must not contain init-time metric/decompose/assign ops\n";
-    return false;
+  for (::mlir::Value v : initAssignedEntryValues) {
+    if (llvm::find(rhsReadEntryValues, v) == rhsReadEntryValues.end()) {
+      std::cerr << "FAIL: RHS does not read one of the fields assigned in init\n";
+      return false;
+    }
   }
   if (!rhsDtTargetsValid || rhsDtAssignCount != 2 || rhsScalarDtAssignCount != 1 ||
       rhsTensorDtAssignCount != 1) {
@@ -759,7 +821,7 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
   int twoMrCount = 0;
-  for (::mlir::Operation &op : initFunc.getBody().front()) {
+  for (::mlir::Operation &op : layout.initFunc.getBody().front()) {
     auto div = llvm::dyn_cast<tensorium::mlir::DivOp>(&op);
     if (!div || !isCoordValue(div.getRhs(), "r"))
       continue;
@@ -796,7 +858,7 @@ static bool testSchwarzschildMLIRVerification() {
     auto ty = llvm::dyn_cast<tensorium::mlir::FieldType>(v.getType());
     return ty && ty.getRank() == 0;
   };
-  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+  for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
     auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op);
     if (!ref)
       continue;
@@ -814,7 +876,7 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
 
-  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+  for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
     auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(&op);
     if (!mul)
       continue;
@@ -848,7 +910,7 @@ static bool testSchwarzschildMLIRVerification() {
   }
 
   bool alphaGammaMulFound = false;
-  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+  for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
     auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(&op);
     if (!mul)
       continue;
@@ -866,6 +928,43 @@ static bool testSchwarzschildMLIRVerification() {
   return true;
 }
 
+static bool testInitRhsInvariantRejectsMetricInRhs() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
+                                        CompilationMode::Executable, ctx);
+
+  InitRhsLayout layout;
+  std::string err;
+  if (!verifyInitRhsLayout(*module, layout, err)) {
+    std::cerr << "FAIL: baseline layout must be valid before negative mutation: "
+              << err << "\n";
+    return false;
+  }
+
+  tensorium::mlir::Metric4Op metricInInit;
+  for (::mlir::Operation &op : layout.initFunc.getBody().front()) {
+    if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op)) {
+      metricInInit = metric;
+      break;
+    }
+  }
+  if (!metricInInit) {
+    std::cerr << "FAIL: could not locate metric4 op for negative invariant test\n";
+    return false;
+  }
+
+  ::mlir::Operation *clonedMetric = metricInInit->clone();
+  layout.rhsFunc.getBody().front().push_front(clonedMetric);
+
+  InitRhsLayout mutatedLayout;
+  std::string mutatedErr;
+  if (verifyInitRhsLayout(*module, mutatedLayout, mutatedErr)) {
+    std::cerr << "FAIL: expected invariant checker to reject metric4 inside tensorium_rhs\n";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   bool ok = true;
   ok &= testConTensor3Lowering();
@@ -878,6 +977,7 @@ int main() {
   ok &= testIRVerifierRejectsUncanonicalizedGradient();
   ok &= testSchwarzschildCanonicalPatterns();
   ok &= testSchwarzschildMLIRVerification();
+  ok &= testInitRhsInvariantRejectsMetricInRhs();
 
   if (!ok)
     return 1;
