@@ -358,3 +358,17 @@ Planned commit sequence (one intention per commit):
   - `cmake --build build -j` passes after each commit,
   - `bash run_test.sh` passes after the Phase 2 commit blocks,
   - `bash tools/dev/check_layering.sh` is green on `HEAD`.
+
+### Phase 3 started (CMake split scaffolding)
+- Introduced explicit layered targets in `lib/CMakeLists.txt`:
+  - `tensoriumCore` (frontend + sema + runtime sources),
+  - `tensoriumIR` (IR headers as dedicated interface target),
+  - `tensoriumLowering` (AST/Sema -> IR lowering),
+  - `tensoriumValidation` (IR validation module).
+- Kept compatibility target:
+  - `tensorium` is now an aggregate interface linking the four targets above,
+  - existing tool linkage remains stable (`Tensorium_cc`, `Tensorium_tester`, `Tensorium_unittests` still link `tensorium`).
+- Validation:
+  - `cmake --build build -j` passes,
+  - `bash run_test.sh` passes,
+  - `bash tools/dev/check_layering.sh` passes.
