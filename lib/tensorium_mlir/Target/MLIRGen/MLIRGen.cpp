@@ -6,6 +6,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
 #include <algorithm>
+#include <set>
 #include <stdexcept>
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
@@ -15,6 +16,7 @@
 #include "tensorium_mlir/Dialect/Tensorium/Transform/Passes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace tensorium_mlir {
@@ -84,28 +86,168 @@ static bool isCoordinateName(std::string_view name) {
          name == "r" || name == "rho" || name == "theta" || name == "phi";
 }
 
-static bool isZeroInitExpr(const tensorium::backend::InitExprIR *expr) {
-  using tensorium::backend::InitExprIR;
-  if (!expr)
+static bool initExprStructuralEqual(const tensorium::backend::InitExprIR *lhs,
+                                    const tensorium::backend::InitExprIR *rhs) {
+  using namespace tensorium::backend;
+  if (lhs == rhs)
+    return true;
+  if (!lhs || !rhs || lhs->kind != rhs->kind)
     return false;
-  if (expr->kind == InitExprIR::Kind::Number) {
-    auto *n = static_cast<const tensorium::backend::InitNumberIR *>(expr);
-    return n->value == 0.0;
+
+  switch (lhs->kind) {
+  case InitExprIR::Kind::Number: {
+    auto *l = static_cast<const InitNumberIR *>(lhs);
+    auto *r = static_cast<const InitNumberIR *>(rhs);
+    return l->value == r->value;
+  }
+  case InitExprIR::Kind::Symbol: {
+    auto *l = static_cast<const InitSymbolIR *>(lhs);
+    auto *r = static_cast<const InitSymbolIR *>(rhs);
+    return l->name == r->name;
+  }
+  case InitExprIR::Kind::Binary: {
+    auto *l = static_cast<const InitBinaryIR *>(lhs);
+    auto *r = static_cast<const InitBinaryIR *>(rhs);
+    return l->op == r->op &&
+           initExprStructuralEqual(l->lhs.get(), r->lhs.get()) &&
+           initExprStructuralEqual(l->rhs.get(), r->rhs.get());
+  }
+  case InitExprIR::Kind::Call: {
+    auto *l = static_cast<const InitCallIR *>(lhs);
+    auto *r = static_cast<const InitCallIR *>(rhs);
+    if (l->callee != r->callee || l->args.size() != r->args.size())
+      return false;
+    for (size_t i = 0; i < l->args.size(); ++i) {
+      if (!initExprStructuralEqual(l->args[i].get(), r->args[i].get()))
+        return false;
+    }
+    return true;
+  }
   }
   return false;
 }
 
-static bool metric4IsDiagonalAndZeroShift(const tensorium::backend::InitialDataIR &init) {
+static bool metric4HasSymmetricComponents(
+    const tensorium::backend::InitialDataIR &init) {
   if (!init.hasMetric4 || init.metric4.components.size() != 16)
     return false;
 
-  const int offDiagIndices[] = {
-      1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14};
-  for (int idx : offDiagIndices) {
-    if (!isZeroInitExpr(init.metric4.components[idx].get()))
-      return false;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = i + 1; j < 4; ++j) {
+      const size_t a = static_cast<size_t>(i * 4 + j);
+      const size_t b = static_cast<size_t>(j * 4 + i);
+      if (!initExprStructuralEqual(init.metric4.components[a].get(),
+                                   init.metric4.components[b].get())) {
+        return false;
+      }
+    }
   }
   return true;
+}
+
+static void collectExprFieldNames(const tensorium::backend::ExprIR *expr,
+                                  llvm::StringSet<> &out) {
+  using namespace tensorium::backend;
+  if (!expr)
+    return;
+  switch (expr->kind) {
+  case ExprIR::Kind::Number:
+    return;
+  case ExprIR::Kind::Var: {
+    auto *v = static_cast<const VarIR *>(expr);
+    if (v->vkind == VarKind::Field)
+      out.insert(v->name);
+    return;
+  }
+  case ExprIR::Kind::Binary: {
+    auto *b = static_cast<const BinaryIR *>(expr);
+    collectExprFieldNames(b->lhs.get(), out);
+    collectExprFieldNames(b->rhs.get(), out);
+    return;
+  }
+  case ExprIR::Kind::Call: {
+    auto *c = static_cast<const CallIR *>(expr);
+    for (const auto &arg : c->args)
+      collectExprFieldNames(arg.get(), out);
+    return;
+  }
+  case ExprIR::Kind::TensorProduct: {
+    auto *p = static_cast<const TensorProductIR *>(expr);
+    collectExprFieldNames(p->lhs.get(), out);
+    collectExprFieldNames(p->rhs.get(), out);
+    return;
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *c = static_cast<const ContractionIR *>(expr);
+    collectExprFieldNames(c->in.get(), out);
+    return;
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *r = static_cast<const IndexRenameIR *>(expr);
+    collectExprFieldNames(r->in.get(), out);
+    return;
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *p = static_cast<const IndexPermuteIR *>(expr);
+    collectExprFieldNames(p->in.get(), out);
+    return;
+  }
+  case ExprIR::Kind::Trace: {
+    auto *t = static_cast<const TraceIR *>(expr);
+    collectExprFieldNames(t->in.get(), out);
+    return;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *d = static_cast<const PartialDerivativeIR *>(expr);
+    collectExprFieldNames(d->in.get(), out);
+    return;
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *g = static_cast<const GradientIR *>(expr);
+    collectExprFieldNames(g->in.get(), out);
+    return;
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    auto *d = static_cast<const CovariantDerivativeIR *>(expr);
+    collectExprFieldNames(d->in.get(), out);
+    return;
+  }
+  case ExprIR::Kind::Divergence: {
+    auto *d = static_cast<const DivergenceIR *>(expr);
+    collectExprFieldNames(d->in.get(), out);
+    return;
+  }
+  }
+}
+
+static void collectInitExprFieldNames(
+    const tensorium::backend::InitExprIR *expr,
+    const llvm::StringSet<> &knownFieldNames, llvm::StringSet<> &out) {
+  using namespace tensorium::backend;
+  if (!expr)
+    return;
+  switch (expr->kind) {
+  case InitExprIR::Kind::Number:
+    return;
+  case InitExprIR::Kind::Symbol: {
+    auto *s = static_cast<const InitSymbolIR *>(expr);
+    if (knownFieldNames.contains(s->name))
+      out.insert(s->name);
+    return;
+  }
+  case InitExprIR::Kind::Binary: {
+    auto *b = static_cast<const InitBinaryIR *>(expr);
+    collectInitExprFieldNames(b->lhs.get(), knownFieldNames, out);
+    collectInitExprFieldNames(b->rhs.get(), knownFieldNames, out);
+    return;
+  }
+  case InitExprIR::Kind::Call: {
+    auto *c = static_cast<const InitCallIR *>(expr);
+    for (const auto &arg : c->args)
+      collectInitExprFieldNames(arg.get(), knownFieldNames, out);
+    return;
+  }
+  }
 }
 
 static bool exprUsesFieldName(const tensorium::backend::ExprIR *expr,
@@ -189,6 +331,84 @@ static bool moduleUsesFieldName(const tensorium::backend::ModuleIR &module,
     }
   }
   return false;
+}
+
+static std::vector<unsigned>
+collectInitArgIndices(const tensorium::backend::ModuleIR &module,
+                      const std::vector<FieldDesc> &fields) {
+  llvm::StringMap<unsigned> indexByName;
+  llvm::StringSet<> knownFieldNames;
+  for (unsigned i = 0; i < fields.size(); ++i) {
+    indexByName[fields[i].name] = i;
+    knownFieldNames.insert(fields[i].name);
+  }
+
+  llvm::StringSet<> needed;
+  auto markIfField = [&](const std::string &name) {
+    if (indexByName.contains(name))
+      needed.insert(name);
+  };
+
+  if (module.initialData) {
+    const auto &init = *module.initialData;
+    if (init.split3p1.enabled) {
+      if (init.split3p1.hasAlpha && !init.split3p1.alphaField.empty())
+        markIfField(init.split3p1.alphaField);
+      if (init.split3p1.hasBeta && !init.split3p1.betaField.empty())
+        markIfField(init.split3p1.betaField);
+      if (init.split3p1.hasGamma && !init.split3p1.gammaField.empty())
+        markIfField(init.split3p1.gammaField);
+      if (init.split3p1.hasGammaU && !init.split3p1.gammaUField.empty())
+        markIfField(init.split3p1.gammaUField);
+    }
+
+    if (init.hasMetric4) {
+      for (const auto &comp : init.metric4.components)
+        collectInitExprFieldNames(comp.get(), knownFieldNames, needed);
+    } else if (init.hasDecomposed) {
+      if (init.decomposed.alphaExpr)
+        collectInitExprFieldNames(init.decomposed.alphaExpr.get(),
+                                  knownFieldNames, needed);
+      for (const auto &expr : init.decomposed.betaExpr)
+        collectInitExprFieldNames(expr.get(), knownFieldNames, needed);
+      for (const auto &expr : init.decomposed.gammaExpr)
+        collectInitExprFieldNames(expr.get(), knownFieldNames, needed);
+      for (const auto &expr : init.decomposed.gammaUExpr)
+        collectInitExprFieldNames(expr.get(), knownFieldNames, needed);
+    }
+  }
+
+  std::vector<unsigned> out;
+  for (unsigned i = 0; i < fields.size(); ++i) {
+    if (needed.contains(fields[i].name))
+      out.push_back(i);
+  }
+  return out;
+}
+
+static std::vector<unsigned>
+collectRhsArgIndices(const tensorium::backend::ModuleIR &module,
+                     const std::vector<FieldDesc> &fields) {
+  llvm::StringMap<unsigned> indexByName;
+  for (unsigned i = 0; i < fields.size(); ++i)
+    indexByName[fields[i].name] = i;
+
+  llvm::StringSet<> needed;
+  for (const auto &evo : module.evolutions) {
+    for (const auto &tmp : evo.temporaries)
+      collectExprFieldNames(tmp.rhs.get(), needed);
+    for (const auto &eq : evo.equations) {
+      needed.insert(eq.fieldName);
+      collectExprFieldNames(eq.rhs.get(), needed);
+    }
+  }
+
+  std::vector<unsigned> out;
+  for (unsigned i = 0; i < fields.size(); ++i) {
+    if (needed.contains(fields[i].name))
+      out.push_back(i);
+  }
+  return out;
 }
 
 static mlir::Value emitInitExpr(
@@ -329,9 +549,9 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
       emitUnsupportedExprError(
           loc, "metric4 initial_data must provide 16 component expressions");
     }
-    if (!metric4IsDiagonalAndZeroShift(init)) {
+    if (!metric4HasSymmetricComponents(init)) {
       emitUnsupportedExprError(
-          loc, "decompose3p1_from_metric: not implemented for non-diagonal or beta!=0");
+          loc, "decompose3p1_from_metric requires symmetric metric components");
     }
 
     llvm::SmallVector<mlir::Value, 16> metricComps;
@@ -714,43 +934,66 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   auto moduleOp = mlir::OwningOpRef<mlir::ModuleOp>(mlir::ModuleOp::create(loc));
 
   const auto fields = extractFields(module);
-  llvm::SmallVector<mlir::Type, 8> argTypes;
+  llvm::SmallVector<mlir::Type, 8> allArgTypes;
+  allArgTypes.reserve(fields.size());
   for (const auto &fd : fields) {
-    argTypes.push_back(
+    allArgTypes.push_back(
         tensorium::mlir::FieldType::get(&ctx, b.getF64Type(), fd.up, fd.down));
   }
 
-  auto funcTy = b.getFunctionType(argTypes, {});
-  auto initFunc = mlir::func::FuncOp::create(loc, "tensorium_init", funcTy);
-  auto rhsFunc = mlir::func::FuncOp::create(loc, "tensorium_rhs", funcTy);
-  auto entryFunc = mlir::func::FuncOp::create(loc, "tensorium_entry", funcTy);
+  std::vector<unsigned> initArgIndices = collectInitArgIndices(module, fields);
+  std::vector<unsigned> rhsArgIndices = collectRhsArgIndices(module, fields);
 
-  auto mapFieldArgs = [&](mlir::Block *block) {
+  auto buildTypeFromIndices = [&](const std::vector<unsigned> &indices) {
+    llvm::SmallVector<mlir::Type, 8> types;
+    types.reserve(indices.size());
+    for (unsigned idx : indices)
+      types.push_back(allArgTypes[idx]);
+    return b.getFunctionType(types, {});
+  };
+
+  auto initFunc =
+      mlir::func::FuncOp::create(loc, "tensorium_init", buildTypeFromIndices(initArgIndices));
+  auto rhsFunc =
+      mlir::func::FuncOp::create(loc, "tensorium_rhs", buildTypeFromIndices(rhsArgIndices));
+  auto entryFunc = mlir::func::FuncOp::create(loc, "tensorium_entry",
+                                              b.getFunctionType(allArgTypes, {}));
+
+  auto mapFieldArgs = [&](mlir::Block *block, const std::vector<unsigned> &indices) {
     llvm::DenseMap<llvm::StringRef, mlir::Value> fieldArg;
-    for (unsigned i = 0; i < fields.size(); ++i) {
-      fieldArg[fields[i].name] = block->getArgument(i);
-    }
+    for (unsigned i = 0; i < indices.size(); ++i)
+      fieldArg[fields[indices[i]].name] = block->getArgument(i);
     return fieldArg;
   };
 
   auto *initBlock = initFunc.addEntryBlock();
   b.setInsertionPointToEnd(initBlock);
-  auto initFieldArg = mapFieldArgs(initBlock);
+  auto initFieldArg = mapFieldArgs(initBlock, initArgIndices);
   emitInitialDataOps(b, loc, module, initFieldArg);
   mlir::func::ReturnOp::create(b, loc);
 
   auto *rhsBlock = rhsFunc.addEntryBlock();
   b.setInsertionPointToEnd(rhsBlock);
-  auto rhsFieldArg = mapFieldArgs(rhsBlock);
+  auto rhsFieldArg = mapFieldArgs(rhsBlock, rhsArgIndices);
   emitEvolutionOps(b, loc, module, rhsFieldArg);
   mlir::func::ReturnOp::create(b, loc);
 
   auto *entryBlock = entryFunc.addEntryBlock();
   b.setInsertionPointToEnd(entryBlock);
+  llvm::SmallVector<mlir::Value, 8> initCallArgs;
+  initCallArgs.reserve(initArgIndices.size());
+  for (unsigned idx : initArgIndices)
+    initCallArgs.push_back(entryBlock->getArgument(idx));
+
+  llvm::SmallVector<mlir::Value, 8> rhsCallArgs;
+  rhsCallArgs.reserve(rhsArgIndices.size());
+  for (unsigned idx : rhsArgIndices)
+    rhsCallArgs.push_back(entryBlock->getArgument(idx));
+
   mlir::func::CallOp::create(b, loc, "tensorium_init", mlir::TypeRange{},
-                             entryBlock->getArguments());
+                             initCallArgs);
   mlir::func::CallOp::create(b, loc, "tensorium_rhs", mlir::TypeRange{},
-                             entryBlock->getArguments());
+                             rhsCallArgs);
   mlir::func::ReturnOp::create(b, loc);
   if (module.simulation) {
     moduleOp->getOperation()->setAttr("tensorium.sim.dim",
