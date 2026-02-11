@@ -460,3 +460,67 @@ Planned commit sequence (one intention per commit):
 - MLIR lowering now consumes explicit backend ops for:
   - contraction/tensor-product/index operations (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp:184`),
   - differential operations (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp:216`).
+
+## 11) Phase 3 Update (Ops Split + Canonical + Schwarzschild Baseline)
+
+### 3.A Ops split completed
+- `include/tensorium/Backend/DomainIR.hpp` is now a compatibility umbrella only.
+- IR definitions were split into dedicated headers:
+  - `include/tensorium/IR/IRBase.hpp`
+  - `include/tensorium/IR/EinsteinOps.hpp`
+  - `include/tensorium/IR/DifferentialOps.hpp`
+  - `include/tensorium/IR/IRPrinter.hpp`
+- Legacy include path kept stable:
+  - `include/tensorium/Backend/IRPrinter.hpp` now forwards to `include/tensorium/IR/IRPrinter.hpp`.
+
+### 3.B Canonical passes + verifier
+- Added dedicated IR canonicalization passes (outside Sema):
+  - `validation::canonicalizeDifferentialIR` in `lib/IR/CanonicalizeDiff.cpp`
+  - `validation::canonicalizeEinsteinIR` in `lib/IR/CanonicalizeEinstein.cpp`
+- Added IR verifier module:
+  - `validation::verifyIR` in `lib/IR/IRVerifier.cpp`
+  - API exposed by `include/tensorium/Validation/IRVerifier.hpp`
+- Driver pipeline now runs:
+  1. AST/Sema -> backend IR lowering
+  2. Differential canonicalization
+  3. Einstein canonicalization
+  4. IR verifier
+  5. Existing semantic/IR validation and optional MLIR/runtime paths
+- Canonical invariants enforced:
+  - `GradientIR` and `DivergenceIR` are sugar and must not survive verifier.
+  - Contraction summed indices must be canonicalized (sorted + unique + valid).
+  - Covariant derivative must carry a valid derivative index and connection availability.
+
+### 3.B tests added (structured IR checks)
+- Added canonical fixtures:
+  - `tests/ir/canonical/01_gradient_sugar.tn`
+  - `tests/ir/canonical/02_divergence_sugar.tn`
+  - `tests/ir/canonical/03_trace_from_contract.tn`
+- Extended `tools/Tester/UnitTests.cpp` with structured IR assertions (not fragile text matching):
+  - gradient sugar -> `PartialDerivativeIR`
+  - divergence sugar -> `ContractionIR(CovariantDerivativeIR(...))`
+  - contract-trace canonicalization
+  - alpha-renaming insertion on risky index capture
+  - verifier rejection of uncanonicalized differential sugar
+
+### 3.C Schwarzschild canonical + perf baseline
+- Schwarzschild fixtures are now covered by canonical IR structural checks in unit tests:
+  - `tests/fixtures/gr/schwarzschild_2d.tn`
+  - `tests/fixtures/gr/schwarzschild_3d.tn`
+  - assertions: canonical IR contains contraction + partial derivative nodes, and no residual gradient/divergence sugar.
+- Bench script updated:
+  - `tools/Bench/bench_schwarzschild.sh` now writes timestamped logs into `tools/Bench/out/<timestamp>/`.
+  - `.gitignore` updated to ignore bench artifacts under `tools/Bench/out/`.
+- Current baseline sample (`20260211_145648`):
+  - Schwarzschild 2D: validate ~0.02s, backend dump ~0.01s, MLIR codegen ~0.02s
+  - Schwarzschild 3D: validate ~0.01s, backend dump ~0.01s, MLIR codegen ~0.02s
+
+### Hotspots and next micro-optimizations
+- Hotspot candidates observed in the new IR stage:
+  - repeated recursive scans over expression trees in canonicalization and verifier,
+  - repeated index usage collection/allocation in Einstein canonicalization,
+  - repeated string allocations for index names.
+- Next measured optimizations to prioritize:
+  1. cache per-expression index-use summaries during one canonical pass traversal,
+  2. switch index representation from `std::string` to compact interned/char IDs in IR nodes,
+  3. reduce temporary allocations in canonical passes (scratch buffers reused per evolution).

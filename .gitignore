@@ -17,3 +17,6 @@ build/
 # clangd
 .cache/
 .idea/
+
+# Bench artifacts
+tools/Bench/out/
