@@ -108,6 +108,7 @@ INITIAL_DATA_ERROR_TESTS=(
 
 INITIAL_DATA_MLIR_ERROR_TESTS=(
   "tests/semantic/initial_data/03_missing_gammau_binding.tn|split_3p1 does not bind gammaU"
+  "tests/semantic/initial_data/04_metric_nondiag_not_implemented.tn|decompose3p1_from_metric: not implemented for non-diagonal or beta!=0"
 )
 
 GR_FIXTURES=(
@@ -335,6 +336,11 @@ if [[ -z "$INIT_LINE" ]]; then
   echo "ERROR: expected tensorium.init3p1 op in $SPLIT_FIXTURE"
   exit 1
 fi
+DECOMP_LINE=$(rg -m1 "tensorium\\.decompose3p1_from_metric" "$SPLIT_OUT" || true)
+if [[ -z "$DECOMP_LINE" ]]; then
+  echo "ERROR: expected tensorium.decompose3p1_from_metric op in $SPLIT_FIXTURE"
+  exit 1
+fi
 if rg -q "tensorium\\.split3p1" "$SPLIT_OUT"; then
   echo "ERROR: unexpected legacy tensorium.split3p1 op in $SPLIT_FIXTURE"
   exit 1
@@ -344,23 +350,19 @@ if ! grep -q "tensorium.metric4" "$SPLIT_OUT"; then
   exit 1
 fi
 if ! grep -q "tensorium.coord" "$SPLIT_OUT"; then
-  echo "ERROR: expected coordinate ops in split3p1 lowering"
+  echo "ERROR: expected coordinate ops in decompose3p1 lowering"
   exit 1
 fi
 if ! grep -q "tensorium.param" "$SPLIT_OUT"; then
-  echo "ERROR: expected parameter ops in split3p1 lowering"
-  exit 1
-fi
-if ! grep -q "\"tensorium.sqrt\"" "$SPLIT_OUT"; then
-  echo "ERROR: expected sqrt op for alpha computation"
+  echo "ERROR: expected parameter ops in decompose3p1 lowering"
   exit 1
 fi
 if ! grep -q "\"tensorium.sin\"" "$SPLIT_OUT"; then
   echo "ERROR: expected sin op in Schwarzschild metric components"
   exit 1
 fi
-if ! grep -q "\"tensorium.build_con_tensor2\"" "$SPLIT_OUT"; then
-  echo "ERROR: expected gammaU tensor build op"
+if rg -q "alpha_expr|gamma_diag|components = \\[" "$SPLIT_OUT"; then
+  echo "ERROR: detected legacy string-encoded initial_data attrs in MLIR output"
   exit 1
 fi
 
@@ -372,6 +374,16 @@ INIT_ARGC=$(
 if [[ "$INIT_ARGC" -ne 4 ]]; then
   echo "ERROR: expected tensorium.init3p1 to take 4 operands, got $INIT_ARGC"
   echo "$INIT_LINE"
+  exit 1
+fi
+DECOMP_ARGC=$(
+  echo "$DECOMP_LINE" \
+    | sed -E 's/.*\(([^)]*)\)[[:space:]]*:[[:space:]]*.*/\1/' \
+    | awk -F',' '{print NF}'
+)
+if [[ "$DECOMP_ARGC" -ne 1 ]]; then
+  echo "ERROR: expected tensorium.decompose3p1_from_metric to take 1 operand, got $DECOMP_ARGC"
+  echo "$DECOMP_LINE"
   exit 1
 fi
 

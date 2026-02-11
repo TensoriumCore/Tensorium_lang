@@ -537,6 +537,7 @@ static bool testSchwarzschildMLIRVerification() {
   }
 
   tensorium::mlir::Metric4Op metricOp;
+  tensorium::mlir::Decompose3P1FromMetricOp decomposeOp;
   tensorium::mlir::Init3P1Op init3p1Op;
   bool hasLegacySplitOp = false;
   bool hasParamM = false;
@@ -547,6 +548,8 @@ static bool testSchwarzschildMLIRVerification() {
   for (::mlir::Operation &op : func.getBody().front()) {
     if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op))
       metricOp = metric;
+    if (auto decomp = llvm::dyn_cast<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
+      decomposeOp = decomp;
     if (auto init = llvm::dyn_cast<tensorium::mlir::Init3P1Op>(&op))
       init3p1Op = init;
     if (auto param = llvm::dyn_cast<tensorium::mlir::ParamOp>(&op)) {
@@ -563,27 +566,39 @@ static bool testSchwarzschildMLIRVerification() {
       hasSin = true;
     if (op.getName().getStringRef() == "tensorium.split3p1")
       hasLegacySplitOp = true;
-    if (op.hasAttr("alpha_expr") || op.hasAttr("gamma_diag")) {
+    if (op.hasAttr("alpha_expr") || op.hasAttr("gamma_diag") ||
+        op.hasAttr("components")) {
       std::cerr << "FAIL: forbidden legacy string attr found on op '"
                 << op.getName().getStringRef().str() << "'\n";
       return false;
     }
   }
 
-  if (!metricOp || !init3p1Op) {
-    std::cerr << "FAIL: expected both metric4 and init3p1 ops\n";
+  if (!metricOp || !decomposeOp || !init3p1Op) {
+    std::cerr << "FAIL: expected metric4 + decompose3p1_from_metric + init3p1\n";
     return false;
   }
   if (hasLegacySplitOp) {
     std::cerr << "FAIL: legacy tensorium.split3p1 op should not be emitted\n";
     return false;
   }
+  if (decomposeOp->getNumOperands() != 1) {
+    std::cerr << "FAIL: decompose3p1_from_metric must take exactly one metric operand\n";
+    return false;
+  }
+  if (decomposeOp.getMetric4() != metricOp.getMetric()) {
+    std::cerr << "FAIL: decompose3p1_from_metric must consume metric4 result\n";
+    return false;
+  }
   if (init3p1Op->getNumOperands() != 4) {
     std::cerr << "FAIL: init3p1 must take exactly 4 operands\n";
     return false;
   }
-  if (metricOp->hasAttr("components")) {
-    std::cerr << "FAIL: metric4 must not encode components as string attrs\n";
+  if (init3p1Op.getAlphaIn() != decomposeOp.getAlpha() ||
+      init3p1Op.getBetaIn() != decomposeOp.getBeta() ||
+      init3p1Op.getGammaIn() != decomposeOp.getGamma() ||
+      init3p1Op.getGammaUIn() != decomposeOp.getGammaU()) {
+    std::cerr << "FAIL: init3p1 inputs must come from decompose3p1_from_metric outputs\n";
     return false;
   }
   if (!hasParamM || !hasCoordR || !hasCoordTheta || !hasSin) {
@@ -606,8 +621,6 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
   ::mlir::Value g00 = metricComps[0];
-  ::mlir::Value g11 = metricComps[5];
-  ::mlir::Value g22 = metricComps[10];
   ::mlir::Value g33 = metricComps[15];
 
   auto g00Neg = g00.getDefiningOp<tensorium::mlir::SubOp>();
@@ -640,41 +653,26 @@ static bool testSchwarzschildMLIRVerification() {
     std::cerr << "FAIL: expected factor 2*M in Schwarzschild factor\n";
     return false;
   }
+  int twoMrCount = 0;
+  for (::mlir::Operation &op : func.getBody().front()) {
+    auto div = llvm::dyn_cast<tensorium::mlir::DivOp>(&op);
+    if (!div || !isCoordValue(div.getRhs(), "r"))
+      continue;
+    auto mul = div.getLhs().getDefiningOp<tensorium::mlir::MulOp>();
+    if (!mul)
+      continue;
+    const bool match =
+        (isConstValue(mul.getLhs(), 2.0) && isParamMValue(mul.getRhs())) ||
+        (isConstValue(mul.getRhs(), 2.0) && isParamMValue(mul.getLhs()));
+    if (match)
+      ++twoMrCount;
+  }
+  if (twoMrCount != 1) {
+    std::cerr << "FAIL: expected CSE to keep a single 2*M/r computation, got "
+              << twoMrCount << "\n";
+    return false;
+  }
 
-  auto alphaSqrt = init3p1Op.getAlphaIn().getDefiningOp<tensorium::mlir::SqrtOp>();
-  if (!alphaSqrt) {
-    std::cerr << "FAIL: expected alpha input to init3p1 to be sqrt(...)\n";
-    return false;
-  }
-  if (!valueDependsOn(alphaSqrt.getIn(), [&](::mlir::Operation *op) {
-        return op == fSub.getOperation();
-      })) {
-    std::cerr << "FAIL: alpha sqrt input does not depend on f = 1-2*M/r\n";
-    return false;
-  }
-
-  auto gammaUBuild =
-      init3p1Op.getGammaUIn().getDefiningOp<tensorium::mlir::BuildConTensor2Op>();
-  if (!gammaUBuild || gammaUBuild.getComponents().size() != 9) {
-    std::cerr << "FAIL: expected gammaU diagonal tensor builder\n";
-    return false;
-  }
-  auto gammaUComps = gammaUBuild.getComponents();
-  for (int idx : {1, 2, 3, 5, 6, 7}) {
-    if (!isConstValue(gammaUComps[idx], 0.0)) {
-      std::cerr << "FAIL: gammaU off-diagonal terms must be zero\n";
-      return false;
-    }
-  }
-  auto inv11 = gammaUComps[0].getDefiningOp<tensorium::mlir::DivOp>();
-  auto inv22 = gammaUComps[4].getDefiningOp<tensorium::mlir::DivOp>();
-  auto inv33 = gammaUComps[8].getDefiningOp<tensorium::mlir::DivOp>();
-  if (!inv11 || !inv22 || !inv33 || !isConstValue(inv11.getLhs(), 1.0) ||
-      !isConstValue(inv22.getLhs(), 1.0) || !isConstValue(inv33.getLhs(), 1.0) ||
-      inv11.getRhs() != g11 || inv22.getRhs() != g22 || inv33.getRhs() != g33) {
-    std::cerr << "FAIL: gammaU diag must be {1/g11, 1/g22, 1/g33}\n";
-    return false;
-  }
   if (!valueDependsOn(g33, [](::mlir::Operation *op) {
         return llvm::isa<tensorium::mlir::SinOp>(op);
       }) ||
