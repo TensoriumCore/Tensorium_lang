@@ -530,9 +530,27 @@ static bool testSchwarzschildMLIRVerification() {
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
                                         CompilationMode::Executable, ctx);
 
-  auto func = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry");
-  if (!func) {
-    std::cerr << "FAIL: missing tensorium_entry function in MLIR module\n";
+  auto initFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
+  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  auto entryFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry");
+  if (!initFunc || !rhsFunc || !entryFunc) {
+    std::cerr << "FAIL: missing tensorium_init/tensorium_rhs/tensorium_entry in MLIR module\n";
+    return false;
+  }
+
+  bool entryCallsInit = false;
+  bool entryCallsRhs = false;
+  for (::mlir::Operation &op : entryFunc.getBody().front()) {
+    auto call = llvm::dyn_cast<::mlir::func::CallOp>(&op);
+    if (!call)
+      continue;
+    if (call.getCallee() == "tensorium_init")
+      entryCallsInit = true;
+    if (call.getCallee() == "tensorium_rhs")
+      entryCallsRhs = true;
+  }
+  if (!entryCallsInit || !entryCallsRhs) {
+    std::cerr << "FAIL: tensorium_entry must call tensorium_init then tensorium_rhs\n";
     return false;
   }
 
@@ -544,14 +562,37 @@ static bool testSchwarzschildMLIRVerification() {
   bool hasCoordR = false;
   bool hasCoordTheta = false;
   bool hasSin = false;
+  bool initHasDtAssign = false;
+  bool initBindsAlpha = false;
+  bool initBindsGamma = false;
+  bool initBindsGammaU = false;
+  bool rhsHasAssign = false;
+  bool rhsHasMetric = false;
+  bool rhsHasDecompose = false;
+  bool rhsHasInit3p1 = false;
+  bool rhsDtTargetsOnlyHK = true;
+  int rhsDtAssignCount = 0;
 
-  for (::mlir::Operation &op : func.getBody().front()) {
+  for (::mlir::Operation &op : initFunc.getBody().front()) {
     if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op))
       metricOp = metric;
     if (auto decomp = llvm::dyn_cast<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
       decomposeOp = decomp;
     if (auto init = llvm::dyn_cast<tensorium::mlir::Init3P1Op>(&op))
       init3p1Op = init;
+    if (llvm::isa<tensorium::mlir::DtAssignOp>(&op))
+      initHasDtAssign = true;
+    if (auto assign = llvm::dyn_cast<tensorium::mlir::AssignOp>(&op)) {
+      if (assign.getRhs() == init3p1Op.getAlpha() &&
+          assign.getField() == initFunc.getArgument(2))
+        initBindsAlpha = true;
+      if (assign.getRhs() == init3p1Op.getGamma() &&
+          assign.getField() == initFunc.getArgument(5))
+        initBindsGamma = true;
+      if (assign.getRhs() == init3p1Op.getGammaU() &&
+          assign.getField() == initFunc.getArgument(6))
+        initBindsGammaU = true;
+    }
     if (auto param = llvm::dyn_cast<tensorium::mlir::ParamOp>(&op)) {
       if (param.getName() == "M")
         hasParamM = true;
@@ -574,8 +615,41 @@ static bool testSchwarzschildMLIRVerification() {
     }
   }
 
+  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+    if (llvm::isa<tensorium::mlir::AssignOp>(&op))
+      rhsHasAssign = true;
+    if (llvm::isa<tensorium::mlir::Metric4Op>(&op))
+      rhsHasMetric = true;
+    if (llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
+      rhsHasDecompose = true;
+    if (llvm::isa<tensorium::mlir::Init3P1Op>(&op))
+      rhsHasInit3p1 = true;
+    if (auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op)) {
+      ++rhsDtAssignCount;
+      if (dt.getField() != rhsFunc.getArgument(4) &&
+          dt.getField() != rhsFunc.getArgument(7))
+        rhsDtTargetsOnlyHK = false;
+    }
+  }
+
   if (!metricOp || !decomposeOp || !init3p1Op) {
-    std::cerr << "FAIL: expected metric4 + decompose3p1_from_metric + init3p1\n";
+    std::cerr << "FAIL: expected metric4 + decompose3p1_from_metric + init3p1 in tensorium_init\n";
+    return false;
+  }
+  if (initHasDtAssign) {
+    std::cerr << "FAIL: tensorium_init must not use dt_assign\n";
+    return false;
+  }
+  if (!initBindsAlpha || !initBindsGamma || !initBindsGammaU) {
+    std::cerr << "FAIL: tensorium_init must bind alpha/gamma/gammaU via tensorium.assign\n";
+    return false;
+  }
+  if (rhsHasAssign || rhsHasMetric || rhsHasDecompose || rhsHasInit3p1) {
+    std::cerr << "FAIL: tensorium_rhs must not contain init-time metric/decompose/assign ops\n";
+    return false;
+  }
+  if (!rhsDtTargetsOnlyHK || rhsDtAssignCount != 2) {
+    std::cerr << "FAIL: tensorium_rhs dt_assign must target only H and K\n";
     return false;
   }
   if (hasLegacySplitOp) {
@@ -654,7 +728,7 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
   int twoMrCount = 0;
-  for (::mlir::Operation &op : func.getBody().front()) {
+  for (::mlir::Operation &op : initFunc.getBody().front()) {
     auto div = llvm::dyn_cast<tensorium::mlir::DivOp>(&op);
     if (!div || !isCoordValue(div.getRhs(), "r"))
       continue;
@@ -684,41 +758,22 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
 
-  ::mlir::Value boundGammaUField;
-  ::mlir::Value boundAlphaField;
-  ::mlir::Value boundGammaField;
-  for (::mlir::Operation &op : func.getBody().front()) {
-    auto assign = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op);
-    if (!assign)
-      continue;
-    if (assign.getRhs() == init3p1Op.getGammaU())
-      boundGammaUField = assign.getField();
-    if (assign.getRhs() == init3p1Op.getAlpha())
-      boundAlphaField = assign.getField();
-    if (assign.getRhs() == init3p1Op.getGamma())
-      boundGammaField = assign.getField();
-  }
-  if (!boundGammaUField || !boundAlphaField || !boundGammaField) {
-    std::cerr << "FAIL: expected init3p1 outputs to be bound via dt_assign\n";
-    return false;
-  }
-
   ::mlir::Value gammaURef;
   ::mlir::Value alphaRef;
   ::mlir::Value gammaRef;
-  for (::mlir::Operation &op : func.getBody().front()) {
+  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
     auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op);
     if (!ref)
       continue;
-    if (ref.getSource() == boundGammaUField)
+    if (ref.getSource() == rhsFunc.getArgument(6))
       gammaURef = ref.getResult();
-    if (ref.getSource() == boundAlphaField)
+    if (ref.getSource() == rhsFunc.getArgument(2))
       alphaRef = ref.getResult();
-    if (ref.getSource() == boundGammaField)
+    if (ref.getSource() == rhsFunc.getArgument(5))
       gammaRef = ref.getResult();
   }
   if (!gammaURef || !alphaRef || !gammaRef) {
-    std::cerr << "FAIL: expected refs sourced from init3p1-bound fields alpha/gamma/gammaU\n";
+    std::cerr << "FAIL: expected refs sourced from alpha/gamma/gammaU fields in tensorium_rhs\n";
     return false;
   }
 
@@ -737,7 +792,7 @@ static bool testSchwarzschildMLIRVerification() {
       break;
   }
   if (!gammaUFeedsContract) {
-    std::cerr << "FAIL: gammaU from init3p1 binding is not used in contract use-def chain\n";
+    std::cerr << "FAIL: gammaU field is not used in contract use-def chain\n";
     return false;
   }
 
@@ -752,7 +807,7 @@ static bool testSchwarzschildMLIRVerification() {
     }
   }
   if (!alphaGammaMulFound) {
-    std::cerr << "FAIL: expected dt K to use alpha*gamma values from init3p1 binding\n";
+    std::cerr << "FAIL: expected dt K to use alpha*gamma field values\n";
     return false;
   }
 

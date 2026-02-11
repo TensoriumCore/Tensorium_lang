@@ -331,33 +331,69 @@ SPLIT_FIXTURE=tests/fixtures/gr/schwarzschild_3d.tn
 SPLIT_OUT="$OUT/schwarzschild_3d_split3p1.mlir"
 "$BIN" "${PIPELINE_BASE[@]}" "$SPLIT_FIXTURE" > "$SPLIT_OUT"
 
-INIT_LINE=$(rg -m1 "tensorium\\.init3p1" "$SPLIT_OUT" || true)
-if [[ -z "$INIT_LINE" ]]; then
-  echo "ERROR: expected tensorium.init3p1 op in $SPLIT_FIXTURE"
-  exit 1
-fi
-DECOMP_LINE=$(rg -m1 "tensorium\\.decompose3p1_from_metric" "$SPLIT_OUT" || true)
-if [[ -z "$DECOMP_LINE" ]]; then
-  echo "ERROR: expected tensorium.decompose3p1_from_metric op in $SPLIT_FIXTURE"
-  exit 1
-fi
 if rg -q "tensorium\\.split3p1" "$SPLIT_OUT"; then
   echo "ERROR: unexpected legacy tensorium.split3p1 op in $SPLIT_FIXTURE"
   exit 1
 fi
-if ! grep -q "tensorium.metric4" "$SPLIT_OUT"; then
-  echo "ERROR: expected tensorium.metric4 op in $SPLIT_FIXTURE"
+if ! rg -q "func\\.func @tensorium_init" "$SPLIT_OUT"; then
+  echo "ERROR: expected @tensorium_init function in $SPLIT_FIXTURE output"
   exit 1
 fi
-if ! grep -q "tensorium.coord" "$SPLIT_OUT"; then
-  echo "ERROR: expected coordinate ops in decompose3p1 lowering"
+if ! rg -q "func\\.func @tensorium_rhs" "$SPLIT_OUT"; then
+  echo "ERROR: expected @tensorium_rhs function in $SPLIT_FIXTURE output"
   exit 1
 fi
-if ! grep -q "tensorium.param" "$SPLIT_OUT"; then
-  echo "ERROR: expected parameter ops in decompose3p1 lowering"
+if ! rg -q "call @tensorium_init" "$SPLIT_OUT"; then
+  echo "ERROR: expected @tensorium_entry to call @tensorium_init"
   exit 1
 fi
-if ! grep -q "\"tensorium.sin\"" "$SPLIT_OUT"; then
+if ! rg -q "call @tensorium_rhs" "$SPLIT_OUT"; then
+  echo "ERROR: expected @tensorium_entry to call @tensorium_rhs"
+  exit 1
+fi
+
+INIT_FUNC_OUT="$OUT/schwarzschild_3d_init.func.mlir"
+RHS_FUNC_OUT="$OUT/schwarzschild_3d_rhs.func.mlir"
+awk '
+  /^[[:space:]]*func\.func @tensorium_init\(/ {in_fn=1}
+  in_fn {print}
+  in_fn && /^[[:space:]]*}/ {exit}
+' "$SPLIT_OUT" > "$INIT_FUNC_OUT"
+awk '
+  /^[[:space:]]*func\.func @tensorium_rhs\(/ {in_fn=1}
+  in_fn {print}
+  in_fn && /^[[:space:]]*}/ {exit}
+' "$SPLIT_OUT" > "$RHS_FUNC_OUT"
+
+if ! rg -q "tensorium\\.metric4" "$INIT_FUNC_OUT"; then
+  echo "ERROR: expected tensorium.metric4 op in @tensorium_init"
+  exit 1
+fi
+if ! rg -q "tensorium\\.decompose3p1_from_metric" "$INIT_FUNC_OUT"; then
+  echo "ERROR: expected tensorium.decompose3p1_from_metric op in @tensorium_init"
+  exit 1
+fi
+if ! rg -q "tensorium\\.init3p1" "$INIT_FUNC_OUT"; then
+  echo "ERROR: expected tensorium.init3p1 op in @tensorium_init"
+  exit 1
+fi
+if ! rg -q "tensorium\\.assign" "$INIT_FUNC_OUT"; then
+  echo "ERROR: expected tensorium.assign stores in @tensorium_init"
+  exit 1
+fi
+if rg -q "tensorium\\.dt_assign" "$INIT_FUNC_OUT"; then
+  echo "ERROR: @tensorium_init must not contain tensorium.dt_assign"
+  exit 1
+fi
+if ! rg -q "tensorium\\.coord" "$INIT_FUNC_OUT"; then
+  echo "ERROR: expected coordinate ops in @tensorium_init"
+  exit 1
+fi
+if ! rg -q "tensorium\\.param" "$INIT_FUNC_OUT"; then
+  echo "ERROR: expected parameter ops in @tensorium_init"
+  exit 1
+fi
+if ! rg -q "\"tensorium.sin\"" "$INIT_FUNC_OUT"; then
   echo "ERROR: expected sin op in Schwarzschild metric components"
   exit 1
 fi
@@ -365,70 +401,43 @@ if rg -q "alpha_expr|gamma_diag|components = \\[" "$SPLIT_OUT"; then
   echo "ERROR: detected legacy string-encoded initial_data attrs in MLIR output"
   exit 1
 fi
-
-INIT_ARGC=$(
-  echo "$INIT_LINE" \
-    | sed -E 's/.*\(([^)]*)\)[[:space:]]*:[[:space:]]*.*/\1/' \
-    | awk -F',' '{print NF}'
-)
-if [[ "$INIT_ARGC" -ne 4 ]]; then
-  echo "ERROR: expected tensorium.init3p1 to take 4 operands, got $INIT_ARGC"
-  echo "$INIT_LINE"
+if rg -q "tensorium\\.metric4|tensorium\\.decompose3p1_from_metric|tensorium\\.init3p1" "$RHS_FUNC_OUT"; then
+  echo "ERROR: @tensorium_rhs must not contain metric/decompose/init ops"
   exit 1
 fi
-DECOMP_ARGC=$(
-  echo "$DECOMP_LINE" \
-    | sed -E 's/.*\(([^)]*)\)[[:space:]]*:[[:space:]]*.*/\1/' \
-    | awk -F',' '{print NF}'
-)
-if [[ "$DECOMP_ARGC" -ne 1 ]]; then
-  echo "ERROR: expected tensorium.decompose3p1_from_metric to take 1 operand, got $DECOMP_ARGC"
-  echo "$DECOMP_LINE"
+if rg -q "tensorium\\.assign" "$RHS_FUNC_OUT"; then
+  echo "ERROR: @tensorium_rhs must not contain tensorium.assign"
   exit 1
 fi
-
-INIT_GAMMAU=$(
-  echo "$INIT_LINE" \
-    | sed -E 's/^[[:space:]]*([^=]+)=.*/\1/' \
-    | awk -F',' '{print $4}' \
-    | xargs
-)
-if [[ -z "$INIT_GAMMAU" ]]; then
-  echo "ERROR: could not extract gammaU result from init3p1 op"
-  echo "$INIT_LINE"
+if ! rg -q "tensorium\\.dt_assign" "$RHS_FUNC_OUT"; then
+  echo "ERROR: expected tensorium.dt_assign ops in @tensorium_rhs"
+  exit 1
+fi
+BAD_RHS_DT=$(rg "\"tensorium\\.dt_assign\"\\(%arg[0-9]+," "$RHS_FUNC_OUT" | rg -v "\"tensorium\\.dt_assign\"\\(%arg(4|7)," || true)
+if [[ -n "$BAD_RHS_DT" ]]; then
+  echo "ERROR: @tensorium_rhs has dt_assign target not in {H,K}"
+  echo "$BAD_RHS_DT"
+  exit 1
+fi
+RHS_DT_COUNT=$(rg -c "\"tensorium\\.dt_assign\"\\(%arg(4|7)," "$RHS_FUNC_OUT")
+if [[ "$RHS_DT_COUNT" -ne 2 ]]; then
+  echo "ERROR: expected exactly 2 dt_assign ops for H and K in @tensorium_rhs, got $RHS_DT_COUNT"
   exit 1
 fi
 
-BIND_LINE=$(rg -m1 "\"tensorium\\.dt_assign\"\\((%[A-Za-z0-9_$.]+),[[:space:]]*${INIT_GAMMAU}\\)" "$SPLIT_OUT" || true)
-if [[ -z "$BIND_LINE" ]]; then
-  echo "ERROR: expected dt_assign binding for init3p1 gammaU result"
-  echo "init gammaU value: $INIT_GAMMAU"
-  exit 1
-fi
-BIND_FIELD=$(echo "$BIND_LINE" | awk -F'(' '{print $2}' | awk -F',' '{print $1}' | xargs)
-if [[ -z "$BIND_FIELD" ]]; then
-  echo "ERROR: could not extract bound field from dt_assign"
-  echo "$BIND_LINE"
-  exit 1
-fi
-
-REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+${BIND_FIELD}\\b|\"tensorium\\.ref\"\\(${BIND_FIELD}" "$SPLIT_OUT" || true)
+REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+%arg6\\b|\"tensorium\\.ref\"\\(%arg6" "$RHS_FUNC_OUT" || true)
 if [[ -z "$REF_LINE" ]]; then
-  echo "ERROR: expected a tensorium.ref from init3p1-bound gammaU field"
-  echo "bound gammaU field: $BIND_FIELD"
-  echo "init gammaU value: $INIT_GAMMAU"
+  echo "ERROR: expected a tensorium.ref from gammaU field (%arg6) in @tensorium_rhs"
   exit 1
 fi
 REF_GAMMAU=$(echo "$REF_LINE" | sed -E 's/^([[:space:]]*%[A-Za-z0-9_$.]+).*/\1/' | xargs)
 if [[ -z "$REF_GAMMAU" ]]; then
-  echo "ERROR: could not extract ref result for gammaU use-def chain"
+  echo "ERROR: could not extract ref result for gammaU use-def chain in @tensorium_rhs"
   echo "$REF_LINE"
   exit 1
 fi
-if ! rg -q "\"tensorium\\.mul\"\\(${REF_GAMMAU},|tensorium\\.mul[[:space:]]+${REF_GAMMAU}," "$SPLIT_OUT"; then
-  echo "ERROR: expected RHS contraction to use gammaU coming from init3p1 binding"
-  echo "init gammaU value: $INIT_GAMMAU"
-  echo "bound gammaU field: $BIND_FIELD"
+if ! rg -q "\"tensorium\\.mul\"\\(${REF_GAMMAU},|tensorium\\.mul[[:space:]]+${REF_GAMMAU}," "$RHS_FUNC_OUT"; then
+  echo "ERROR: expected RHS contraction to use gammaU from field %arg6"
   echo "ref gammaU value: $REF_GAMMAU"
   exit 1
 fi
