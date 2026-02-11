@@ -323,16 +323,20 @@ done
 
 echo
 echo "=============================="
-echo " RUN SCHWARZSCHILD SPLIT3+1 MLIR CHECK"
+echo " RUN SCHWARZSCHILD 3+1 MLIR CHECK"
 echo "=============================="
 
 SPLIT_FIXTURE=tests/fixtures/gr/schwarzschild_3d.tn
 SPLIT_OUT="$OUT/schwarzschild_3d_split3p1.mlir"
 "$BIN" "${PIPELINE_BASE[@]}" "$SPLIT_FIXTURE" > "$SPLIT_OUT"
 
-SPLIT_LINE=$(rg -m1 "tensorium\\.split3p1" "$SPLIT_OUT" || true)
-if [[ -z "$SPLIT_LINE" ]]; then
-  echo "ERROR: expected tensorium.split3p1 op in $SPLIT_FIXTURE"
+INIT_LINE=$(rg -m1 "tensorium\\.init3p1" "$SPLIT_OUT" || true)
+if [[ -z "$INIT_LINE" ]]; then
+  echo "ERROR: expected tensorium.init3p1 op in $SPLIT_FIXTURE"
+  exit 1
+fi
+if rg -q "tensorium\\.split3p1" "$SPLIT_OUT"; then
+  echo "ERROR: unexpected legacy tensorium.split3p1 op in $SPLIT_FIXTURE"
   exit 1
 fi
 if ! grep -q "tensorium.metric4" "$SPLIT_OUT"; then
@@ -360,21 +364,32 @@ if ! grep -q "\"tensorium.build_con_tensor2\"" "$SPLIT_OUT"; then
   exit 1
 fi
 
-SPLIT_GAMMAU=$(
-  echo "$SPLIT_LINE" \
+INIT_ARGC=$(
+  echo "$INIT_LINE" \
+    | sed -E 's/.*\(([^)]*)\)[[:space:]]*:[[:space:]]*.*/\1/' \
+    | awk -F',' '{print NF}'
+)
+if [[ "$INIT_ARGC" -ne 4 ]]; then
+  echo "ERROR: expected tensorium.init3p1 to take 4 operands, got $INIT_ARGC"
+  echo "$INIT_LINE"
+  exit 1
+fi
+
+INIT_GAMMAU=$(
+  echo "$INIT_LINE" \
     | sed -E 's/^[[:space:]]*([^=]+)=.*/\1/' \
     | awk -F',' '{print $4}' \
     | xargs
 )
-if [[ -z "$SPLIT_GAMMAU" ]]; then
-  echo "ERROR: could not extract gammaU result from split3p1 op"
-  echo "$SPLIT_LINE"
+if [[ -z "$INIT_GAMMAU" ]]; then
+  echo "ERROR: could not extract gammaU result from init3p1 op"
+  echo "$INIT_LINE"
   exit 1
 fi
-REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+${SPLIT_GAMMAU}\\b|\"tensorium\\.ref\"\\(${SPLIT_GAMMAU}" "$SPLIT_OUT" || true)
+REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+${INIT_GAMMAU}\\b|\"tensorium\\.ref\"\\(${INIT_GAMMAU}" "$SPLIT_OUT" || true)
 if [[ -z "$REF_LINE" ]]; then
-  echo "ERROR: expected a tensorium.ref from split3p1 gammaU result"
-  echo "split gammaU value: $SPLIT_GAMMAU"
+  echo "ERROR: expected a tensorium.ref from init3p1 gammaU result"
+  echo "init gammaU value: $INIT_GAMMAU"
   exit 1
 fi
 REF_GAMMAU=$(echo "$REF_LINE" | sed -E 's/^([[:space:]]*%[A-Za-z0-9_$.]+).*/\1/' | xargs)
@@ -384,8 +399,8 @@ if [[ -z "$REF_GAMMAU" ]]; then
   exit 1
 fi
 if ! rg -q "\"tensorium\\.mul\"\\(${REF_GAMMAU},|tensorium\\.mul[[:space:]]+${REF_GAMMAU}," "$SPLIT_OUT"; then
-  echo "ERROR: expected RHS contraction to use gammaU coming from split3p1"
-  echo "split gammaU value: $SPLIT_GAMMAU"
+  echo "ERROR: expected RHS contraction to use gammaU coming from init3p1"
+  echo "init gammaU value: $INIT_GAMMAU"
   echo "ref gammaU value: $REF_GAMMAU"
   exit 1
 fi

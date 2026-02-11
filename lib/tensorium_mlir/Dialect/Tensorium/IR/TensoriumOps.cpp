@@ -285,11 +285,10 @@ LogicalResult tensorium::mlir::Metric4Op::verify() {
   return success();
 }
 
-LogicalResult tensorium::mlir::Split3P1Op::verify() {
-  FieldType metricTy, alphaTy, betaTy, gammaTy, gammaUTy;
+LogicalResult tensorium::mlir::Init3P1Op::verify() {
+  FieldType alphaTy, betaTy, gammaTy, gammaUTy;
   FieldType alphaInTy, betaInTy, gammaInTy, gammaUInTy;
-  if (failed(requireFieldType(getMetric4(), *this, "metric operand", metricTy)) ||
-      failed(requireFieldType(getAlpha(), *this, "alpha result", alphaTy)) ||
+  if (failed(requireFieldType(getAlpha(), *this, "alpha result", alphaTy)) ||
       failed(requireFieldType(getBeta(), *this, "beta result", betaTy)) ||
       failed(requireFieldType(getGamma(), *this, "gamma result", gammaTy)) ||
       failed(requireFieldType(getGammaU(), *this, "gammaU result", gammaUTy)) ||
@@ -299,8 +298,6 @@ LogicalResult tensorium::mlir::Split3P1Op::verify() {
       failed(requireFieldType(getGammaUIn(), *this, "gammaU input", gammaUInTy)))
     return failure();
 
-  if (metricTy.getUp() != 0 || metricTy.getDown() != 2)
-    return emitOpError("metric operand must be covariant rank-2");
   if (alphaTy.getRank() != 0)
     return emitOpError("alpha result must be scalar");
   if (betaTy.getUp() != 0 || betaTy.getDown() != 1)
@@ -312,7 +309,7 @@ LogicalResult tensorium::mlir::Split3P1Op::verify() {
 
   if (alphaInTy != alphaTy || betaInTy != betaTy || gammaInTy != gammaTy ||
       gammaUInTy != gammaUTy)
-    return emitOpError("split3p1 inputs and outputs must have matching types");
+    return emitOpError("init3p1 inputs and outputs must have matching types");
 
   return success();
 }

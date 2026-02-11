@@ -319,7 +319,7 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
                                        coordValues));
   }
 
-  auto metric = tensorium::mlir::Metric4Op::create(
+  [[maybe_unused]] auto metric = tensorium::mlir::Metric4Op::create(
       b, loc, metricTy, metricComps, b.getStringAttr(init.metric4.name),
       b.getStringAttr(init.metric4.coordSystem),
       makeStringArrayAttr(b, init.metric4.indices),
@@ -333,7 +333,7 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
                         isZeroInitExpr(init.metric4.components[12].get());
   if (!betaZero) {
     emitUnsupportedExprError(
-        loc, "split3p1 with non-zero shift is not implemented yet");
+        loc, "metric4 -> init3p1 lowering with non-zero shift is not implemented yet");
   }
 
   auto one = tensorium::mlir::ConstOp::create(b, loc, scalarTy,
@@ -380,19 +380,19 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
                                                             gammaUComponents)
                     .getResult();
 
-  auto split = tensorium::mlir::Split3P1Op::create(
+  auto init3p1 = tensorium::mlir::Init3P1Op::create(
       b, loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
-      metric.getMetric(), alpha, beta, gamma, gammaU);
+      alpha, beta, gamma, gammaU);
 
   if (init.split3p1.enabled) {
     if (init.split3p1.hasAlpha && !init.split3p1.alphaField.empty())
-      fieldArg[init.split3p1.alphaField] = split.getAlpha();
+      fieldArg[init.split3p1.alphaField] = init3p1.getAlpha();
     if (init.split3p1.hasBeta && !init.split3p1.betaField.empty())
-      fieldArg[init.split3p1.betaField] = split.getBeta();
+      fieldArg[init.split3p1.betaField] = init3p1.getBeta();
     if (init.split3p1.hasGamma && !init.split3p1.gammaField.empty())
-      fieldArg[init.split3p1.gammaField] = split.getGamma();
+      fieldArg[init.split3p1.gammaField] = init3p1.getGamma();
     if (init.split3p1.hasGammaU && !init.split3p1.gammaUField.empty())
-      fieldArg[init.split3p1.gammaUField] = split.getGammaU();
+      fieldArg[init.split3p1.gammaUField] = init3p1.getGammaU();
   }
 
   if (moduleUsesFieldName(module, "gammaU")) {

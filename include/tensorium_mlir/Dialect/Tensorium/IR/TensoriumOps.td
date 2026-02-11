@@ -149,10 +149,9 @@ def Tensorium_Metric4Op : Tensorium_Op<"metric4"> {
   let hasVerifier = 1;
 }
 
-def Tensorium_Split3P1Op : Tensorium_Op<"split3p1"> {
-  let summary = "Split spacetime metric into alpha, beta, gamma, gammaU";
-  let arguments = (ins Tensorium_FieldType:$metric4,
-                   Tensorium_FieldType:$alpha_in,
+def Tensorium_Init3P1Op : Tensorium_Op<"init3p1"> {
+  let summary = "Carry explicit 3+1 initial data values";
+  let arguments = (ins Tensorium_FieldType:$alpha_in,
                    Tensorium_FieldType:$beta_in,
                    Tensorium_FieldType:$gamma_in,
                    Tensorium_FieldType:$gammaU_in);
