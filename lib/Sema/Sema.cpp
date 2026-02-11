@@ -215,7 +215,7 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       out->returnType = externDecl->returnType;
       out->paramTypes = externDecl->params;
     }
-    TensorTypeChecker argChecker;
+    TensorTypeChecker argChecker(hasConnectionTensor);
     for (size_t i = 0; i < c->args.size(); ++i) {
       auto transformed = transformExpr(c->args[i].get());
       if (externDecl) {
@@ -251,6 +251,10 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
     if (fields.count(f.name))
       throw std::runtime_error("Field redeclared: " + f.name);
     enforceMetricFieldRules(f);
+    if ((f.name == "Gamma" || f.name == "GammaU" || f.name == "Christoffel") &&
+        (f.up + f.down) == 3) {
+      hasConnectionTensor = true;
+    }
     fields[f.name] = &f;
   }
 
@@ -298,7 +302,7 @@ IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
   for (size_t i = 0; i < decl.indices.size(); ++i)
     coordIndex[decl.indices[i]] = static_cast<int>(i);
 
-  TensorTypeChecker checker;
+  TensorTypeChecker checker(hasConnectionTensor);
 
   for (const auto &entry : decl.entries) {
     IndexedAssignment a;
@@ -347,7 +351,7 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
     locals[tmp.lhs.base] = true;
   }
 
-  TensorTypeChecker checker;
+  TensorTypeChecker checker(hasConnectionTensor);
 
   for (const auto &eq : evo.equations) {
 

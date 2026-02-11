@@ -23,6 +23,7 @@ class SemanticAnalyzer {
   bool simulationMissing = false;
   int metricFieldCount = 0;
   int inverseMetricFieldCount = 0;
+  bool hasConnectionTensor = false;
 
   void validateSpatialIndex(const std::string &idx);
   int resolveIndex(const std::string &name);

@@ -6,6 +6,18 @@ namespace tensorium {
 bool isExecutableBuiltin(std::string_view name) {
   if (name == "contract")
     return true;
+  if (name == "gradient" || name == "grad")
+    return true;
+  if (name == "divergence" || name == "div")
+    return true;
+  if (name == "covariant_derivative")
+    return true;
+  if (name.size() == 7 && name.rfind("nabla_", 0) == 0 &&
+      core::isSpatialIndexChar(name[6]))
+    return true;
+  if (name.size() == 7 && name.rfind("nabla^", 0) == 0 &&
+      core::isSpatialIndexChar(name[6]))
+    return true;
   if (name.size() == 3 && name[0] == 'd' && name[1] == '_' &&
       core::isSpatialIndexChar(name[2]))
     return true;

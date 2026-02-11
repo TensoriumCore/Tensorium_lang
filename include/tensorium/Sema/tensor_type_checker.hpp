@@ -6,6 +6,8 @@
 #include <array>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace tensorium {
 
@@ -27,6 +29,20 @@ class TensorTypeChecker {
     int covariant = 0;
     bool metricCoupling = false;
   };
+  struct IndexAnalysisEntry {
+    int count = 0;
+    IndexVarianceInfo variance;
+    bool insideExplicitContraction = false;
+    bool outsideExplicitContraction = false;
+  };
+  struct IndexAnalysisResult {
+    std::array<IndexAnalysisEntry, 256> entries{};
+    std::vector<std::string> freeIndices;
+    std::vector<std::string> summedIndices;
+    std::vector<std::string> ambiguousIndices;
+    std::vector<std::string> duplicateWithinTensor;
+  };
+  bool connectionTensorAvailable = false;
   static TensorKind deduceKind(int up, int down) {
     if (up == 0 && down == 0)
       return TensorKind::Scalar;
@@ -91,24 +107,81 @@ class TensorTypeChecker {
     return false;
   }
 
-  void collectIndexCounts(const IndexedExpr *e, int counts[256]) const {
+  bool isGradientBuiltin(const std::string &name) const {
+    return name == "gradient" || name == "grad";
+  }
+
+  bool isDivergenceBuiltin(const std::string &name) const {
+    return name == "divergence" || name == "div";
+  }
+
+  bool isCovariantDerivativeBuiltin(const IndexedCall *call,
+                                    bool &contravariant, char &index) const {
+    if (!call)
+      return false;
+    if (isCovariantDerivative(call->callee, contravariant, index))
+      return true;
+    if (call->callee != "covariant_derivative")
+      return false;
+    if (call->args.size() != 2)
+      throw std::runtime_error(
+          "covariant_derivative(tensor, index) expects exactly 2 arguments");
+    auto *idxVar = dynamic_cast<const IndexedVar *>(call->args[1].get());
+    if (!idxVar || idxVar->name.size() != 1 ||
+        !core::isSpatialIndexChar(idxVar->name[0])) {
+      throw std::runtime_error(
+          "covariant_derivative second argument must be a spatial index name");
+    }
+    contravariant = false;
+    index = idxVar->name[0];
+    return true;
+  }
+
+  void collectIndexAnalysis(const IndexedExpr *e, bool insideExplicitContract,
+                            IndexAnalysisResult &analysis) const {
     if (!e)
       return;
 
     if (auto v = dynamic_cast<const IndexedVar *>(e)) {
+      std::unordered_set<std::string> seen;
       for (const auto &name : v->tensorIndexNames) {
         if (!name.empty()) {
+          if (!seen.insert(name).second)
+            analysis.duplicateWithinTensor.push_back(v->name + "[" + name + "]");
           char c = name[0];
           if (core::isTensorIndexChar(c))
-            counts[(unsigned char)c]++;
+            analysis.entries[(unsigned char)c].count++;
+          if (insideExplicitContract)
+            analysis.entries[(unsigned char)c].insideExplicitContraction = true;
+          else
+            analysis.entries[(unsigned char)c].outsideExplicitContraction = true;
         }
+      }
+      for (size_t i = 0; i < v->tensorIndexNames.size(); ++i) {
+        const auto &name = v->tensorIndexNames[i];
+        if (name.empty())
+          continue;
+        char c = name[0];
+        if (!core::isTensorIndexChar(c))
+          continue;
+        auto &entry = analysis.entries[(unsigned char)c];
+        bool isUp = false;
+        if (i < v->tensorIndexIsUp.size())
+          isUp = v->tensorIndexIsUp[i];
+        if (isUp)
+          entry.variance.contravariant += 1;
+        else
+          entry.variance.covariant += 1;
+        if (v->tensorKind == TensorKind::Metric ||
+            v->tensorKind == TensorKind::InverseMetric)
+          entry.variance.metricCoupling = true;
       }
       return;
     }
 
     if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
-      collectIndexCounts(b->lhs.get(), counts);
-      collectIndexCounts(b->rhs.get(), counts);
+      collectIndexAnalysis(b->lhs.get(), insideExplicitContract, analysis);
+      collectIndexAnalysis(b->rhs.get(), insideExplicitContract, analysis);
       return;
     }
 
@@ -118,40 +191,36 @@ class TensorTypeChecker {
       if (cal == "contract") {
         if (c->args.size() != 1)
           throw std::runtime_error("contract() expects 1 argument");
-
-        int tmp[256] = {0};
-        collectIndexCounts(c->args[0].get(), tmp);
-
-        for (char idx : core::kTensorIndices) {
-          int cc = tmp[(unsigned char)idx];
-          if (cc == 0)
-            continue;
-          if (cc == 1) {
-            counts[(unsigned char)idx]++;
-            continue;
-          }
-          if (cc == 2)
-            continue;
-          throw std::runtime_error(
-              std::string("Ambiguous contraction: index '") + idx +
-              "' appears " + std::to_string(cc) + " times.");
-        }
+        collectIndexAnalysis(c->args[0].get(), true, analysis);
         return;
       }
 
       for (const auto &arg : c->args)
-        collectIndexCounts(arg.get(), counts);
+        collectIndexAnalysis(arg.get(), insideExplicitContract, analysis);
 
       if (isPartialDerivative(cal)) {
         char idx = cal[2];
-        counts[(unsigned char)idx]++;
+        auto &entry = analysis.entries[(unsigned char)idx];
+        entry.count++;
+        // d_i(...) introduces a covariant derivative index.
+        entry.variance.covariant += 1;
         return;
       }
 
       bool contra = false;
       char nidx = 0;
-      if (isCovariantDerivative(cal, contra, nidx)) {
-        counts[(unsigned char)nidx]++;
+      if (isCovariantDerivativeBuiltin(c, contra, nidx)) {
+        analysis.entries[(unsigned char)nidx].count++;
+        if (contra)
+          analysis.entries[(unsigned char)nidx].variance.contravariant += 1;
+        else
+          analysis.entries[(unsigned char)nidx].variance.covariant += 1;
+        return;
+      }
+
+      if (isGradientBuiltin(cal) || isDivergenceBuiltin(cal)) {
+        if (c->args.empty())
+          throw std::runtime_error(cal + "() expects at least 1 argument");
         return;
       }
 
@@ -159,45 +228,21 @@ class TensorTypeChecker {
     }
   }
 
-  void collectIndexVariance(const IndexedExpr *e,
-                            std::array<IndexVarianceInfo, 256> &info) const {
-    if (!e)
-      return;
+  IndexAnalysisResult analyzeIndices(const IndexedExpr *e) const {
+    IndexAnalysisResult analysis;
+    collectIndexAnalysis(e, false, analysis);
 
-    if (auto v = dynamic_cast<const IndexedVar *>(e)) {
-      for (size_t i = 0; i < v->tensorIndexNames.size(); ++i) {
-        const auto &name = v->tensorIndexNames[i];
-        if (name.empty())
-          continue;
-        char c = name[0];
-        if (!core::isTensorIndexChar(c))
-          continue;
-        auto &entry = info[(unsigned char)c];
-        bool isUp = false;
-        if (i < v->tensorIndexIsUp.size())
-          isUp = v->tensorIndexIsUp[i];
-        if (isUp)
-          entry.contravariant += 1;
-        else
-          entry.covariant += 1;
-        if (v->tensorKind == TensorKind::Metric ||
-            v->tensorKind == TensorKind::InverseMetric)
-          entry.metricCoupling = true;
-      }
-      return;
+    for (char idx : core::kTensorIndices) {
+      const auto &entry = analysis.entries[(unsigned char)idx];
+      if (entry.count == 1)
+        analysis.freeIndices.push_back(std::string(1, idx));
+      else if (entry.count == 2)
+        analysis.summedIndices.push_back(std::string(1, idx));
+      else if (entry.count >= 3)
+        analysis.ambiguousIndices.push_back(std::string(1, idx));
     }
 
-    if (auto b = dynamic_cast<const IndexedBinary *>(e)) {
-      collectIndexVariance(b->lhs.get(), info);
-      collectIndexVariance(b->rhs.get(), info);
-      return;
-    }
-
-    if (auto c = dynamic_cast<const IndexedCall *>(e)) {
-      for (const auto &arg : c->args)
-        collectIndexVariance(arg.get(), info);
-      return;
-    }
+    return analysis;
   }
 
   void collectAdditiveTerms(const IndexedExpr *e,
@@ -238,6 +283,9 @@ class TensorTypeChecker {
   }
 
 public:
+  explicit TensorTypeChecker(bool hasConnectionTensor = false)
+      : connectionTensorAvailable(hasConnectionTensor) {}
+
   TensorType inferImpl(const IndexedExpr *e, bool allowRepeated) const {
     if (!e)
       throw std::runtime_error("null expression in tensor type inference");
@@ -344,29 +392,34 @@ public:
 
         const IndexedExpr *arg = call->args[0].get();
         TensorType t = inferImpl(arg, true);
+        auto analysis = analyzeIndices(arg);
 
-        int counts[256] = {0};
-        collectIndexCounts(arg, counts);
-
-        int freeCount = 0;
-        int contracted = 0;
-
-        for (char idx : core::kTensorIndices) {
-          int c = counts[(unsigned char)idx];
-          if (c == 0)
-            continue;
-          if (c == 1) {
-            freeCount += 1;
-            continue;
-          }
-          if (c == 2) {
-            contracted += 1;
-            continue;
-          }
-          throw std::runtime_error(
-              std::string("Ambiguous contraction: index '") + idx +
-              "' appears " + std::to_string(c) + " times.");
+        if (!analysis.duplicateWithinTensor.empty()) {
+          throw std::runtime_error("Index collision in tensor access '" +
+                                   analysis.duplicateWithinTensor.front() +
+                                   "': use explicit trace()");
         }
+        if (!analysis.ambiguousIndices.empty()) {
+          throw std::runtime_error(
+              std::string("Ambiguous contraction: index '") +
+              analysis.ambiguousIndices.front() +
+              "' appears 3 or more times.");
+        }
+
+        for (const auto &idxName : analysis.summedIndices) {
+          unsigned char idx = static_cast<unsigned char>(idxName[0]);
+          const auto &info = analysis.entries[idx].variance;
+          bool mixedVariance =
+              (info.contravariant > 0 && info.covariant > 0);
+          if (!mixedVariance && !info.metricCoupling) {
+            throw std::runtime_error("Implicit contraction of index '" +
+                                     idxName +
+                                     "' requires explicit metric or inverse metric");
+          }
+        }
+
+        int freeCount = static_cast<int>(analysis.freeIndices.size());
+        int contracted = static_cast<int>(analysis.summedIndices.size());
 
         if (contracted == 0)
           throw std::runtime_error(
@@ -417,12 +470,40 @@ public:
 
       bool contra = false;
       char idx = 0;
-      if (isCovariantDerivative(cal, contra, idx)) {
-        if (call->args.size() != 1)
-          throw std::runtime_error("nabla expects exactly 1 argument");
+      if (isCovariantDerivativeBuiltin(call, contra, idx)) {
+        if (!connectionTensorAvailable) {
+          throw std::runtime_error(
+              "Covariant derivative requires connection tensor Gamma (rank-3 field)");
+        }
         TensorType t = inferImpl(call->args[0].get(), allowRepeated);
         TensorType res = contra ? TensorType{t.up + 1, t.down}
                                 : TensorType{t.up, t.down + 1};
+        annotateType(e, res);
+        return res;
+      }
+
+      if (isGradientBuiltin(cal)) {
+        if (call->args.size() != 1)
+          throw std::runtime_error("gradient() expects exactly 1 argument");
+        TensorType t = inferImpl(call->args[0].get(), allowRepeated);
+        TensorType res{t.up, t.down + 1};
+        annotateType(e, res);
+        return res;
+      }
+
+      if (isDivergenceBuiltin(cal)) {
+        if (call->args.size() != 1)
+          throw std::runtime_error("divergence() expects exactly 1 argument");
+        if (!connectionTensorAvailable) {
+          throw std::runtime_error(
+              "Divergence requires connection tensor Gamma (rank-3 field)");
+        }
+        TensorType t = inferImpl(call->args[0].get(), allowRepeated);
+        if (t.rank() == 0) {
+          throw std::runtime_error("divergence() expects non-scalar argument");
+        }
+        TensorType res = (t.up > 0) ? TensorType{t.up - 1, t.down}
+                                    : TensorType{t.up, t.down - 1};
         annotateType(e, res);
         return res;
       }
@@ -488,29 +569,32 @@ public:
     collectAdditiveTerms(rhs, terms);
 
     for (const IndexedExpr *t : terms) {
-      int counts[256] = {0};
-      collectIndexCounts(t, counts);
-      std::array<IndexVarianceInfo, 256> variance{};
-      collectIndexVariance(t, variance);
+      auto analysis = analyzeIndices(t);
+      if (!analysis.duplicateWithinTensor.empty()) {
+        throw std::runtime_error("Index collision in tensor access '" +
+                                 analysis.duplicateWithinTensor.front() +
+                                 "': use explicit trace()");
+      }
+      if (!analysis.ambiguousIndices.empty()) {
+        throw std::runtime_error(
+            std::string("Ambiguous contraction: index '") +
+            analysis.ambiguousIndices.front() +
+            "' appears 3 or more times.");
+      }
 
       for (char idx : core::kTensorIndices) {
-        int c = counts[(unsigned char)idx];
+        const auto &entry = analysis.entries[(unsigned char)idx];
+        int c = entry.count;
         bool inLhs = lhsSet[(unsigned char)idx];
 
         if (c == 0)
           continue;
 
-        if (c >= 3) {
-          throw std::runtime_error(
-              std::string("Ambiguous contraction: index '") + idx +
-              "' appears " + std::to_string(c) + " times.");
-        }
-
         if (inLhs) {
           if (c != 1) {
             throw std::runtime_error(
-                std::string("Invalid Einstein: LHS index '") + idx +
-                "' must appear exactly once in RHS.");
+                std::string("Index collision: symbol '") + idx +
+                "' is both free and bound; rename one index in RHS.");
           }
         } else {
           if (c == 1) {
@@ -518,7 +602,7 @@ public:
                                      "' appears only in RHS and not LHS.");
           }
           if (c == 2) {
-            const auto &info = variance[(unsigned char)idx];
+            const auto &info = entry.variance;
             bool mixedVariance =
                 (info.contravariant > 0 && info.covariant > 0);
             if (!mixedVariance && !info.metricCoupling) {
