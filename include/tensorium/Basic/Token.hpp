@@ -13,6 +13,8 @@ enum class TokenType {
   LBracket,
   RBracket,
   Comma,
+  Semicolon,
+  Arrow,
   Equals,
   Plus,
   Minus,
@@ -46,6 +48,8 @@ enum class TokenType {
   KwEvolution,
   KwDt,
   KwSimulation,
+  KwInitialData,
+  KwMetric4,
   KwTime,
   Unknown
 };

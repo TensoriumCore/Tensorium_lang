@@ -161,11 +161,45 @@ struct SimulationConfig {
   SpatialConfig spatial;
 };
 
+struct Metric4InitDecl {
+  std::string name;
+  std::vector<std::string> indices;
+  std::vector<std::vector<std::unique_ptr<Expr>>> components;
+};
+
+struct DecomposedMetricInitDecl {
+  std::unique_ptr<Expr> alpha;
+  std::vector<std::unique_ptr<Expr>> beta;
+  std::vector<std::vector<std::unique_ptr<Expr>>> gamma;
+};
+
+struct Split3P1BindingDecl {
+  bool enabled = false;
+  bool hasAlpha = false;
+  bool hasBeta = false;
+  bool hasGamma = false;
+  bool hasGammaU = false;
+  TensorAccess alphaTarget;
+  TensorAccess betaTarget;
+  TensorAccess gammaTarget;
+  TensorAccess gammaUTarget;
+};
+
+struct InitialDataDecl {
+  bool enforceSymmetry = false;
+  bool hasMetric4 = false;
+  bool hasDecomposed = false;
+  Metric4InitDecl metric4;
+  DecomposedMetricInitDecl decomposed;
+  Split3P1BindingDecl split3p1;
+};
+
 struct Program {
   std::vector<ExternDecl> externs;
   std::vector<FieldDecl> fields;
   std::vector<MetricDecl> metrics;
   std::vector<EvolutionDecl> evolutions;
   std::unique_ptr<SimulationConfig> simulation;
+  std::unique_ptr<InitialDataDecl> initialData;
 };
 } // namespace tensorium

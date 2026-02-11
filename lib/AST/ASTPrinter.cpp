@@ -188,6 +188,65 @@ void printProgram(const Program &prog) {
     std::cout << "  spatial:\n";
     std::cout << "    order = " << sim.spatial.order << "\n";
   }
+
+  if (prog.initialData) {
+    std::cout << "\nInitialData:\n";
+    std::cout << "  enforce_symmetry = "
+              << (prog.initialData->enforceSymmetry ? "true" : "false")
+              << "\n";
+    if (prog.initialData->hasMetric4) {
+      std::cout << "  metric4 " << prog.initialData->metric4.name << "[";
+      for (size_t i = 0; i < prog.initialData->metric4.indices.size(); ++i) {
+        std::cout << prog.initialData->metric4.indices[i];
+        if (i + 1 < prog.initialData->metric4.indices.size())
+          std::cout << ",";
+      }
+      std::cout << "] = <4x4 matrix>\n";
+    }
+    if (prog.initialData->hasDecomposed) {
+      std::cout << "  alpha = ";
+      printExpr(prog.initialData->decomposed.alpha.get());
+      std::cout << "\n";
+      std::cout << "  beta = <3 entries>\n";
+      std::cout << "  gamma = <3x3 matrix>\n";
+    }
+    if (prog.initialData->split3p1.enabled) {
+      std::cout << "  split_3p1 mappings:\n";
+      auto printTarget = [](const TensorAccess &t) {
+        std::cout << t.base;
+        if (!t.indices.empty()) {
+          std::cout << "[";
+          for (size_t i = 0; i < t.indices.size(); ++i) {
+            std::cout << t.indices[i];
+            if (i + 1 < t.indices.size())
+              std::cout << ",";
+          }
+          std::cout << "]";
+        }
+      };
+      if (prog.initialData->split3p1.hasAlpha) {
+        std::cout << "    alpha -> ";
+        printTarget(prog.initialData->split3p1.alphaTarget);
+        std::cout << "\n";
+      }
+      if (prog.initialData->split3p1.hasBeta) {
+        std::cout << "    beta -> ";
+        printTarget(prog.initialData->split3p1.betaTarget);
+        std::cout << "\n";
+      }
+      if (prog.initialData->split3p1.hasGamma) {
+        std::cout << "    gamma -> ";
+        printTarget(prog.initialData->split3p1.gammaTarget);
+        std::cout << "\n";
+      }
+      if (prog.initialData->split3p1.hasGammaU) {
+        std::cout << "    gammaU -> ";
+        printTarget(prog.initialData->split3p1.gammaUTarget);
+        std::cout << "\n";
+      }
+    }
+  }
+
   for (const auto &evo : prog.evolutions) {
     std::cout << "Evolution " << evo.name << " {\n";
     for (const auto &eq : evo.equations) {

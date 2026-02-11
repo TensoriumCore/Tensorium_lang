@@ -1,0 +1,6 @@
+field cov_tensor2 A[i,j]
+field scalar S
+
+evolution CanonicalTrace {
+  dt S = contract(A[i,i])
+}

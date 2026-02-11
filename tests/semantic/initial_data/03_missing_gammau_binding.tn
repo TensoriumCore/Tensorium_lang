@@ -1,0 +1,41 @@
+field metric g[mu,nu]
+field inverse_metric gU[mu,nu]
+field scalar alpha
+field scalar phi
+field scalar H
+field cov_tensor2 gamma[i,j]
+field con_tensor2 gammaU[i,j]
+
+simulation {
+  coordinates = spherical
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.001
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+initial_data {
+  metric4 g[mu,nu] = [
+    [-(1 - 2*M/r), 0, 0, 0],
+    [0, 1/(1 - 2*M/r), 0, 0],
+    [0, 0, r*r, 0],
+    [0, 0, 0, r*r*sin(theta)*sin(theta)]
+  ]
+  split_3p1 {
+    alpha -> alpha;
+    gamma -> gamma[i,j];
+  }
+}
+
+evolution MissingGammaU {
+  dt H = contract(gammaU[i,j] * d_i(d_j(phi)))
+}

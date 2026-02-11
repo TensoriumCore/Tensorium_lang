@@ -51,6 +51,15 @@ double evalScalar(const backend::ExprIR* e, const ScalarEnv& env) {
     throw std::runtime_error("runtime: unsupported binary op '" + op + "'");
   }
   case ExprIR::Kind::Call:
+  case ExprIR::Kind::TensorProduct:
+  case ExprIR::Kind::Contraction:
+  case ExprIR::Kind::IndexRename:
+  case ExprIR::Kind::IndexPermute:
+  case ExprIR::Kind::Trace:
+  case ExprIR::Kind::PartialDerivative:
+  case ExprIR::Kind::Gradient:
+  case ExprIR::Kind::CovariantDerivative:
+  case ExprIR::Kind::Divergence:
     throw std::runtime_error("runtime: calls not supported yet in scalar runtime");
   }
 

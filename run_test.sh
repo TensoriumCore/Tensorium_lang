@@ -80,6 +80,41 @@ ERROR_TESTS=(
   tests/57_error_metric_rank.tn
 )
 
+SEMANTIC_EINSTEIN_VALID_TESTS=(
+  tests/semantic/einstein/01_valid_contraction.tn
+  tests/semantic/einstein/04_valid_two_sums.tn
+)
+
+SEMANTIC_EINSTEIN_ERROR_TESTS=(
+  "tests/semantic/einstein/02_invalid_variance_contraction.tn|requires explicit metric or inverse metric"
+  "tests/semantic/einstein/03_collision_trace.tn|Implicit trace"
+  "tests/semantic/einstein/05_capture_requires_rename.tn|Index collision: symbol"
+)
+
+SEMANTIC_DIFF_VALID_TESTS=(
+  tests/semantic/diff/01_partial_scalar.tn
+  tests/semantic/diff/02_partial_vector_rank_plus_one.tn
+  tests/semantic/diff/03_covariant_with_gamma.tn
+)
+
+SEMANTIC_DIFF_ERROR_TESTS=(
+  "tests/semantic/diff/04_covariant_without_gamma_error.tn|Covariant derivative requires connection tensor Gamma"
+)
+
+INITIAL_DATA_ERROR_TESTS=(
+  "tests/semantic/initial_data/01_invalid_spherical_coord.tn|uses coordinate 'x' incompatible with simulation coordinates"
+  "tests/semantic/initial_data/02_symmetry_violation.tn|metric4 symmetry violation"
+)
+
+INITIAL_DATA_MLIR_ERROR_TESTS=(
+  "tests/semantic/initial_data/03_missing_gammau_binding.tn|split_3p1 does not bind gammaU"
+)
+
+GR_FIXTURES=(
+  tests/fixtures/gr/schwarzschild_2d.tn
+  tests/fixtures/gr/schwarzschild_3d.tn
+)
+
 SYMBOLIC_VALID_TESTS=(
   tests/28_symbolic_unknown_scalar_call_ok.tn
   tests/36_symbolic_unknown_scalar_call_ok.tn
@@ -155,6 +190,205 @@ for f in "${ERROR_TESTS[@]}"; do
     exit 1
   fi
 done
+
+echo
+echo "=============================="
+echo " RUN SEMANTIC EINSTEIN TESTS"
+echo "=============================="
+
+for f in "${SEMANTIC_EINSTEIN_VALID_TESTS[@]}"; do
+  echo "[SEMANTIC OK EXPECTED] $f"
+  "$BIN" --validate "$f" > /dev/null
+done
+
+for entry in "${SEMANTIC_EINSTEIN_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SEMANTIC FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected semantic diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN SEMANTIC DIFF TESTS"
+echo "=============================="
+
+for f in "${SEMANTIC_DIFF_VALID_TESTS[@]}"; do
+  echo "[SEMANTIC OK EXPECTED] $f"
+  "$BIN" --validate "$f" > /dev/null
+done
+
+for entry in "${SEMANTIC_DIFF_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SEMANTIC FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected diff diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN GR FIXTURE CHECKS"
+echo "=============================="
+
+for f in "${GR_FIXTURES[@]}"; do
+  echo "[GR OK EXPECTED] $f"
+  "$BIN" --validate "$f" > /dev/null
+  OUT_FILE="$OUT/$(basename "$f").backend.txt"
+  "$BIN" --dump-backend-expr "$f" > "$OUT_FILE"
+  if ! grep -q "contraction(" "$OUT_FILE"; then
+    echo "ERROR: expected explicit contraction op in backend IR for $f"
+    exit 1
+  fi
+  if ! grep -q "partial_" "$OUT_FILE"; then
+    echo "ERROR: expected explicit partial derivative op in backend IR for $f"
+    exit 1
+  fi
+done
+
+echo
+echo "=============================="
+echo " RUN INITIAL DATA ERROR TESTS"
+echo "=============================="
+
+for entry in "${INITIAL_DATA_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[INITIAL_DATA FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected initial_data diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN INITIAL DATA MLIR ERROR TESTS"
+echo "=============================="
+
+for entry in "${INITIAL_DATA_MLIR_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[INITIAL_DATA MLIR FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" "${PIPELINE_BASE[@]}" "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail during MLIR emission"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected MLIR initial_data diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN SCHWARZSCHILD SPLIT3+1 MLIR CHECK"
+echo "=============================="
+
+SPLIT_FIXTURE=tests/fixtures/gr/schwarzschild_3d.tn
+SPLIT_OUT="$OUT/schwarzschild_3d_split3p1.mlir"
+"$BIN" "${PIPELINE_BASE[@]}" "$SPLIT_FIXTURE" > "$SPLIT_OUT"
+
+SPLIT_LINE=$(rg -m1 "tensorium\\.split3p1" "$SPLIT_OUT" || true)
+if [[ -z "$SPLIT_LINE" ]]; then
+  echo "ERROR: expected tensorium.split3p1 op in $SPLIT_FIXTURE"
+  exit 1
+fi
+if ! grep -q "tensorium.metric4" "$SPLIT_OUT"; then
+  echo "ERROR: expected tensorium.metric4 op in $SPLIT_FIXTURE"
+  exit 1
+fi
+if ! grep -q "tensorium.coord" "$SPLIT_OUT"; then
+  echo "ERROR: expected coordinate ops in split3p1 lowering"
+  exit 1
+fi
+if ! grep -q "tensorium.param" "$SPLIT_OUT"; then
+  echo "ERROR: expected parameter ops in split3p1 lowering"
+  exit 1
+fi
+if ! grep -q "\"tensorium.sqrt\"" "$SPLIT_OUT"; then
+  echo "ERROR: expected sqrt op for alpha computation"
+  exit 1
+fi
+if ! grep -q "\"tensorium.sin\"" "$SPLIT_OUT"; then
+  echo "ERROR: expected sin op in Schwarzschild metric components"
+  exit 1
+fi
+if ! grep -q "\"tensorium.build_con_tensor2\"" "$SPLIT_OUT"; then
+  echo "ERROR: expected gammaU tensor build op"
+  exit 1
+fi
+
+SPLIT_GAMMAU=$(
+  echo "$SPLIT_LINE" \
+    | sed -E 's/^[[:space:]]*([^=]+)=.*/\1/' \
+    | awk -F',' '{print $4}' \
+    | xargs
+)
+if [[ -z "$SPLIT_GAMMAU" ]]; then
+  echo "ERROR: could not extract gammaU result from split3p1 op"
+  echo "$SPLIT_LINE"
+  exit 1
+fi
+REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+${SPLIT_GAMMAU}\\b|\"tensorium\\.ref\"\\(${SPLIT_GAMMAU}" "$SPLIT_OUT" || true)
+if [[ -z "$REF_LINE" ]]; then
+  echo "ERROR: expected a tensorium.ref from split3p1 gammaU result"
+  echo "split gammaU value: $SPLIT_GAMMAU"
+  exit 1
+fi
+REF_GAMMAU=$(echo "$REF_LINE" | sed -E 's/^([[:space:]]*%[A-Za-z0-9_$.]+).*/\1/' | xargs)
+if [[ -z "$REF_GAMMAU" ]]; then
+  echo "ERROR: could not extract ref result for gammaU use-def chain"
+  echo "$REF_LINE"
+  exit 1
+fi
+if ! rg -q "\"tensorium\\.mul\"\\(${REF_GAMMAU},|tensorium\\.mul[[:space:]]+${REF_GAMMAU}," "$SPLIT_OUT"; then
+  echo "ERROR: expected RHS contraction to use gammaU coming from split3p1"
+  echo "split gammaU value: $SPLIT_GAMMAU"
+  echo "ref gammaU value: $REF_GAMMAU"
+  exit 1
+fi
 
 echo
 echo "=============================="

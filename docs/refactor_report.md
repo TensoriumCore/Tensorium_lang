@@ -401,3 +401,162 @@ Planned commit sequence (one intention per commit):
 - Result:
   - no remaining `.create<...>` calls in `lib/tensorium_mlir`,
   - build remains green with unchanged behavior.
+
+## 9) Semantic correctness audit
+
+### Findings by severity
+- S0 (incorrect math risk): contraction and derivative semantics were partially implicit.
+  - Before this phase, Einstein contraction information was not represented explicitly in backend IR and differential calls were mostly generic function calls.
+  - Evidence points:
+    - prior contraction/type checks were spread in `include/tensorium/Sema/tensor_type_checker.hpp`; now centralized with `IndexAnalysis` (`include/tensorium/Sema/tensor_type_checker.hpp:32`, `include/tensorium/Sema/tensor_type_checker.hpp:140`, `include/tensorium/Sema/tensor_type_checker.hpp:231`).
+    - backend IR now carries explicit tensor ops (`include/tensorium/Backend/DomainIR.hpp:60`, `include/tensorium/Backend/DomainIR.hpp:115`, `include/tensorium/Backend/DomainIR.hpp:154`, `include/tensorium/Backend/DomainIR.hpp:168`).
+- S1 (ambiguity): collisions between free and bound indices could degrade into less actionable assignment mismatch diagnostics.
+  - Now normalized to explicit collision diagnostics in assignment checking (`include/tensorium/Sema/tensor_type_checker.hpp:553` onward).
+  - `d_i`, `nabla_i`, `covariant_derivative`, `grad`, `div` builtins are explicitly recognized in executable mode (`lib/Sema/CallSupport.cpp:6`).
+- S2 (technical debt): analysis/transformation boundaries were blurry across Sema/lowering.
+  - This phase enforces a clearer split:
+    - Sema: IndexAnalysis + validation (`include/tensorium/Sema/tensor_type_checker.hpp:140`).
+    - IR: explicit op forms (`include/tensorium/Backend/DomainIR.hpp:60`).
+    - Lowering: explicit op materialization and conversion (`lib/Backend/BackendBuilder.cpp:118`, `lib/Backend/BackendBuilder.cpp:159`, `lib/Backend/BackendBuilder.cpp:189`).
+
+### Design decisions (explicit vs implicit)
+- Einstein notation remains source-level friendly, but contractions are now materialized in backend IR as explicit `ContractionIR` with `summedIndices`.
+- Tensor multiplication for tensor operands is represented as `TensorProductIR`; contraction is a distinct step.
+- Differential operations are explicit in IR:
+  - `PartialDerivativeIR`, `GradientIR`, `CovariantDerivativeIR`, `DivergenceIR`.
+- Covariant derivative policy:
+  - accepted only when a connection tensor (`Gamma`/`GammaU`/`Christoffel`, rank-3) is present (`lib/Sema/Sema.cpp:250`, `lib/Sema/Sema.cpp:354`),
+  - otherwise rejected with stable diagnostic.
+
+### Diagnostics examples
+- Invalid contraction variance:
+  - `Tensorium error: Implicit contraction of index 'i' requires explicit metric or inverse metric`
+  - fixture: `tests/semantic/einstein/02_invalid_variance_contraction.tn`
+- Index collision (free vs bound):
+  - `Tensorium error: Index collision: symbol 'i' is both free and bound; rename one index in RHS.`
+  - fixture: `tests/semantic/einstein/05_capture_requires_rename.tn`
+- Missing connection for covariant derivative:
+  - `Tensorium error: Covariant derivative requires connection tensor Gamma (rank-3 field)`
+  - fixture: `tests/semantic/diff/04_covariant_without_gamma_error.tn`
+
+### Schwarzschild 2D/3D status
+- Added regression fixtures:
+  - `tests/fixtures/gr/schwarzschild_2d.tn`
+  - `tests/fixtures/gr/schwarzschild_3d.tn`
+- Added structural checks in regression runner (`run_test.sh`):
+  - fixture validates successfully,
+  - backend IR dump must contain explicit `contraction(...)` and `partial_...(...)`.
+- Optional benchmark scaffold added:
+  - `tools/Bench/bench_schwarzschild.sh` logs validate/codegen timing in `/tmp/tensorium_bench`.
+
+## 10) Semantic phase update
+- Added dedicated semantic test packs:
+  - Einstein: `tests/semantic/einstein/*`
+  - Differential ops: `tests/semantic/diff/*`
+- `run_test.sh` now includes:
+  - acceptance/rejection checks for semantic Einstein and differential cases,
+  - stable diagnostic substring checks for key semantic failures,
+  - Schwarzschild fixture structural non-regression checks.
+- MLIR lowering now consumes explicit backend ops for:
+  - contraction/tensor-product/index operations (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp:184`),
+  - differential operations (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp:216`).
+
+## 11) Phase 3 Update (Ops Split + Canonical + Schwarzschild Baseline)
+
+### 3.A Ops split completed
+- `include/tensorium/Backend/DomainIR.hpp` is now a compatibility umbrella only.
+- IR definitions were split into dedicated headers:
+  - `include/tensorium/IR/IRBase.hpp`
+  - `include/tensorium/IR/EinsteinOps.hpp`
+  - `include/tensorium/IR/DifferentialOps.hpp`
+  - `include/tensorium/IR/IRPrinter.hpp`
+- Legacy include path kept stable:
+  - `include/tensorium/Backend/IRPrinter.hpp` now forwards to `include/tensorium/IR/IRPrinter.hpp`.
+
+### 3.B Canonical passes + verifier
+- Added dedicated IR canonicalization passes (outside Sema):
+  - `validation::canonicalizeDifferentialIR` in `lib/IR/CanonicalizeDiff.cpp`
+  - `validation::canonicalizeEinsteinIR` in `lib/IR/CanonicalizeEinstein.cpp`
+- Added IR verifier module:
+  - `validation::verifyIR` in `lib/IR/IRVerifier.cpp`
+  - API exposed by `include/tensorium/Validation/IRVerifier.hpp`
+- Driver pipeline now runs:
+  1. AST/Sema -> backend IR lowering
+  2. Differential canonicalization
+  3. Einstein canonicalization
+  4. IR verifier
+  5. Existing semantic/IR validation and optional MLIR/runtime paths
+- Canonical invariants enforced:
+  - `GradientIR` and `DivergenceIR` are sugar and must not survive verifier.
+  - Contraction summed indices must be canonicalized (sorted + unique + valid).
+  - Covariant derivative must carry a valid derivative index and connection availability.
+
+### 3.B tests added (structured IR checks)
+- Added canonical fixtures:
+  - `tests/ir/canonical/01_gradient_sugar.tn`
+  - `tests/ir/canonical/02_divergence_sugar.tn`
+  - `tests/ir/canonical/03_trace_from_contract.tn`
+- Extended `tools/Tester/UnitTests.cpp` with structured IR assertions (not fragile text matching):
+  - gradient sugar -> `PartialDerivativeIR`
+  - divergence sugar -> `ContractionIR(CovariantDerivativeIR(...))`
+  - contract-trace canonicalization
+  - alpha-renaming insertion on risky index capture
+  - verifier rejection of uncanonicalized differential sugar
+
+### 3.C Schwarzschild canonical + perf baseline
+- Schwarzschild fixtures are now covered by canonical IR structural checks in unit tests:
+  - `tests/fixtures/gr/schwarzschild_2d.tn`
+  - `tests/fixtures/gr/schwarzschild_3d.tn`
+  - assertions: canonical IR contains contraction + partial derivative nodes, and no residual gradient/divergence sugar.
+- Bench script updated:
+  - `tools/Bench/bench_schwarzschild.sh` now writes timestamped logs into `tools/Bench/out/<timestamp>/`.
+  - `.gitignore` updated to ignore bench artifacts under `tools/Bench/out/`.
+- Current baseline sample (`20260211_145648`):
+  - Schwarzschild 2D: validate ~0.02s, backend dump ~0.01s, MLIR codegen ~0.02s
+  - Schwarzschild 3D: validate ~0.01s, backend dump ~0.01s, MLIR codegen ~0.02s
+
+### Hotspots and next micro-optimizations
+- Hotspot candidates observed in the new IR stage:
+  - repeated recursive scans over expression trees in canonicalization and verifier,
+  - repeated index usage collection/allocation in Einstein canonicalization,
+  - repeated string allocations for index names.
+- Next measured optimizations to prioritize:
+  1. cache per-expression index-use summaries during one canonical pass traversal,
+  2. switch index representation from `std::string` to compact interned/char IDs in IR nodes,
+  3. reduce temporary allocations in canonical passes (scratch buffers reused per evolution).
+
+## 12) Phase 4 Update (Computable metric4 + split bindings)
+
+### 4.A metric4/split3p1 now computed as SSA (no string-eval path)
+- `initial_data metric4` expressions are now lowered through structured init IR nodes:
+  - `InitNumberIR`, `InitSymbolIR`, `InitBinaryIR`, `InitCallIR`.
+- MLIR generation emits real compute ops for metric components:
+  - `tensorium.const`, `tensorium.param`, `tensorium.coord`,
+  - arithmetic ops (`add/sub/mul/div`),
+  - scalar math (`tensorium.sin`, `tensorium.sqrt`).
+- `tensorium.metric4` now carries 16 scalar SSA operands instead of a string array attribute.
+- `tensorium.split3p1` now takes computed SSA inputs (`alpha_in`, `beta_in`, `gamma_in`, `gammaU_in`) and returns typed SSA outputs.
+
+### 4.B split_3p1 mapping binds computed outputs to declared fields
+- DSL/AST/Parser/Sema support explicit binding block:
+  - `split_3p1 { alpha -> alpha; gamma -> gamma[i,j]; gammaU -> gammaU[i,j]; }`
+- Sema validates:
+  - mapped fields exist,
+  - expected rank/variance (scalar, covector, cov2, con2),
+  - expected index arity.
+- MLIRGen uses this mapping to rebind field references so RHS expressions consume split results directly.
+
+### 4.C Schwarzschild relevance and regression checks strengthened
+- Updated fixture:
+  - `tests/fixtures/gr/schwarzschild_3d.tn` now includes explicit `split_3p1` mapping.
+- Added negative test:
+  - `tests/semantic/initial_data/03_missing_gammau_binding.tn`
+  - fails with diagnostic when `gammaU` is used in equations but not bound by `split_3p1`.
+- `run_test.sh` now checks:
+  - structural MLIR presence of metric/split/math/build ops,
+  - use-def chain proving RHS contraction uses `gammaU` value produced by `tensorium.split3p1`.
+
+### Current limitation
+- `split3p1` lowering currently supports the zero-shift case (`beta = 0` path).
+- Non-zero shift path is intentionally rejected with explicit diagnostic:
+  - `"split3p1 with non-zero shift is not implemented yet"`.

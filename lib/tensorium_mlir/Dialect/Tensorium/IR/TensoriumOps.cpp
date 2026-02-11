@@ -112,6 +112,15 @@ static LogicalResult requireFieldType(Value v, Operation *op,
   return op->emitOpError() << what << " must be tensorium.field";
 }
 
+static LogicalResult requireScalarFieldType(Value v, Operation *op,
+                                            StringRef what, FieldType &out) {
+  if (failed(requireFieldType(v, op, what, out)))
+    return failure();
+  if (out.getRank() != 0)
+    return op->emitOpError() << what << " must be scalar tensorium.field";
+  return success();
+}
+
 LogicalResult tensorium::mlir::ConstOp::verify() {
   FieldType type;
   if (failed(requireFieldType(getResult(), *this, "result", type)))
@@ -126,6 +135,24 @@ LogicalResult tensorium::mlir::RefOp::verify() {
     return failure();
   if (srcTy != resTy)
     return emitOpError("source/result types must match");
+  return success();
+}
+
+LogicalResult tensorium::mlir::ParamOp::verify() {
+  FieldType resultTy;
+  if (failed(requireScalarFieldType(getResult(), *this, "result", resultTy)))
+    return failure();
+  if (getName().empty())
+    return emitOpError("param name must not be empty");
+  return success();
+}
+
+LogicalResult tensorium::mlir::CoordOp::verify() {
+  FieldType resultTy;
+  if (failed(requireScalarFieldType(getResult(), *this, "result", resultTy)))
+    return failure();
+  if (getName().empty())
+    return emitOpError("coord name must not be empty");
   return success();
 }
 
@@ -175,6 +202,22 @@ LogicalResult tensorium::mlir::DivOp::verify() {
   return success();
 }
 
+LogicalResult tensorium::mlir::SinOp::verify() {
+  FieldType inTy, outTy;
+  if (failed(requireScalarFieldType(getIn(), *this, "input", inTy)) ||
+      failed(requireScalarFieldType(getOut(), *this, "result", outTy)))
+    return failure();
+  return success();
+}
+
+LogicalResult tensorium::mlir::SqrtOp::verify() {
+  FieldType inTy, outTy;
+  if (failed(requireScalarFieldType(getIn(), *this, "input", inTy)) ||
+      failed(requireScalarFieldType(getOut(), *this, "result", outTy)))
+    return failure();
+  return success();
+}
+
 LogicalResult tensorium::mlir::DerivOp::verify() {
   FieldType inTy, outTy;
   if (failed(requireFieldType(getIn(), *this, "input", inTy)) ||
@@ -212,6 +255,113 @@ LogicalResult tensorium::mlir::DtAssignOp::verify() {
     return failure();
   if (fieldTy != rhsTy)
     return emitOpError("rhs tensor type must match field type");
+  return success();
+}
+
+LogicalResult tensorium::mlir::Metric4Op::verify() {
+  FieldType metricTy;
+  if (failed(requireFieldType(getMetric(), *this, "metric result", metricTy)))
+    return failure();
+  if (metricTy.getUp() != 0 || metricTy.getDown() != 2)
+    return emitOpError("metric result must be covariant rank-2");
+
+  if (getIndices().size() != 2)
+    return emitOpError("indices attribute must contain exactly 2 symbols");
+
+  if (getComponents().size() != 16)
+    return emitOpError("metric4 requires exactly 16 scalar components");
+  for (Value v : getComponents()) {
+    FieldType compTy;
+    if (failed(requireScalarFieldType(v, *this, "metric component", compTy)))
+      return failure();
+  }
+
+  auto coords = getCoordSystem();
+  if (!(coords == "cartesian" || coords == "spherical" ||
+        coords == "cylindrical")) {
+    return emitOpError("coord_system must be cartesian/spherical/cylindrical");
+  }
+
+  return success();
+}
+
+LogicalResult tensorium::mlir::Split3P1Op::verify() {
+  FieldType metricTy, alphaTy, betaTy, gammaTy, gammaUTy;
+  FieldType alphaInTy, betaInTy, gammaInTy, gammaUInTy;
+  if (failed(requireFieldType(getMetric4(), *this, "metric operand", metricTy)) ||
+      failed(requireFieldType(getAlpha(), *this, "alpha result", alphaTy)) ||
+      failed(requireFieldType(getBeta(), *this, "beta result", betaTy)) ||
+      failed(requireFieldType(getGamma(), *this, "gamma result", gammaTy)) ||
+      failed(requireFieldType(getGammaU(), *this, "gammaU result", gammaUTy)) ||
+      failed(requireFieldType(getAlphaIn(), *this, "alpha input", alphaInTy)) ||
+      failed(requireFieldType(getBetaIn(), *this, "beta input", betaInTy)) ||
+      failed(requireFieldType(getGammaIn(), *this, "gamma input", gammaInTy)) ||
+      failed(requireFieldType(getGammaUIn(), *this, "gammaU input", gammaUInTy)))
+    return failure();
+
+  if (metricTy.getUp() != 0 || metricTy.getDown() != 2)
+    return emitOpError("metric operand must be covariant rank-2");
+  if (alphaTy.getRank() != 0)
+    return emitOpError("alpha result must be scalar");
+  if (betaTy.getUp() != 0 || betaTy.getDown() != 1)
+    return emitOpError("beta result must be covector rank-1");
+  if (gammaTy.getUp() != 0 || gammaTy.getDown() != 2)
+    return emitOpError("gamma result must be covariant rank-2");
+  if (gammaUTy.getUp() != 2 || gammaUTy.getDown() != 0)
+    return emitOpError("gammaU result must be contravariant rank-2");
+
+  if (alphaInTy != alphaTy || betaInTy != betaTy || gammaInTy != gammaTy ||
+      gammaUInTy != gammaUTy)
+    return emitOpError("split3p1 inputs and outputs must have matching types");
+
+  return success();
+}
+
+LogicalResult tensorium::mlir::BuildCovectorOp::verify() {
+  FieldType outTy;
+  if (failed(requireFieldType(getOut(), *this, "result", outTy)))
+    return failure();
+  if (outTy.getUp() != 0 || outTy.getDown() != 1)
+    return emitOpError("result must be covector rank-1");
+  if (getComponents().size() != 3)
+    return emitOpError("build_covector expects 3 scalar components");
+  for (Value v : getComponents()) {
+    FieldType compTy;
+    if (failed(requireScalarFieldType(v, *this, "component", compTy)))
+      return failure();
+  }
+  return success();
+}
+
+LogicalResult tensorium::mlir::BuildCovTensor2Op::verify() {
+  FieldType outTy;
+  if (failed(requireFieldType(getOut(), *this, "result", outTy)))
+    return failure();
+  if (outTy.getUp() != 0 || outTy.getDown() != 2)
+    return emitOpError("result must be covariant rank-2");
+  if (getComponents().size() != 9)
+    return emitOpError("build_cov_tensor2 expects 9 scalar components");
+  for (Value v : getComponents()) {
+    FieldType compTy;
+    if (failed(requireScalarFieldType(v, *this, "component", compTy)))
+      return failure();
+  }
+  return success();
+}
+
+LogicalResult tensorium::mlir::BuildConTensor2Op::verify() {
+  FieldType outTy;
+  if (failed(requireFieldType(getOut(), *this, "result", outTy)))
+    return failure();
+  if (outTy.getUp() != 2 || outTy.getDown() != 0)
+    return emitOpError("result must be contravariant rank-2");
+  if (getComponents().size() != 9)
+    return emitOpError("build_con_tensor2 expects 9 scalar components");
+  for (Value v : getComponents()) {
+    FieldType compTy;
+    if (failed(requireScalarFieldType(v, *this, "component", compTy)))
+      return failure();
+  }
   return success();
 }
 

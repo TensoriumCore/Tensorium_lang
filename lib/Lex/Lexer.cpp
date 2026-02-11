@@ -53,6 +53,9 @@ Token Lexer::next() {
   case ',':
     advanceChar();
     return {TokenType::Comma, ",", line, col - 1};
+  case ';':
+    advanceChar();
+    return {TokenType::Semicolon, ";", line, col - 1};
   case '=':
     advanceChar();
     return {TokenType::Equals, "=", line, col - 1};
@@ -60,6 +63,13 @@ Token Lexer::next() {
     advanceChar();
     return {TokenType::Plus, "+", line, col - 1};
   case '-':
+    if (*(src + 1) == '>') {
+      int tokLine = line;
+      int tokCol = col;
+      advanceChar();
+      advanceChar();
+      return {TokenType::Arrow, "->", tokLine, tokCol};
+    }
     advanceChar();
     return {TokenType::Minus, "-", line, col - 1};
   case '*':
@@ -120,6 +130,10 @@ Token Lexer::next() {
       return {TokenType::KwConTensor4, t, line, col};
     if (t == "simulation")
       return {TokenType::KwSimulation, t, line, col};
+    if (t == "initial_data")
+      return {TokenType::KwInitialData, t, line, col};
+    if (t == "metric4")
+      return {TokenType::KwMetric4, t, line, col};
     if (t == "time")
       return {TokenType::KwTime, t, line, col};
     if (t == "spatial")
