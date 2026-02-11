@@ -47,6 +47,18 @@ def Tensorium_RefOp : Tensorium_Op<"ref"> {
   }];
 }
 
+def Tensorium_ParamOp : Tensorium_Op<"param"> {
+  let arguments = (ins StrAttr:$name);
+  let results = (outs Tensorium_FieldType:$result);
+  let hasVerifier = 1;
+}
+
+def Tensorium_CoordOp : Tensorium_Op<"coord"> {
+  let arguments = (ins StrAttr:$name);
+  let results = (outs Tensorium_FieldType:$result);
+  let hasVerifier = 1;
+}
+
 def Tensorium_AddOp : Tensorium_Op<"add"> {
   let traits = [Pure];
 
@@ -75,6 +87,22 @@ def Tensorium_DivOp : Tensorium_Op<"div"> {
 
   let arguments = (ins Tensorium_FieldType:$lhs, Tensorium_FieldType:$rhs);
   let results   = (outs Tensorium_FieldType:$res);
+  let hasVerifier = 1;
+}
+
+def Tensorium_SinOp : Tensorium_Op<"sin"> {
+  let traits = [Pure];
+
+  let arguments = (ins Tensorium_FieldType:$in);
+  let results = (outs Tensorium_FieldType:$out);
+  let hasVerifier = 1;
+}
+
+def Tensorium_SqrtOp : Tensorium_Op<"sqrt"> {
+  let traits = [Pure];
+
+  let arguments = (ins Tensorium_FieldType:$in);
+  let results = (outs Tensorium_FieldType:$out);
   let hasVerifier = 1;
 }
 
@@ -113,8 +141,9 @@ def Tensorium_DtAssignOp : Tensorium_Op<"dt_assign"> {
 
 def Tensorium_Metric4Op : Tensorium_Op<"metric4"> {
   let summary = "Carry explicit 4D metric initial data";
-  let arguments = (ins StrAttr:$name, StrAttr:$coord_system,
-                   ArrayAttr:$indices, ArrayAttr:$components,
+  let arguments = (ins Variadic<Tensorium_FieldType>:$components,
+                   StrAttr:$name, StrAttr:$coord_system,
+                   ArrayAttr:$indices,
                    BoolAttr:$enforce_symmetry);
   let results = (outs Tensorium_FieldType:$metric);
   let hasVerifier = 1;
@@ -123,14 +152,32 @@ def Tensorium_Metric4Op : Tensorium_Op<"metric4"> {
 def Tensorium_Split3P1Op : Tensorium_Op<"split3p1"> {
   let summary = "Split spacetime metric into alpha, beta, gamma, gammaU";
   let arguments = (ins Tensorium_FieldType:$metric4,
-                   BoolAttr:$beta_zero,
-                   ArrayAttr:$gamma_diag,
-                   StrAttr:$alpha_expr,
-                   BoolAttr:$gammau_is_inverse);
+                   Tensorium_FieldType:$alpha_in,
+                   Tensorium_FieldType:$beta_in,
+                   Tensorium_FieldType:$gamma_in,
+                   Tensorium_FieldType:$gammaU_in);
   let results = (outs Tensorium_FieldType:$alpha,
                       Tensorium_FieldType:$beta,
                       Tensorium_FieldType:$gamma,
                       Tensorium_FieldType:$gammaU);
+  let hasVerifier = 1;
+}
+
+def Tensorium_BuildCovectorOp : Tensorium_Op<"build_covector"> {
+  let arguments = (ins Variadic<Tensorium_FieldType>:$components);
+  let results = (outs Tensorium_FieldType:$out);
+  let hasVerifier = 1;
+}
+
+def Tensorium_BuildCovTensor2Op : Tensorium_Op<"build_cov_tensor2"> {
+  let arguments = (ins Variadic<Tensorium_FieldType>:$components);
+  let results = (outs Tensorium_FieldType:$out);
+  let hasVerifier = 1;
+}
+
+def Tensorium_BuildConTensor2Op : Tensorium_Op<"build_con_tensor2"> {
+  let arguments = (ins Variadic<Tensorium_FieldType>:$components);
+  let results = (outs Tensorium_FieldType:$out);
   let hasVerifier = 1;
 }
 
