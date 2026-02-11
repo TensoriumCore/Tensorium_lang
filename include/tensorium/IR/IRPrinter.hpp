@@ -5,6 +5,45 @@
 
 namespace tensorium::backend {
 
+inline void printInitExpr(const InitExprIR *e) {
+  if (!e) {
+    std::cout << "<null>";
+    return;
+  }
+  switch (e->kind) {
+  case InitExprIR::Kind::Number: {
+    auto *n = static_cast<const InitNumberIR *>(e);
+    std::cout << n->value;
+    return;
+  }
+  case InitExprIR::Kind::Symbol: {
+    auto *s = static_cast<const InitSymbolIR *>(e);
+    std::cout << s->name;
+    return;
+  }
+  case InitExprIR::Kind::Binary: {
+    auto *b = static_cast<const InitBinaryIR *>(e);
+    std::cout << "(";
+    printInitExpr(b->lhs.get());
+    std::cout << b->op;
+    printInitExpr(b->rhs.get());
+    std::cout << ")";
+    return;
+  }
+  case InitExprIR::Kind::Call: {
+    auto *c = static_cast<const InitCallIR *>(e);
+    std::cout << c->callee << "(";
+    for (size_t i = 0; i < c->args.size(); ++i) {
+      printInitExpr(c->args[i].get());
+      if (i + 1 < c->args.size())
+        std::cout << ",";
+    }
+    std::cout << ")";
+    return;
+  }
+  }
+}
+
 inline void printExprIR(const ExprIR *e) {
   if (!e) {
     std::cout << "<null>";
@@ -201,8 +240,24 @@ inline void printModuleIR(const ModuleIR &m) {
       std::cout << "]\n";
     }
     if (m.initialData->hasDecomposed) {
-      std::cout << "    alpha = " << m.initialData->decomposed.alphaExpr
-                << "\n";
+      std::cout << "    alpha = ";
+      printInitExpr(m.initialData->decomposed.alphaExpr.get());
+      std::cout << "\n";
+    }
+    if (m.initialData->split3p1.enabled) {
+      std::cout << "    split_3p1:\n";
+      if (m.initialData->split3p1.hasAlpha)
+        std::cout << "      alpha -> " << m.initialData->split3p1.alphaField
+                  << "\n";
+      if (m.initialData->split3p1.hasBeta)
+        std::cout << "      beta -> " << m.initialData->split3p1.betaField
+                  << "\n";
+      if (m.initialData->split3p1.hasGamma)
+        std::cout << "      gamma -> " << m.initialData->split3p1.gammaField
+                  << "\n";
+      if (m.initialData->split3p1.hasGammaU)
+        std::cout << "      gammaU -> " << m.initialData->split3p1.gammaUField
+                  << "\n";
     }
   }
 

@@ -3,54 +3,45 @@
 #include "tensorium/Core/IndexSet.h"
 
 #include <map>
-#include <sstream>
 #include <string>
 #include <vector>
 
 namespace tensorium::backend {
 
-static std::string renderExpr(const tensorium::Expr *expr) {
+static std::unique_ptr<InitExprIR> lowerInitExpr(const tensorium::Expr *expr) {
   using namespace tensorium;
   if (!expr)
-    return "<null>";
+    return nullptr;
 
   if (auto n = dynamic_cast<const NumberExpr *>(expr)) {
-    std::ostringstream os;
-    os << n->value;
-    return os.str();
+    return std::make_unique<InitNumberIR>(n->value);
   }
   if (auto v = dynamic_cast<const VarExpr *>(expr))
-    return v->name;
+    return std::make_unique<InitSymbolIR>(v->name);
   if (auto idx = dynamic_cast<const IndexedVarExpr *>(expr)) {
-    std::string out = idx->base + "[";
+    std::string sym = idx->base + "[";
     for (size_t i = 0; i < idx->indices.size(); ++i) {
-      out += idx->indices[i];
+      sym += idx->indices[i];
       if (i + 1 < idx->indices.size())
-        out += ",";
+        sym += ",";
     }
-    out += "]";
-    return out;
+    sym += "]";
+    return std::make_unique<InitSymbolIR>(sym);
   }
   if (auto p = dynamic_cast<const ParenExpr *>(expr))
-    return "(" + renderExpr(p->inner.get()) + ")";
+    return lowerInitExpr(p->inner.get());
   if (auto b = dynamic_cast<const BinaryExpr *>(expr)) {
-    auto *lhsNum = dynamic_cast<const NumberExpr *>(b->lhs.get());
-    if (b->op == '-' && lhsNum && lhsNum->value == 0.0)
-      return "-(" + renderExpr(b->rhs.get()) + ")";
-    return "(" + renderExpr(b->lhs.get()) + std::string(1, b->op) +
-           renderExpr(b->rhs.get()) + ")";
+    return std::make_unique<InitBinaryIR>(b->op, lowerInitExpr(b->lhs.get()),
+                                          lowerInitExpr(b->rhs.get()));
   }
   if (auto c = dynamic_cast<const CallExpr *>(expr)) {
-    std::string out = c->callee + "(";
-    for (size_t i = 0; i < c->args.size(); ++i) {
-      out += renderExpr(c->args[i].get());
-      if (i + 1 < c->args.size())
-        out += ",";
-    }
-    out += ")";
+    auto out = std::make_unique<InitCallIR>(c->callee);
+    out->args.reserve(c->args.size());
+    for (const auto &arg : c->args)
+      out->args.push_back(lowerInitExpr(arg.get()));
     return out;
   }
-  return "<expr>";
+  return std::make_unique<InitSymbolIR>("<expr>");
 }
 
 static tensorium::ir::TensorType lowerTensorType(const tensorium::TensorTypeDesc &d) {
@@ -485,20 +476,34 @@ ModuleIR BackendBuilder::build(const Program &prog,
 
       for (const auto &row : prog.initialData->metric4.components) {
         for (const auto &entry : row)
-          init.metric4.components.push_back(renderExpr(entry.get()));
+          init.metric4.components.push_back(lowerInitExpr(entry.get()));
       }
     }
 
     if (prog.initialData->hasDecomposed) {
       init.decomposed.alphaExpr =
-          renderExpr(prog.initialData->decomposed.alpha.get());
+          lowerInitExpr(prog.initialData->decomposed.alpha.get());
       for (const auto &entry : prog.initialData->decomposed.beta)
-        init.decomposed.betaExpr.push_back(renderExpr(entry.get()));
+        init.decomposed.betaExpr.push_back(lowerInitExpr(entry.get()));
       for (const auto &row : prog.initialData->decomposed.gamma) {
         for (const auto &entry : row)
-          init.decomposed.gammaExpr.push_back(renderExpr(entry.get()));
+          init.decomposed.gammaExpr.push_back(lowerInitExpr(entry.get()));
       }
     }
+
+    init.split3p1.enabled = prog.initialData->split3p1.enabled;
+    init.split3p1.hasAlpha = prog.initialData->split3p1.hasAlpha;
+    init.split3p1.hasBeta = prog.initialData->split3p1.hasBeta;
+    init.split3p1.hasGamma = prog.initialData->split3p1.hasGamma;
+    init.split3p1.hasGammaU = prog.initialData->split3p1.hasGammaU;
+    if (init.split3p1.hasAlpha)
+      init.split3p1.alphaField = prog.initialData->split3p1.alphaTarget.base;
+    if (init.split3p1.hasBeta)
+      init.split3p1.betaField = prog.initialData->split3p1.betaTarget.base;
+    if (init.split3p1.hasGamma)
+      init.split3p1.gammaField = prog.initialData->split3p1.gammaTarget.base;
+    if (init.split3p1.hasGammaU)
+      init.split3p1.gammaUField = prog.initialData->split3p1.gammaUTarget.base;
 
     mod.initialData = std::move(init);
   }

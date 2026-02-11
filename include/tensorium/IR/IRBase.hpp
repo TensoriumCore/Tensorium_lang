@@ -132,18 +132,65 @@ struct EvolutionIR {
   std::vector<TempAssignIR> temporaries;
 };
 
+struct InitExprIR {
+  enum class Kind { Number, Symbol, Binary, Call };
+  Kind kind;
+  virtual ~InitExprIR() = default;
+  explicit InitExprIR(Kind k) : kind(k) {}
+};
+
+struct InitNumberIR final : InitExprIR {
+  double value;
+  explicit InitNumberIR(double v) : InitExprIR(Kind::Number), value(v) {}
+};
+
+struct InitSymbolIR final : InitExprIR {
+  std::string name;
+  explicit InitSymbolIR(std::string n)
+      : InitExprIR(Kind::Symbol), name(std::move(n)) {}
+};
+
+struct InitBinaryIR final : InitExprIR {
+  char op;
+  std::unique_ptr<InitExprIR> lhs;
+  std::unique_ptr<InitExprIR> rhs;
+  InitBinaryIR(char o, std::unique_ptr<InitExprIR> L,
+               std::unique_ptr<InitExprIR> R)
+      : InitExprIR(Kind::Binary), op(o), lhs(std::move(L)),
+        rhs(std::move(R)) {}
+};
+
+struct InitCallIR final : InitExprIR {
+  std::string callee;
+  std::vector<std::unique_ptr<InitExprIR>> args;
+  explicit InitCallIR(std::string c)
+      : InitExprIR(Kind::Call), callee(std::move(c)) {}
+};
+
 struct Metric4InitIR {
   std::string name;
   std::vector<std::string> indices;
-  std::vector<std::string> components;
+  std::vector<std::unique_ptr<InitExprIR>> components;
   bool enforceSymmetry = false;
   std::string coordSystem;
 };
 
 struct DecomposedInitIR {
-  std::string alphaExpr;
-  std::vector<std::string> betaExpr;
-  std::vector<std::string> gammaExpr;
+  std::unique_ptr<InitExprIR> alphaExpr;
+  std::vector<std::unique_ptr<InitExprIR>> betaExpr;
+  std::vector<std::unique_ptr<InitExprIR>> gammaExpr;
+};
+
+struct Split3P1BindingIR {
+  bool enabled = false;
+  bool hasAlpha = false;
+  bool hasBeta = false;
+  bool hasGamma = false;
+  bool hasGammaU = false;
+  std::string alphaField;
+  std::string betaField;
+  std::string gammaField;
+  std::string gammaUField;
 };
 
 struct InitialDataIR {
@@ -151,6 +198,7 @@ struct InitialDataIR {
   bool hasDecomposed = false;
   Metric4InitIR metric4;
   DecomposedInitIR decomposed;
+  Split3P1BindingIR split3p1;
 };
 
 struct ModuleIR {
