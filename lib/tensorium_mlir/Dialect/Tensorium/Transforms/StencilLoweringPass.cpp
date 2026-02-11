@@ -82,22 +82,24 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
     for (const auto &pt : stencil) {
       auto offAttr =
           rewriter.getI64ArrayAttr(makeOffsets(spatialDim, dim, pt.offset));
-      Value val = rewriter.create<RefOp>(loc, input.getType(), refOp.getSource(),
-                                         refOp.getKindAttr(),
-                                         refOp.getIndicesAttr(), offAttr);
+      Value val = RefOp::create(rewriter, loc, input.getType(), refOp.getSource(),
+                                refOp.getKindAttr(), refOp.getIndicesAttr(),
+                                offAttr)
+                      .getResult();
 
       auto scalarTy = getScalarFieldType(rewriter.getContext());
-      Value weight = rewriter.create<ConstOp>(
-          loc, scalarTy, rewriter.getF64FloatAttr(pt.weight));
+      Value weight =
+          ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(pt.weight))
+              .getResult();
       Value term =
-          rewriter.create<MulOp>(loc, input.getType(), val, weight);
+          MulOp::create(rewriter, loc, input.getType(), val, weight).getResult();
 
       if (term.getType() != resultType) {
         auto termTy = llvm::dyn_cast<FieldType>(term.getType());
         auto resTy = llvm::dyn_cast<FieldType>(resultType);
         if (!termTy || !resTy || termTy.getRank() != 0)
           return failure();
-        term = rewriter.create<PromoteOp>(loc, resultType, term).getResult();
+        term = PromoteOp::create(rewriter, loc, resultType, term).getResult();
       }
 
       if (firstTerm) {
@@ -105,14 +107,15 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
         firstTerm = false;
         continue;
       }
-      sum = rewriter.create<AddOp>(loc, resultType, sum, term);
+      sum = AddOp::create(rewriter, loc, resultType, sum, term).getResult();
     }
 
     double invDx = (dx > 1e-12) ? (1.0 / dx) : 1.0;
     auto scalarTy = getScalarFieldType(rewriter.getContext());
-    Value invDxVal = rewriter.create<ConstOp>(loc, scalarTy,
-                                              rewriter.getF64FloatAttr(invDx));
-    Value res = rewriter.create<MulOp>(loc, resultType, sum, invDxVal);
+    Value invDxVal =
+        ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(invDx))
+            .getResult();
+    Value res = MulOp::create(rewriter, loc, resultType, sum, invDxVal).getResult();
 
     rewriter.replaceOp(op, res);
     return success();

@@ -116,19 +116,21 @@ struct AddDissipation : public OpRewritePattern<DtAssignOp> {
         auto offAttr =
             rewriter.getI64ArrayAttr(makeOffsets(spatialDim, dir, pt.offset));
 
-        Value val = rewriter.create<RefOp>(loc, field.getType(), field,
-                                           rewriter.getStringAttr("field"),
-                                           tensorIndices, offAttr);
+        Value val = RefOp::create(rewriter, loc, field.getType(), field,
+                                  rewriter.getStringAttr("field"),
+                                  tensorIndices, offAttr)
+                        .getResult();
 
-        Value w = rewriter.create<ConstOp>(loc, scalarTy,
-                                           rewriter.getF64FloatAttr(pt.weight));
-        Value term = rewriter.create<MulOp>(loc, fieldTy, val, w);
+        Value w = ConstOp::create(rewriter, loc, scalarTy,
+                                  rewriter.getF64FloatAttr(pt.weight))
+                      .getResult();
+        Value term = MulOp::create(rewriter, loc, fieldTy, val, w).getResult();
         if (firstTerm) {
           dirSum = term;
           firstTerm = false;
           continue;
         }
-        dirSum = rewriter.create<AddOp>(loc, fieldTy, dirSum, term);
+        dirSum = AddOp::create(rewriter, loc, fieldTy, dirSum, term).getResult();
       }
       if (!dirSum)
         continue;
@@ -137,19 +139,23 @@ struct AddDissipation : public OpRewritePattern<DtAssignOp> {
         haveDirection = true;
         continue;
       }
-      dissipationTotal =
-          rewriter.create<AddOp>(loc, fieldTy, dissipationTotal, dirSum);
+      dissipationTotal = AddOp::create(rewriter, loc, fieldTy, dissipationTotal,
+                                       dirSum)
+                             .getResult();
     }
 
     if (!haveDirection)
       return failure();
 
-    Value sigmaVal = rewriter.create<ConstOp>(loc, scalarTy,
-                                              rewriter.getF64FloatAttr(factor));
+    Value sigmaVal = ConstOp::create(rewriter, loc, scalarTy,
+                                     rewriter.getF64FloatAttr(factor))
+                         .getResult();
     Value dissipationScaled =
-        rewriter.create<MulOp>(loc, fieldTy, dissipationTotal, sigmaVal);
-    Value newRHS = rewriter.create<AddOp>(loc, fieldTy, currentRHS,
-                                          dissipationScaled);
+        MulOp::create(rewriter, loc, fieldTy, dissipationTotal, sigmaVal)
+            .getResult();
+    Value newRHS =
+        AddOp::create(rewriter, loc, fieldTy, currentRHS, dissipationScaled)
+            .getResult();
 
     rewriter.modifyOpInPlace(op, [&] {
       op.setOperand(1, newRHS);
