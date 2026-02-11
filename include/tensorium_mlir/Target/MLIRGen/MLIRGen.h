@@ -2,6 +2,13 @@
 #pragma once
 #include "tensorium/Backend/DomainIR.hpp"
 
+namespace mlir {
+class MLIRContext;
+class ModuleOp;
+template <typename T>
+class OwningOpRef;
+} // namespace mlir
+
 namespace tensorium_mlir {
 
 struct MLIRGenOptions {
@@ -19,6 +26,10 @@ struct MLIRGenOptions {
   bool enableDissipationPass = false;
   double dissipationStrength = 0.1;
 };
+
+mlir::OwningOpRef<mlir::ModuleOp>
+buildMLIRModule(const tensorium::backend::ModuleIR &module,
+                mlir::MLIRContext &ctx, const MLIRGenOptions &opts = {});
 
 void emitMLIR(const tensorium::backend::ModuleIR &module,
               const MLIRGenOptions &opts = {});

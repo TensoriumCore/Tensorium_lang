@@ -634,16 +634,16 @@ static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
   }
 }
 
-void emitMLIR(const tensorium::backend::ModuleIR &module,
-              const MLIRGenOptions &opts) {
-  mlir::MLIRContext ctx;
+mlir::OwningOpRef<mlir::ModuleOp>
+buildMLIRModule(const tensorium::backend::ModuleIR &module,
+                mlir::MLIRContext &ctx, const MLIRGenOptions &opts) {
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
   ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
   ctx.getOrLoadDialect<tensorium::mlir::TensoriumDialect>();
 
   mlir::OpBuilder b(&ctx);
   auto loc = b.getUnknownLoc();
-  auto moduleOp = mlir::ModuleOp::create(loc);
+  auto moduleOp = mlir::OwningOpRef<mlir::ModuleOp>(mlir::ModuleOp::create(loc));
 
   const auto fields = extractFields(module);
   llvm::SmallVector<mlir::Type, 8> argTypes;
@@ -701,11 +701,11 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
     }
   }
   if (module.simulation) {
-    moduleOp->setAttr("tensorium.sim.dim",
-                      b.getI64IntegerAttr(module.simulation->dimension));
+    moduleOp->getOperation()->setAttr("tensorium.sim.dim",
+                                      b.getI64IntegerAttr(module.simulation->dimension));
   }
   mlir::func::ReturnOp::create(b, loc);
-  moduleOp.push_back(f);
+  moduleOp->push_back(f);
 
   MLIRGenOptions pipelineOpts = opts;
   if (module.simulation) {
@@ -722,10 +722,17 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
 
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
-  if (mlir::failed(pm.run(moduleOp))) {
+  if (mlir::failed(pm.run(*moduleOp))) {
     llvm::errs() << "Pipeline failed\n";
   }
-  moduleOp.print(llvm::outs());
+  return moduleOp;
+}
+
+void emitMLIR(const tensorium::backend::ModuleIR &module,
+              const MLIRGenOptions &opts) {
+  mlir::MLIRContext ctx;
+  auto moduleOp = buildMLIRModule(module, ctx, opts);
+  moduleOp->print(llvm::outs());
 }
 
 } // namespace tensorium_mlir
