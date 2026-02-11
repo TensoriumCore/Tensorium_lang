@@ -40,5 +40,5 @@ bash tools/dev/check_layering.sh
 ```
 
 - Current expected status (pre-architecture split):
-  - script fails on known debt `DomainIR -> AST`.
-  - this is intentional until the `tensoriumIR` split removes that dependency.
+  - script passes on HEAD.
+  - no whitelist / expected-fail behavior is used.

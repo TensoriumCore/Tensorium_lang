@@ -33,6 +33,16 @@ check_forbidden_in_path \
   "^#include\\s+\"(tensorium/(Runtime|Backend)/|tensorium_mlir/)" \
   "Parse layer must not depend on Runtime/Backend/MLIR"
 
+check_forbidden_in_path \
+  "include/tensorium/Validation" \
+  "^#include\\s+\"tensorium/(AST|Parse|Sema)/" \
+  "Validation module headers must depend on IR/Core only"
+
+check_forbidden_in_path \
+  "lib/Validation" \
+  "^#include\\s+\"tensorium/(AST|Parse|Sema)/" \
+  "Validation module sources must depend on IR/Core only"
+
 rm -f /tmp/tensorium_layering_check.out
 
 if [[ "$failed" -ne 0 ]]; then
