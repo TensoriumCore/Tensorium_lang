@@ -82,7 +82,7 @@ FieldKind BackendBuilder::lowerFieldKind(TensorKind k) {
   case TensorKind::CovTensor3:
     return FieldKind::CovTensor3;
   case TensorKind::ConTensor3:
-    return FieldKind::ConTensor4;
+    return FieldKind::ConTensor3;
   case TensorKind::CovTensor4:
     return FieldKind::CovTensor4;
   case TensorKind::ConTensor4:
