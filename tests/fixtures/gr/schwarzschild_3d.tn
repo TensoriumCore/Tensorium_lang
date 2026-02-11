@@ -1,0 +1,29 @@
+# Schwarzschild-like kernel in 3D (semantic regression fixture)
+field scalar alpha
+field scalar phi
+field scalar H
+field cov_tensor2 gamma[i,j]
+field con_tensor2 gammaU[i,j]
+field cov_tensor2 K[i,j]
+
+simulation {
+  coordinates = spherical
+  dimension = 3
+  resolution = [48,48,48]
+
+  time {
+    dt = 0.0005
+    integrator = rk4
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+evolution Schwarzschild3D {
+  dt H = contract(gammaU[i,j] * d_i(d_j(phi)))
+  dt K[i,j] = d_i(d_j(phi)) + alpha * gamma[i,j]
+}

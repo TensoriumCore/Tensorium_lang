@@ -80,6 +80,32 @@ ERROR_TESTS=(
   tests/57_error_metric_rank.tn
 )
 
+SEMANTIC_EINSTEIN_VALID_TESTS=(
+  tests/semantic/einstein/01_valid_contraction.tn
+  tests/semantic/einstein/04_valid_two_sums.tn
+)
+
+SEMANTIC_EINSTEIN_ERROR_TESTS=(
+  "tests/semantic/einstein/02_invalid_variance_contraction.tn|requires explicit metric or inverse metric"
+  "tests/semantic/einstein/03_collision_trace.tn|Implicit trace"
+  "tests/semantic/einstein/05_capture_requires_rename.tn|Index collision: symbol"
+)
+
+SEMANTIC_DIFF_VALID_TESTS=(
+  tests/semantic/diff/01_partial_scalar.tn
+  tests/semantic/diff/02_partial_vector_rank_plus_one.tn
+  tests/semantic/diff/03_covariant_with_gamma.tn
+)
+
+SEMANTIC_DIFF_ERROR_TESTS=(
+  "tests/semantic/diff/04_covariant_without_gamma_error.tn|Covariant derivative requires connection tensor Gamma"
+)
+
+GR_FIXTURES=(
+  tests/fixtures/gr/schwarzschild_2d.tn
+  tests/fixtures/gr/schwarzschild_3d.tn
+)
+
 SYMBOLIC_VALID_TESTS=(
   tests/28_symbolic_unknown_scalar_call_ok.tn
   tests/36_symbolic_unknown_scalar_call_ok.tn
@@ -152,6 +178,86 @@ for f in "${ERROR_TESTS[@]}"; do
   echo "[FAIL EXPECTED] $f"
   if "$BIN" "${PIPELINE_BASE[@]}" "$f" > /dev/null 2>&1; then
     echo "ERROR: $f was expected to fail but passed"
+    exit 1
+  fi
+done
+
+echo
+echo "=============================="
+echo " RUN SEMANTIC EINSTEIN TESTS"
+echo "=============================="
+
+for f in "${SEMANTIC_EINSTEIN_VALID_TESTS[@]}"; do
+  echo "[SEMANTIC OK EXPECTED] $f"
+  "$BIN" --validate "$f" > /dev/null
+done
+
+for entry in "${SEMANTIC_EINSTEIN_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SEMANTIC FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected semantic diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN SEMANTIC DIFF TESTS"
+echo "=============================="
+
+for f in "${SEMANTIC_DIFF_VALID_TESTS[@]}"; do
+  echo "[SEMANTIC OK EXPECTED] $f"
+  "$BIN" --validate "$f" > /dev/null
+done
+
+for entry in "${SEMANTIC_DIFF_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SEMANTIC FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected diff diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN GR FIXTURE CHECKS"
+echo "=============================="
+
+for f in "${GR_FIXTURES[@]}"; do
+  echo "[GR OK EXPECTED] $f"
+  "$BIN" --validate "$f" > /dev/null
+  OUT_FILE="$OUT/$(basename "$f").backend.txt"
+  "$BIN" --dump-backend-expr "$f" > "$OUT_FILE"
+  if ! grep -q "contraction(" "$OUT_FILE"; then
+    echo "ERROR: expected explicit contraction op in backend IR for $f"
+    exit 1
+  fi
+  if ! grep -q "partial_" "$OUT_FILE"; then
+    echo "ERROR: expected explicit partial derivative op in backend IR for $f"
     exit 1
   fi
 done

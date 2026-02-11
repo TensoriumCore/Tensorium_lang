@@ -1,0 +1,14 @@
+field con_tensor3 Gamma[i,j,k]
+field covector V[i]
+field cov_tensor2 nablaV[i,j]
+
+simulation {
+  dimension = 2
+  resolution = [16,16]
+  time { dt = 0.1 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution DiffCovariant {
+  dt nablaV[i,j] = nabla_j(V[i])
+}

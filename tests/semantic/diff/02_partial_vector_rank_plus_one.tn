@@ -1,0 +1,13 @@
+field covector V[i]
+field cov_tensor2 dV[i,j]
+
+simulation {
+  dimension = 2
+  resolution = [16,16]
+  time { dt = 0.1 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution DiffPartialVector {
+  dt dV[i,j] = d_j(V[i])
+}
