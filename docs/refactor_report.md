@@ -524,3 +524,39 @@ Planned commit sequence (one intention per commit):
   1. cache per-expression index-use summaries during one canonical pass traversal,
   2. switch index representation from `std::string` to compact interned/char IDs in IR nodes,
   3. reduce temporary allocations in canonical passes (scratch buffers reused per evolution).
+
+## 12) Phase 4 Update (Computable metric4 + split bindings)
+
+### 4.A metric4/split3p1 now computed as SSA (no string-eval path)
+- `initial_data metric4` expressions are now lowered through structured init IR nodes:
+  - `InitNumberIR`, `InitSymbolIR`, `InitBinaryIR`, `InitCallIR`.
+- MLIR generation emits real compute ops for metric components:
+  - `tensorium.const`, `tensorium.param`, `tensorium.coord`,
+  - arithmetic ops (`add/sub/mul/div`),
+  - scalar math (`tensorium.sin`, `tensorium.sqrt`).
+- `tensorium.metric4` now carries 16 scalar SSA operands instead of a string array attribute.
+- `tensorium.split3p1` now takes computed SSA inputs (`alpha_in`, `beta_in`, `gamma_in`, `gammaU_in`) and returns typed SSA outputs.
+
+### 4.B split_3p1 mapping binds computed outputs to declared fields
+- DSL/AST/Parser/Sema support explicit binding block:
+  - `split_3p1 { alpha -> alpha; gamma -> gamma[i,j]; gammaU -> gammaU[i,j]; }`
+- Sema validates:
+  - mapped fields exist,
+  - expected rank/variance (scalar, covector, cov2, con2),
+  - expected index arity.
+- MLIRGen uses this mapping to rebind field references so RHS expressions consume split results directly.
+
+### 4.C Schwarzschild relevance and regression checks strengthened
+- Updated fixture:
+  - `tests/fixtures/gr/schwarzschild_3d.tn` now includes explicit `split_3p1` mapping.
+- Added negative test:
+  - `tests/semantic/initial_data/03_missing_gammau_binding.tn`
+  - fails with diagnostic when `gammaU` is used in equations but not bound by `split_3p1`.
+- `run_test.sh` now checks:
+  - structural MLIR presence of metric/split/math/build ops,
+  - use-def chain proving RHS contraction uses `gammaU` value produced by `tensorium.split3p1`.
+
+### Current limitation
+- `split3p1` lowering currently supports the zero-shift case (`beta = 0` path).
+- Non-zero shift path is intentionally rejected with explicit diagnostic:
+  - `"split3p1 with non-zero shift is not implemented yet"`.
