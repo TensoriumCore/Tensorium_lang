@@ -1,4 +1,5 @@
 #include "tensorium/Backend/BackendBuilder.hpp"
+#include "tensorium/Core/IndexSet.h"
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"
@@ -49,9 +50,45 @@ static bool testConTensor3Lowering() {
   return false;
 }
 
+static bool testIndexSetPolicy() {
+  for (char idx : core::kTensorIndices) {
+    if (!core::isTensorIndexChar(idx)) {
+      std::cerr << "FAIL: expected accepted tensor index char '" << idx
+                << "'\n";
+      return false;
+    }
+    if (!core::isTensorIndexName(std::string(1, idx))) {
+      std::cerr << "FAIL: expected accepted tensor index name '" << idx
+                << "'\n";
+      return false;
+    }
+  }
+
+  const char rejectedChars[] = {'a', 'x', 'z', '0', 'I', '_'};
+  for (char idx : rejectedChars) {
+    if (core::isTensorIndexChar(idx)) {
+      std::cerr << "FAIL: expected rejected tensor index char '" << idx
+                << "'\n";
+      return false;
+    }
+  }
+
+  const std::string rejectedNames[] = {"", "ij", "p", "i0", "_", "theta"};
+  for (const auto &name : rejectedNames) {
+    if (core::isTensorIndexName(name)) {
+      std::cerr << "FAIL: expected rejected tensor index name '" << name
+                << "'\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
 int main() {
   bool ok = true;
   ok &= testConTensor3Lowering();
+  ok &= testIndexSetPolicy();
 
   if (!ok)
     return 1;
