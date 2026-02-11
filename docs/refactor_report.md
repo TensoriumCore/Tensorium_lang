@@ -323,10 +323,11 @@ Planned commit sequence (one intention per commit):
 - Rule coverage:
   - forbid `DomainIR` -> `AST` includes,
   - forbid `lib/Runtime` -> `Parse/Sema`,
-  - forbid `lib/Parse` -> `Runtime/Backend/MLIR`.
-- Integration choice:
-  - usage documented in `docs/refactor_baseline.md`,
-  - not yet wired into `run_test.sh` while known debt `DomainIR -> AST` still exists.
+  - forbid `lib/Parse` -> `Runtime/Backend/MLIR`,
+  - forbid `include/tensorium/Validation` and `lib/Validation` -> `AST/Parse/Sema`.
+- Status:
+  - script exits `0` on current `HEAD`,
+  - usage documented in `docs/refactor_baseline.md`.
 
 ### IndexSet extracted
 - Added shared index policy utility: `include/tensorium/Core/IndexSet.h`.
@@ -334,10 +335,26 @@ Planned commit sequence (one intention per commit):
   - `include/tensorium/Sema/Sema.hpp`,
   - `lib/Sema/Sema.cpp`,
   - `lib/Sema/CallSupport.cpp`,
-  - `lib/Sema/ProgramValidator.cpp`,
+  - `lib/Validation/ProgramValidator.cpp`,
   - `include/tensorium/Sema/tensor_type_checker.hpp`.
 - Extended unit tests with accepted/rejected index checks in
   - `tools/Tester/UnitTests.cpp`.
 - Validation status:
   - `cmake --build build -j` passes,
   - `bash run_test.sh` passes.
+
+### Phase 2 done
+- IR detached from frontend AST:
+  - introduced `include/tensorium/IR/TensorType.hpp` (`tensorium::ir::TensorType`),
+  - `include/tensorium/Backend/DomainIR.hpp` now consumes IR-native tensor type and no longer includes AST headers.
+- Boundary conversions implemented at lowering edge:
+  - `lib/Backend/BackendBuilder.cpp` converts frontend `TensorTypeDesc` into IR tensor type,
+  - MLIR and runtime consumers now read IR-native tensor metadata only.
+- Validation module moved out of Sema:
+  - `ProgramValidator` moved to `include/tensorium/Validation/ProgramValidator.hpp` and `lib/Validation/ProgramValidator.cpp`,
+  - namespace/API moved from `tensorium::sema` to `tensorium::validation`,
+  - `tools/driver/main.cpp` updated to call validation in the same pipeline position.
+- Verification:
+  - `cmake --build build -j` passes after each commit,
+  - `bash run_test.sh` passes after the Phase 2 commit blocks,
+  - `bash tools/dev/check_layering.sh` is green on `HEAD`.
