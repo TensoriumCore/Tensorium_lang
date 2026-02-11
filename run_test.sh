@@ -108,7 +108,7 @@ INITIAL_DATA_ERROR_TESTS=(
 
 INITIAL_DATA_MLIR_ERROR_TESTS=(
   "tests/semantic/initial_data/03_missing_gammau_binding.tn|split_3p1 does not bind gammaU"
-  "tests/semantic/initial_data/04_metric_nondiag_not_implemented.tn|decompose3p1_from_metric: not implemented for non-diagonal or beta!=0"
+  "tests/semantic/initial_data/offdiag_metric.tn|decompose3p1_from_metric: not implemented for non-diagonal or beta!=0"
 )
 
 GR_FIXTURES=(
@@ -398,9 +398,24 @@ if [[ -z "$INIT_GAMMAU" ]]; then
   echo "$INIT_LINE"
   exit 1
 fi
-REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+${INIT_GAMMAU}\\b|\"tensorium\\.ref\"\\(${INIT_GAMMAU}" "$SPLIT_OUT" || true)
+
+BIND_LINE=$(rg -m1 "\"tensorium\\.dt_assign\"\\((%[A-Za-z0-9_$.]+),[[:space:]]*${INIT_GAMMAU}\\)" "$SPLIT_OUT" || true)
+if [[ -z "$BIND_LINE" ]]; then
+  echo "ERROR: expected dt_assign binding for init3p1 gammaU result"
+  echo "init gammaU value: $INIT_GAMMAU"
+  exit 1
+fi
+BIND_FIELD=$(echo "$BIND_LINE" | awk -F'(' '{print $2}' | awk -F',' '{print $1}' | xargs)
+if [[ -z "$BIND_FIELD" ]]; then
+  echo "ERROR: could not extract bound field from dt_assign"
+  echo "$BIND_LINE"
+  exit 1
+fi
+
+REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+${BIND_FIELD}\\b|\"tensorium\\.ref\"\\(${BIND_FIELD}" "$SPLIT_OUT" || true)
 if [[ -z "$REF_LINE" ]]; then
-  echo "ERROR: expected a tensorium.ref from init3p1 gammaU result"
+  echo "ERROR: expected a tensorium.ref from init3p1-bound gammaU field"
+  echo "bound gammaU field: $BIND_FIELD"
   echo "init gammaU value: $INIT_GAMMAU"
   exit 1
 fi
@@ -411,8 +426,9 @@ if [[ -z "$REF_GAMMAU" ]]; then
   exit 1
 fi
 if ! rg -q "\"tensorium\\.mul\"\\(${REF_GAMMAU},|tensorium\\.mul[[:space:]]+${REF_GAMMAU}," "$SPLIT_OUT"; then
-  echo "ERROR: expected RHS contraction to use gammaU coming from init3p1"
+  echo "ERROR: expected RHS contraction to use gammaU coming from init3p1 binding"
   echo "init gammaU value: $INIT_GAMMAU"
+  echo "bound gammaU field: $BIND_FIELD"
   echo "ref gammaU value: $REF_GAMMAU"
   exit 1
 fi

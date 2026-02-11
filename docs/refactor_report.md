@@ -557,7 +557,8 @@ Planned commit sequence (one intention per commit):
 - Added in-memory MLIR structural test (`tools/Tester/UnitTests.cpp`):
   - verifies chain `metric4 -> decompose3p1_from_metric -> init3p1`,
   - verifies `init3p1` consumes decompose results (use-def equality),
-  - verifies RHS consumes refs from `init3p1` outputs:
+  - verifies `init3p1` outputs are bound to program fields via `tensorium.dt_assign`,
+  - verifies RHS consumes refs from those bound fields:
     - `gammaU` feeds `mul` then `contract` in `dt H`,
     - `alpha` and `gamma` feed the same `mul` in `dt K`.
 - Legacy checks:
@@ -573,7 +574,7 @@ Planned commit sequence (one intention per commit):
 
 ### 13.C New regression/negative tests
 - Added MLIR-error fixture:
-  - `tests/semantic/initial_data/04_metric_nondiag_not_implemented.tn`
+  - `tests/semantic/initial_data/offdiag_metric.tn`
   - expects explicit diagnostic for unsupported non-diagonal metric decomposition.
 - `run_test.sh` extended to check:
   - presence of `decompose3p1_from_metric` + `init3p1`,
