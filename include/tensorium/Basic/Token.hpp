@@ -13,6 +13,8 @@ enum class TokenType {
   LBracket,
   RBracket,
   Comma,
+  Semicolon,
+  Arrow,
   Equals,
   Plus,
   Minus,

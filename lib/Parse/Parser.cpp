@@ -487,6 +487,45 @@ InitialDataDecl Parser::parseInitialData() {
       continue;
     }
 
+    if (cur.type == TokenType::Identifier && cur.text == "split_3p1") {
+      if (init.split3p1.enabled)
+        syntaxError("duplicate split_3p1 block in initial_data");
+      init.split3p1.enabled = true;
+      advance();
+      expect(TokenType::LBrace);
+
+      while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+        if (cur.type != TokenType::Identifier)
+          syntaxError("split_3p1 expects mapping key");
+        std::string key = cur.text;
+        advance();
+        expect(TokenType::Arrow);
+        TensorAccess target = parseLHS();
+
+        if (key == "alpha") {
+          init.split3p1.hasAlpha = true;
+          init.split3p1.alphaTarget = std::move(target);
+        } else if (key == "beta") {
+          init.split3p1.hasBeta = true;
+          init.split3p1.betaTarget = std::move(target);
+        } else if (key == "gamma") {
+          init.split3p1.hasGamma = true;
+          init.split3p1.gammaTarget = std::move(target);
+        } else if (key == "gammaU") {
+          init.split3p1.hasGammaU = true;
+          init.split3p1.gammaUTarget = std::move(target);
+        } else {
+          syntaxError("unknown split_3p1 key '" + key + "'");
+        }
+
+        if (cur.type == TokenType::Semicolon)
+          advance();
+      }
+
+      expect(TokenType::RBrace);
+      continue;
+    }
+
     syntaxError("unexpected entry in initial_data block");
   }
 

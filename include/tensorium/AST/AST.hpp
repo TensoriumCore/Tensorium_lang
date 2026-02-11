@@ -173,12 +173,25 @@ struct DecomposedMetricInitDecl {
   std::vector<std::vector<std::unique_ptr<Expr>>> gamma;
 };
 
+struct Split3P1BindingDecl {
+  bool enabled = false;
+  bool hasAlpha = false;
+  bool hasBeta = false;
+  bool hasGamma = false;
+  bool hasGammaU = false;
+  TensorAccess alphaTarget;
+  TensorAccess betaTarget;
+  TensorAccess gammaTarget;
+  TensorAccess gammaUTarget;
+};
+
 struct InitialDataDecl {
   bool enforceSymmetry = false;
   bool hasMetric4 = false;
   bool hasDecomposed = false;
   Metric4InitDecl metric4;
   DecomposedMetricInitDecl decomposed;
+  Split3P1BindingDecl split3p1;
 };
 
 struct Program {

@@ -457,6 +457,59 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
       }
     }
   }
+
+  if (init.split3p1.enabled) {
+    if (!init.hasMetric4) {
+      throw std::runtime_error(
+          "split_3p1 mapping requires metric4 initial_data definition");
+    }
+
+    auto validateTarget = [this](const TensorAccess &target, int expUp,
+                                 int expDown, const std::string &label,
+                                 bool allowMetricLike = false,
+                                 bool allowInverseMetricLike = false) {
+      auto it = fields.find(target.base);
+      if (it == fields.end()) {
+        throw std::runtime_error("split_3p1 target field '" + target.base +
+                                 "' for " + label + " is not declared");
+      }
+      const FieldDecl *fd = it->second;
+
+      bool typeOk = (fd->up == expUp && fd->down == expDown);
+      if (allowMetricLike && fd->kind == TensorKind::Metric &&
+          expUp == 0 && expDown == 2)
+        typeOk = true;
+      if (allowInverseMetricLike && fd->kind == TensorKind::InverseMetric &&
+          expUp == 2 && expDown == 0)
+        typeOk = true;
+      if (!typeOk) {
+        throw std::runtime_error("split_3p1 target '" + target.base +
+                                 "' for " + label + " has wrong tensor type");
+      }
+
+      const size_t expectedRank = static_cast<size_t>(expUp + expDown);
+      if (target.indices.size() != expectedRank) {
+        throw std::runtime_error("split_3p1 target '" + target.base +
+                                 "' for " + label +
+                                 " has wrong number of indices");
+      }
+    };
+
+    if (init.split3p1.hasAlpha) {
+      validateTarget(init.split3p1.alphaTarget, 0, 0, "alpha");
+    }
+    if (init.split3p1.hasBeta) {
+      validateTarget(init.split3p1.betaTarget, 0, 1, "beta");
+    }
+    if (init.split3p1.hasGamma) {
+      validateTarget(init.split3p1.gammaTarget, 0, 2, "gamma",
+                     true, false);
+    }
+    if (init.split3p1.hasGammaU) {
+      validateTarget(init.split3p1.gammaUTarget, 2, 0, "gammaU",
+                     false, true);
+    }
+  }
 }
 
 SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)

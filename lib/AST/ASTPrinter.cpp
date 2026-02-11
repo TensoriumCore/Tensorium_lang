@@ -210,6 +210,41 @@ void printProgram(const Program &prog) {
       std::cout << "  beta = <3 entries>\n";
       std::cout << "  gamma = <3x3 matrix>\n";
     }
+    if (prog.initialData->split3p1.enabled) {
+      std::cout << "  split_3p1 mappings:\n";
+      auto printTarget = [](const TensorAccess &t) {
+        std::cout << t.base;
+        if (!t.indices.empty()) {
+          std::cout << "[";
+          for (size_t i = 0; i < t.indices.size(); ++i) {
+            std::cout << t.indices[i];
+            if (i + 1 < t.indices.size())
+              std::cout << ",";
+          }
+          std::cout << "]";
+        }
+      };
+      if (prog.initialData->split3p1.hasAlpha) {
+        std::cout << "    alpha -> ";
+        printTarget(prog.initialData->split3p1.alphaTarget);
+        std::cout << "\n";
+      }
+      if (prog.initialData->split3p1.hasBeta) {
+        std::cout << "    beta -> ";
+        printTarget(prog.initialData->split3p1.betaTarget);
+        std::cout << "\n";
+      }
+      if (prog.initialData->split3p1.hasGamma) {
+        std::cout << "    gamma -> ";
+        printTarget(prog.initialData->split3p1.gammaTarget);
+        std::cout << "\n";
+      }
+      if (prog.initialData->split3p1.hasGammaU) {
+        std::cout << "    gammaU -> ";
+        printTarget(prog.initialData->split3p1.gammaUTarget);
+        std::cout << "\n";
+      }
+    }
   }
 
   for (const auto &evo : prog.evolutions) {
