@@ -6,5 +6,5 @@ add_executable(Tensorium_cc
 target_link_libraries(Tensorium_cc PRIVATE
   tensoriumLowering
   tensoriumValidation
-  tensorium_mlir_backend
+  tensoriumMlirCodegen
 )
