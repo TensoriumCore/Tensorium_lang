@@ -390,3 +390,14 @@ Planned commit sequence (one intention per commit):
   - `cmake --build build -j` passes after each commit,
   - `bash run_test.sh` passes after the commit block,
   - `bash tools/dev/check_layering.sh` passes.
+
+### Phase 3 continued (MLIR warning cleanup)
+- Removed deprecated MLIR builder usage in active code paths:
+  - migrated `OpBuilder::create<...>` calls to `OpTy::create(...)` in:
+    - `lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp`,
+    - `lib/tensorium_mlir/Dialect/Tensorium/Transforms/StencilLoweringPass.cpp`,
+    - `lib/tensorium_mlir/Dialect/Tensorium/Transforms/DissipationPass.cpp`,
+    - `lib/tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinCanonicalizePass.cpp`.
+- Result:
+  - no remaining `.create<...>` calls in `lib/tensorium_mlir`,
+  - build remains green with unchanged behavior.
