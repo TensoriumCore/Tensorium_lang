@@ -106,6 +106,10 @@ INITIAL_DATA_ERROR_TESTS=(
   "tests/semantic/initial_data/02_symmetry_violation.tn|metric4 symmetry violation"
 )
 
+INITIAL_DATA_MLIR_ERROR_TESTS=(
+  "tests/semantic/initial_data/03_missing_gammau_binding.tn|split_3p1 does not bind gammaU"
+)
+
 GR_FIXTURES=(
   tests/fixtures/gr/schwarzschild_2d.tn
   tests/fixtures/gr/schwarzschild_3d.tn
@@ -294,6 +298,31 @@ done
 
 echo
 echo "=============================="
+echo " RUN INITIAL DATA MLIR ERROR TESTS"
+echo "=============================="
+
+for entry in "${INITIAL_DATA_MLIR_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[INITIAL_DATA MLIR FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" "${PIPELINE_BASE[@]}" "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail during MLIR emission"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected MLIR initial_data diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
 echo " RUN SCHWARZSCHILD SPLIT3+1 MLIR CHECK"
 echo "=============================="
 
@@ -301,7 +330,7 @@ SPLIT_FIXTURE=tests/fixtures/gr/schwarzschild_3d.tn
 SPLIT_OUT="$OUT/schwarzschild_3d_split3p1.mlir"
 "$BIN" "${PIPELINE_BASE[@]}" "$SPLIT_FIXTURE" > "$SPLIT_OUT"
 
-SPLIT_LINE=$(rg "tensorium\\.split3p1" "$SPLIT_OUT" || true)
+SPLIT_LINE=$(rg -m1 "tensorium\\.split3p1" "$SPLIT_OUT" || true)
 if [[ -z "$SPLIT_LINE" ]]; then
   echo "ERROR: expected tensorium.split3p1 op in $SPLIT_FIXTURE"
   exit 1
@@ -310,25 +339,54 @@ if ! grep -q "tensorium.metric4" "$SPLIT_OUT"; then
   echo "ERROR: expected tensorium.metric4 op in $SPLIT_FIXTURE"
   exit 1
 fi
-if [[ "$SPLIT_LINE" != *"beta_zero = true"* ]]; then
-  echo "ERROR: expected beta_zero = true in split3p1 op"
+if ! grep -q "tensorium.coord" "$SPLIT_OUT"; then
+  echo "ERROR: expected coordinate ops in split3p1 lowering"
+  exit 1
+fi
+if ! grep -q "tensorium.param" "$SPLIT_OUT"; then
+  echo "ERROR: expected parameter ops in split3p1 lowering"
+  exit 1
+fi
+if ! grep -q "\"tensorium.sqrt\"" "$SPLIT_OUT"; then
+  echo "ERROR: expected sqrt op for alpha computation"
+  exit 1
+fi
+if ! grep -q "\"tensorium.sin\"" "$SPLIT_OUT"; then
+  echo "ERROR: expected sin op in Schwarzschild metric components"
+  exit 1
+fi
+if ! grep -q "\"tensorium.build_con_tensor2\"" "$SPLIT_OUT"; then
+  echo "ERROR: expected gammaU tensor build op"
+  exit 1
+fi
+
+SPLIT_GAMMAU=$(
+  echo "$SPLIT_LINE" \
+    | sed -E 's/^[[:space:]]*([^=]+)=.*/\1/' \
+    | awk -F',' '{print $4}' \
+    | xargs
+)
+if [[ -z "$SPLIT_GAMMAU" ]]; then
+  echo "ERROR: could not extract gammaU result from split3p1 op"
   echo "$SPLIT_LINE"
   exit 1
 fi
-if [[ "$SPLIT_LINE" != *"alpha_expr = \"sqrt("* ]]; then
-  echo "ERROR: expected alpha_expr sqrt(...) in split3p1 op"
-  echo "$SPLIT_LINE"
+REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+${SPLIT_GAMMAU}\\b|\"tensorium\\.ref\"\\(${SPLIT_GAMMAU}" "$SPLIT_OUT" || true)
+if [[ -z "$REF_LINE" ]]; then
+  echo "ERROR: expected a tensorium.ref from split3p1 gammaU result"
+  echo "split gammaU value: $SPLIT_GAMMAU"
   exit 1
 fi
-if [[ "$SPLIT_LINE" != *"gamma_diag"* || "$SPLIT_LINE" != *"(1/((1-((2*M)/r))))"* ||
-      "$SPLIT_LINE" != *"(r*r)"* || "$SPLIT_LINE" != *"sin(theta)"* ]]; then
-  echo "ERROR: expected gamma diagonal Schwarzschild structure in split3p1 op"
-  echo "$SPLIT_LINE"
+REF_GAMMAU=$(echo "$REF_LINE" | sed -E 's/^([[:space:]]*%[A-Za-z0-9_$.]+).*/\1/' | xargs)
+if [[ -z "$REF_GAMMAU" ]]; then
+  echo "ERROR: could not extract ref result for gammaU use-def chain"
+  echo "$REF_LINE"
   exit 1
 fi
-if [[ "$SPLIT_LINE" != *"gammau_is_inverse = true"* ]]; then
-  echo "ERROR: expected gammau_is_inverse = true in split3p1 op"
-  echo "$SPLIT_LINE"
+if ! rg -q "\"tensorium\\.mul\"\\(${REF_GAMMAU},|tensorium\\.mul[[:space:]]+${REF_GAMMAU}," "$SPLIT_OUT"; then
+  echo "ERROR: expected RHS contraction to use gammaU coming from split3p1"
+  echo "split gammaU value: $SPLIT_GAMMAU"
+  echo "ref gammaU value: $REF_GAMMAU"
   exit 1
 fi
 

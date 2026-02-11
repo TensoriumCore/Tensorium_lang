@@ -1,4 +1,3 @@
-# Schwarzschild-like kernel in 3D (semantic regression fixture)
 field metric g[mu,nu]
 field inverse_metric gU[mu,nu]
 field scalar alpha
@@ -6,27 +5,25 @@ field scalar phi
 field scalar H
 field cov_tensor2 gamma[i,j]
 field con_tensor2 gammaU[i,j]
-field cov_tensor2 K[i,j]
 
 simulation {
   coordinates = spherical
   dimension = 3
-  resolution = [48,48,48]
+  resolution = [16,16,16]
 
   time {
-    dt = 0.0005
-    integrator = rk4
+    dt = 0.001
+    integrator = rk3
   }
 
   spatial {
     scheme = fd
     derivative = centered
-    order = 4
+    order = 2
   }
 }
 
 initial_data {
-  enforce_symmetry = true
   metric4 g[mu,nu] = [
     [-(1 - 2*M/r), 0, 0, 0],
     [0, 1/(1 - 2*M/r), 0, 0],
@@ -36,11 +33,9 @@ initial_data {
   split_3p1 {
     alpha -> alpha;
     gamma -> gamma[i,j];
-    gammaU -> gammaU[i,j];
   }
 }
 
-evolution Schwarzschild3D {
+evolution MissingGammaU {
   dt H = contract(gammaU[i,j] * d_i(d_j(phi)))
-  dt K[i,j] = d_i(d_j(phi)) + alpha * gamma[i,j]
 }
