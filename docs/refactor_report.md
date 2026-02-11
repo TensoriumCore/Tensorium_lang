@@ -367,7 +367,10 @@ Planned commit sequence (one intention per commit):
   - `tensoriumValidation` (IR validation module).
 - Kept compatibility target:
   - `tensorium` is now an aggregate interface linking the four targets above,
-  - existing tool linkage remains stable (`Tensorium_cc`, `Tensorium_tester`, `Tensorium_unittests` still link `tensorium`).
+  - compatibility is preserved for downstream consumers that still link `tensorium`.
+- Tool linkage advanced to explicit layers:
+  - `tools/driver/CMakeLists.txt` links `tensoriumLowering` + `tensoriumValidation` (+ MLIR backend),
+  - `tools/Tester/CMakeLists.txt` links `tensoriumLowering` + `tensoriumValidation`.
 - Validation:
   - `cmake --build build -j` passes,
   - `bash run_test.sh` passes,
