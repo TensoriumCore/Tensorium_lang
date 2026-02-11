@@ -3,6 +3,7 @@
 set -euo pipefail
 
 BIN=./build/tools/driver/Tensorium_cc
+UNIT_BIN=./build/tools/Tester/Tensorium_unittests
 OUT=/tmp/tensorium_tests
 mkdir -p "$OUT"
 
@@ -94,6 +95,12 @@ SYMBOLIC_MLIR_TESTS=()
 SYMBOLIC_TENSOR_FAIL_TESTS=(
   tests/44_symbolic_extern_tensor_mlir.tn
 )
+
+echo "=============================="
+echo " RUN INTERNAL UNIT TESTS"
+echo "=============================="
+"$UNIT_BIN"
+echo
 
 echo "=============================="
 echo " RUN VALID TESTS"
