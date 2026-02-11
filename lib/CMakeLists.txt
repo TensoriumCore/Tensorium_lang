@@ -8,7 +8,7 @@ add_library(tensorium
   Runtime/Eval.cpp
   Sema/CallSupport.cpp
   Sema/Sema.cpp
-  Sema/ProgramValidator.cpp
+  Validation/ProgramValidator.cpp
 )
 
 target_include_directories(tensorium PUBLIC

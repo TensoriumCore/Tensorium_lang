@@ -8,7 +8,7 @@
 #include "tensorium/Backend/IRPrinter.hpp"
 #include "tensorium/Runtime/CpuRuntime.hpp"
 #include "tensorium/Runtime/Eval.hpp"
-#include "tensorium/Sema/ProgramValidator.hpp"
+#include "tensorium/Validation/ProgramValidator.hpp"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 
 #include <fstream>
@@ -240,10 +240,10 @@ int main(int argc, char **argv) {
       }
       auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
       if (validateOnly) {
-        auto result = tensorium::sema::validateProgram(mod);
+        auto result = tensorium::validation::validateProgram(mod);
 
         for (const auto &d : result.diags) {
-          std::cerr << (d.kind == tensorium::sema::Diagnostic::Kind::Error
+          std::cerr << (d.kind == tensorium::validation::Diagnostic::Kind::Error
                             ? "error: "
                             : "warning: ")
                     << d.message << "\n";

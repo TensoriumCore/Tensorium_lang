@@ -1,9 +1,10 @@
 #pragma once
+
 #include "tensorium/Backend/DomainIR.hpp"
 #include <string>
 #include <vector>
 
-namespace tensorium::sema {
+namespace tensorium::validation {
 
 struct Diagnostic {
   enum class Kind { Error, Warning };
@@ -23,4 +24,4 @@ struct ValidationResult {
 
 ValidationResult validateProgram(const backend::ModuleIR &m);
 
-} // namespace tensorium::sema
+} // namespace tensorium::validation
