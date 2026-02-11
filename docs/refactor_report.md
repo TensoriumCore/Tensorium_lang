@@ -546,11 +546,13 @@ Planned commit sequence (one intention per commit):
   - or decomposed initial data.
 
 ### 12.C Supported decomposition scope
-- `decompose3p1_from_metric` now accepts symmetric metric tensors including
-  symmetric cross terms (e.g. Kerr-Schild-like off-diagonal components).
-- Current explicit guardrail:
+- `decompose3p1_from_metric` accepts symmetric metrics with optional
+  **spatial-only** cross terms (`g_ij`, `i,j in {1,2,3}`).
+- Current explicit guardrails:
   - non-symmetric metric components are rejected with
-    `"decompose3p1_from_metric requires symmetric metric components"`.
+    `"decompose3p1_from_metric requires symmetric metric components"`,
+  - non-zero time-space terms (`g_ti`) are rejected with
+    `"decompose3p1_from_metric requires g_ti = 0 (beta unsupported)"`.
 
 ## 13) Schwarzschild MLIR verification
 
@@ -581,10 +583,13 @@ Planned commit sequence (one intention per commit):
 
 ### 13.C New regression/negative tests
 - Added initial-data fixtures:
-  - `tests/semantic/initial_data/offdiag_metric.tn` is now expected to pass
-    (symmetric cross terms).
+  - `tests/semantic/initial_data/offdiag_metric.tn` is expected to pass
+    (symmetric spatial cross term `g_ij`).
   - `tests/semantic/initial_data/04_nonsymmetric_metric_not_supported.tn`
     is expected to fail with the non-symmetric metric diagnostic.
+  - `tests/semantic/initial_data/05_shift_metric_not_supported.tn` is
+    expected to fail when `g_ti` is non-zero (`beta` unsupported in
+    `decompose3p1_from_metric`).
 - `run_test.sh` no longer performs fragile MLIR-grep for init/rhs architecture;
   this is enforced by structural unit tests.
 
@@ -596,6 +601,9 @@ Planned commit sequence (one intention per commit):
   - `@tensorium_rhs` receives only fields referenced by RHS equations.
   - `@tensorium_entry` keeps the full program-field signature and forwards the
     minimal subsets to each callee.
+- Forwarding order is deterministic and stable:
+  - argument order follows `module.fields` declaration order,
+  - each callee receives an ordered subsequence of that list (no padding).
 - Schwarzschild 3D concrete result:
   - before: init/rhs both took all 8 field arguments.
   - after: `@tensorium_init` takes 3 args (`alpha`, `gamma`, `gammaU`);

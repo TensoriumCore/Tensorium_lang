@@ -629,6 +629,41 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
 
+  auto collectEntryArgOrder = [](::mlir::func::CallOp call,
+                                 std::vector<unsigned> &out,
+                                 const char *label) {
+    out.clear();
+    out.reserve(call.getNumOperands());
+    for (::mlir::Value operand : call.getArgOperands()) {
+      auto arg = llvm::dyn_cast<::mlir::BlockArgument>(operand);
+      if (!arg) {
+        std::cerr << "FAIL: " << label
+                  << " call operand is not an entry block argument\n";
+        return false;
+      }
+      out.push_back(arg.getArgNumber());
+    }
+    return true;
+  };
+
+  std::vector<unsigned> initArgOrder;
+  std::vector<unsigned> rhsArgOrder;
+  if (!collectEntryArgOrder(layout.initCall, initArgOrder, "tensorium_init") ||
+      !collectEntryArgOrder(layout.rhsCall, rhsArgOrder, "tensorium_rhs")) {
+    return false;
+  }
+
+  const std::vector<unsigned> expectedInitArgs = {2, 5, 6};
+  const std::vector<unsigned> expectedRhsArgs = {2, 3, 4, 5, 6, 7};
+  if (initArgOrder != expectedInitArgs) {
+    std::cerr << "FAIL: unexpected tensorium_init entry forwarding order\n";
+    return false;
+  }
+  if (rhsArgOrder != expectedRhsArgs) {
+    std::cerr << "FAIL: unexpected tensorium_rhs entry forwarding order\n";
+    return false;
+  }
+
   tensorium::mlir::Metric4Op metricOp;
   tensorium::mlir::Decompose3P1FromMetricOp decomposeOp;
   tensorium::mlir::Init3P1Op init3p1Op;
