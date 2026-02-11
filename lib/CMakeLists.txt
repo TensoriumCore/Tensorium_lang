@@ -30,6 +30,9 @@ target_link_libraries(tensoriumLowering PUBLIC
 )
 
 add_library(tensoriumValidation
+  IR/CanonicalizeDiff.cpp
+  IR/CanonicalizeEinstein.cpp
+  IR/IRVerifier.cpp
   Validation/ProgramValidator.cpp
 )
 target_include_directories(tensoriumValidation PUBLIC

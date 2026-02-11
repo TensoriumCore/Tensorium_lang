@@ -8,6 +8,8 @@
 #include "tensorium/Backend/IRPrinter.hpp"
 #include "tensorium/Runtime/CpuRuntime.hpp"
 #include "tensorium/Runtime/Eval.hpp"
+#include "tensorium/Validation/IRCanonicalize.hpp"
+#include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium/Validation/ProgramValidator.hpp"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 
@@ -239,6 +241,17 @@ int main(int argc, char **argv) {
         std::cout << "==============================\n";
       }
       auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
+      tensorium::validation::canonicalizeDifferentialIR(mod);
+      tensorium::validation::canonicalizeEinsteinIR(mod);
+      auto irResult = tensorium::validation::verifyIR(mod);
+      for (const auto &d : irResult.diags) {
+        std::cerr << (d.kind == tensorium::validation::Diagnostic::Kind::Error
+                          ? "error: "
+                          : "warning: ")
+                  << d.message << "\n";
+      }
+      if (!irResult.ok())
+        return 1;
       if (validateOnly) {
         auto result = tensorium::validation::validateProgram(mod);
 
