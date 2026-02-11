@@ -1,18 +1,52 @@
-add_library(tensorium
+add_library(tensoriumCore
   AST/ASTPrinter.cpp
   AST/Expr.cpp
-  Backend/BackendBuilder.cpp
   Lex/Lexer.cpp
   Parse/Parser.cpp
   Runtime/CpuRuntime.cpp
   Runtime/Eval.cpp
   Sema/CallSupport.cpp
   Sema/Sema.cpp
-  Validation/ProgramValidator.cpp
 )
 
-target_include_directories(tensorium PUBLIC
+target_include_directories(tensoriumCore PUBLIC
   ${PROJECT_SOURCE_DIR}/include
+)
+
+add_library(tensoriumIR INTERFACE)
+target_include_directories(tensoriumIR INTERFACE
+  ${PROJECT_SOURCE_DIR}/include
+)
+
+add_library(tensoriumLowering
+  Backend/BackendBuilder.cpp
+)
+target_include_directories(tensoriumLowering PUBLIC
+  ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(tensoriumLowering PUBLIC
+  tensoriumCore
+  tensoriumIR
+)
+
+add_library(tensoriumValidation
+  Validation/ProgramValidator.cpp
+)
+target_include_directories(tensoriumValidation PUBLIC
+  ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(tensoriumValidation PUBLIC
+  tensoriumIR
+)
+
+add_library(tensorium INTERFACE)
+target_include_directories(tensorium INTERFACE
+  ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(tensorium INTERFACE
+  tensoriumCore
+  tensoriumLowering
+  tensoriumValidation
 )
 
 set(LLVM_TARGET_DEFINITIONS
