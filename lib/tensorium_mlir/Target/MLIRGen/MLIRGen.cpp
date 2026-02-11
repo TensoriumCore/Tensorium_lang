@@ -16,6 +16,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cctype>
 
 namespace tensorium_mlir {
 
@@ -26,6 +27,9 @@ struct FieldDesc {
   unsigned up = 0;
   unsigned down = 0;
 };
+
+[[noreturn]] static void emitUnsupportedExprError(mlir::Location loc,
+                                                 const std::string &detail);
 
 static mlir::ArrayAttr makeIndexArrayAttr(mlir::OpBuilder &b,
                                           const std::vector<std::string> &idx) {
@@ -60,6 +64,98 @@ extractFields(const tensorium::backend::ModuleIR &module) {
     out.push_back(std::move(d));
   }
   return out;
+}
+
+static std::string trimExprString(std::string s) {
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
+    s.erase(s.begin());
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
+    s.pop_back();
+  return s;
+}
+
+static bool isZeroExprString(const std::string &expr) {
+  const std::string t = trimExprString(expr);
+  return t == "0" || t == "0.0" || t == "(0)" || t == "-(0)";
+}
+
+static std::string deriveAlphaExpr(const std::string &g00Expr, bool betaZero) {
+  if (!betaZero)
+    return "sqrt(-1/g^00)";
+
+  std::string t = trimExprString(g00Expr);
+  if (t.rfind("-(", 0) == 0 && t.size() >= 3 && t.back() == ')') {
+    std::string inner = t.substr(2, t.size() - 3);
+    return "sqrt(" + inner + ")";
+  }
+  if (!t.empty() && t.front() == '-') {
+    return "sqrt(" + t.substr(1) + ")";
+  }
+  return "sqrt(-1/g^00)";
+}
+
+static mlir::ArrayAttr makeStringArrayAttr(mlir::OpBuilder &b,
+                                           const std::vector<std::string> &v) {
+  llvm::SmallVector<mlir::Attribute, 8> attrs;
+  attrs.reserve(v.size());
+  for (const auto &s : v)
+    attrs.push_back(b.getStringAttr(s));
+  return b.getArrayAttr(attrs);
+}
+
+static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
+                               const tensorium::backend::ModuleIR &module) {
+  if (!module.initialData)
+    return;
+  const auto &init = *module.initialData;
+
+  if (!init.hasMetric4 && !init.hasDecomposed) {
+    emitUnsupportedExprError(
+        loc, "initial_data is present but no metric4 or alpha/beta/gamma data "
+             "was provided");
+  }
+
+  if (!init.hasMetric4)
+    return;
+
+  if (init.metric4.components.size() != 16) {
+    emitUnsupportedExprError(
+        loc, "metric4 initial_data must provide 16 component expressions");
+  }
+
+  auto *ctx = b.getContext();
+  auto elemTy = b.getF64Type();
+  auto metricTy = tensorium::mlir::FieldType::get(ctx, elemTy, 0, 2);
+  auto alphaTy = tensorium::mlir::FieldType::get(ctx, elemTy, 0, 0);
+  auto betaTy = tensorium::mlir::FieldType::get(ctx, elemTy, 0, 1);
+  auto gammaTy = tensorium::mlir::FieldType::get(ctx, elemTy, 0, 2);
+  auto gammaUTy = tensorium::mlir::FieldType::get(ctx, elemTy, 2, 0);
+
+  auto metric = tensorium::mlir::Metric4Op::create(
+      b, loc, metricTy, b.getStringAttr(init.metric4.name),
+      b.getStringAttr(init.metric4.coordSystem),
+      makeStringArrayAttr(b, init.metric4.indices),
+      makeStringArrayAttr(b, init.metric4.components),
+      b.getBoolAttr(init.metric4.enforceSymmetry));
+
+  const bool betaZero =
+      isZeroExprString(init.metric4.components[1]) &&
+      isZeroExprString(init.metric4.components[2]) &&
+      isZeroExprString(init.metric4.components[3]) &&
+      isZeroExprString(init.metric4.components[4]) &&
+      isZeroExprString(init.metric4.components[8]) &&
+      isZeroExprString(init.metric4.components[12]);
+
+  std::vector<std::string> gammaDiag = {init.metric4.components[5],
+                                        init.metric4.components[10],
+                                        init.metric4.components[15]};
+  std::string alphaExpr = deriveAlphaExpr(init.metric4.components[0], betaZero);
+
+  (void)tensorium::mlir::Split3P1Op::create(
+      b, loc, mlir::TypeRange{alphaTy, betaTy, gammaTy, gammaUTy},
+      metric.getResult(), b.getBoolAttr(betaZero),
+      makeStringArrayAttr(b, gammaDiag), b.getStringAttr(alphaExpr),
+      b.getBoolAttr(true));
 }
 
 [[noreturn]] static void emitUnsupportedExprError(mlir::Location loc,
@@ -320,6 +416,8 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
   for (unsigned i = 0; i < fields.size(); ++i) {
     fieldArg[fields[i].name] = entry->getArgument(i);
   }
+
+  emitInitialDataOps(b, loc, module);
 
   for (const auto &evo : module.evolutions) {
     llvm::StringMap<mlir::Value> tempValues;

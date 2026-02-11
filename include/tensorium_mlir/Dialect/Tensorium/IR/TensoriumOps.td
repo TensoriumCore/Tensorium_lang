@@ -111,6 +111,29 @@ def Tensorium_DtAssignOp : Tensorium_Op<"dt_assign"> {
   let hasVerifier = 1;
 }
 
+def Tensorium_Metric4Op : Tensorium_Op<"metric4"> {
+  let summary = "Carry explicit 4D metric initial data";
+  let arguments = (ins StrAttr:$name, StrAttr:$coord_system,
+                   ArrayAttr:$indices, ArrayAttr:$components,
+                   BoolAttr:$enforce_symmetry);
+  let results = (outs Tensorium_FieldType:$metric);
+  let hasVerifier = 1;
+}
+
+def Tensorium_Split3P1Op : Tensorium_Op<"split3p1"> {
+  let summary = "Split spacetime metric into alpha, beta, gamma, gammaU";
+  let arguments = (ins Tensorium_FieldType:$metric4,
+                   BoolAttr:$beta_zero,
+                   ArrayAttr:$gamma_diag,
+                   StrAttr:$alpha_expr,
+                   BoolAttr:$gammau_is_inverse);
+  let results = (outs Tensorium_FieldType:$alpha,
+                      Tensorium_FieldType:$beta,
+                      Tensorium_FieldType:$gamma,
+                      Tensorium_FieldType:$gammaU);
+  let hasVerifier = 1;
+}
+
 
 
 def Tensorium_EinsumOp : Tensorium_Op<"einsum"> {

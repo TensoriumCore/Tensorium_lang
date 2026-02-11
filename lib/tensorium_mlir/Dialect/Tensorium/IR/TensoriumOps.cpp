@@ -215,5 +215,66 @@ LogicalResult tensorium::mlir::DtAssignOp::verify() {
   return success();
 }
 
+LogicalResult tensorium::mlir::Metric4Op::verify() {
+  FieldType metricTy;
+  if (failed(requireFieldType(getMetric(), *this, "metric result", metricTy)))
+    return failure();
+  if (metricTy.getUp() != 0 || metricTy.getDown() != 2)
+    return emitOpError("metric result must be covariant rank-2");
+
+  if (getIndices().size() != 2)
+    return emitOpError("indices attribute must contain exactly 2 symbols");
+
+  auto components = getComponents();
+  if (components.size() != 16)
+    return emitOpError("components attribute must contain 16 entries (4x4)");
+  for (auto attr : components) {
+    if (!llvm::isa<StringAttr>(attr))
+      return emitOpError("components entries must be string attributes");
+  }
+
+  auto coords = getCoordSystem();
+  if (!(coords == "cartesian" || coords == "spherical" ||
+        coords == "cylindrical")) {
+    return emitOpError("coord_system must be cartesian/spherical/cylindrical");
+  }
+
+  return success();
+}
+
+LogicalResult tensorium::mlir::Split3P1Op::verify() {
+  FieldType metricTy, alphaTy, betaTy, gammaTy, gammaUTy;
+  if (failed(requireFieldType(getMetric4(), *this, "metric operand", metricTy)) ||
+      failed(requireFieldType(getAlpha(), *this, "alpha result", alphaTy)) ||
+      failed(requireFieldType(getBeta(), *this, "beta result", betaTy)) ||
+      failed(requireFieldType(getGamma(), *this, "gamma result", gammaTy)) ||
+      failed(requireFieldType(getGammaU(), *this, "gammaU result", gammaUTy)))
+    return failure();
+
+  if (metricTy.getUp() != 0 || metricTy.getDown() != 2)
+    return emitOpError("metric operand must be covariant rank-2");
+  if (alphaTy.getRank() != 0)
+    return emitOpError("alpha result must be scalar");
+  if (betaTy.getUp() != 0 || betaTy.getDown() != 1)
+    return emitOpError("beta result must be covector rank-1");
+  if (gammaTy.getUp() != 0 || gammaTy.getDown() != 2)
+    return emitOpError("gamma result must be covariant rank-2");
+  if (gammaUTy.getUp() != 2 || gammaUTy.getDown() != 0)
+    return emitOpError("gammaU result must be contravariant rank-2");
+
+  auto gammaDiag = getGammaDiag();
+  if (gammaDiag.size() != 3)
+    return emitOpError("gamma_diag must contain 3 diagonal expressions");
+  for (auto attr : gammaDiag) {
+    if (!llvm::isa<StringAttr>(attr))
+      return emitOpError("gamma_diag entries must be string attributes");
+  }
+
+  if (getAlphaExpr().empty())
+    return emitOpError("alpha_expr must not be empty");
+
+  return success();
+}
+
 #define GET_OP_CLASSES
 #include "TensoriumOps.cpp.inc"

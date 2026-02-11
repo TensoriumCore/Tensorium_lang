@@ -101,6 +101,11 @@ SEMANTIC_DIFF_ERROR_TESTS=(
   "tests/semantic/diff/04_covariant_without_gamma_error.tn|Covariant derivative requires connection tensor Gamma"
 )
 
+INITIAL_DATA_ERROR_TESTS=(
+  "tests/semantic/initial_data/01_invalid_spherical_coord.tn|uses coordinate 'x' incompatible with simulation coordinates"
+  "tests/semantic/initial_data/02_symmetry_violation.tn|metric4 symmetry violation"
+)
+
 GR_FIXTURES=(
   tests/fixtures/gr/schwarzschild_2d.tn
   tests/fixtures/gr/schwarzschild_3d.tn
@@ -261,6 +266,71 @@ for f in "${GR_FIXTURES[@]}"; do
     exit 1
   fi
 done
+
+echo
+echo "=============================="
+echo " RUN INITIAL DATA ERROR TESTS"
+echo "=============================="
+
+for entry in "${INITIAL_DATA_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[INITIAL_DATA FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected initial_data diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN SCHWARZSCHILD SPLIT3+1 MLIR CHECK"
+echo "=============================="
+
+SPLIT_FIXTURE=tests/fixtures/gr/schwarzschild_3d.tn
+SPLIT_OUT="$OUT/schwarzschild_3d_split3p1.mlir"
+"$BIN" "${PIPELINE_BASE[@]}" "$SPLIT_FIXTURE" > "$SPLIT_OUT"
+
+SPLIT_LINE=$(rg "tensorium\\.split3p1" "$SPLIT_OUT" || true)
+if [[ -z "$SPLIT_LINE" ]]; then
+  echo "ERROR: expected tensorium.split3p1 op in $SPLIT_FIXTURE"
+  exit 1
+fi
+if ! grep -q "tensorium.metric4" "$SPLIT_OUT"; then
+  echo "ERROR: expected tensorium.metric4 op in $SPLIT_FIXTURE"
+  exit 1
+fi
+if [[ "$SPLIT_LINE" != *"beta_zero = true"* ]]; then
+  echo "ERROR: expected beta_zero = true in split3p1 op"
+  echo "$SPLIT_LINE"
+  exit 1
+fi
+if [[ "$SPLIT_LINE" != *"alpha_expr = \"sqrt("* ]]; then
+  echo "ERROR: expected alpha_expr sqrt(...) in split3p1 op"
+  echo "$SPLIT_LINE"
+  exit 1
+fi
+if [[ "$SPLIT_LINE" != *"gamma_diag"* || "$SPLIT_LINE" != *"(1/((1-((2*M)/r))))"* ||
+      "$SPLIT_LINE" != *"(r*r)"* || "$SPLIT_LINE" != *"sin(theta)"* ]]; then
+  echo "ERROR: expected gamma diagonal Schwarzschild structure in split3p1 op"
+  echo "$SPLIT_LINE"
+  exit 1
+fi
+if [[ "$SPLIT_LINE" != *"gammau_is_inverse = true"* ]]; then
+  echo "ERROR: expected gammau_is_inverse = true in split3p1 op"
+  echo "$SPLIT_LINE"
+  exit 1
+fi
 
 echo
 echo "=============================="
