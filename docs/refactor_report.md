@@ -546,24 +546,31 @@ Planned commit sequence (one intention per commit):
   - or decomposed initial data.
 
 ### 12.C Supported decomposition scope
-- Implemented scope is intentionally minimal and explicit:
-  - diagonal metric + zero shift (`beta = 0`) only.
-- If metric is non-diagonal or has non-zero shift terms, lowering fails with:
-  - `"decompose3p1_from_metric: not implemented for non-diagonal or beta!=0"`.
+- `decompose3p1_from_metric` now accepts symmetric metric tensors including
+  symmetric cross terms (e.g. Kerr-Schild-like off-diagonal components).
+- Current explicit guardrail:
+  - non-symmetric metric components are rejected with
+    `"decompose3p1_from_metric requires symmetric metric components"`.
 
 ## 13) Schwarzschild MLIR verification
 
 ### 13.A Structural proof (robust, SSA-level)
-- Added in-memory MLIR structural test (`tools/Tester/UnitTests.cpp`):
-  - verifies chain `metric4 -> decompose3p1_from_metric -> init3p1`,
-  - verifies `init3p1` consumes decompose results (use-def equality),
-  - verifies `init3p1` outputs are bound to program fields via `tensorium.dt_assign`,
-  - verifies RHS consumes refs from those bound fields:
-    - `gammaU` feeds `mul` then `contract` in `dt H`,
-    - `alpha` and `gamma` feed the same `mul` in `dt K`.
-- Legacy checks:
-  - `tensorium.split3p1` must be absent,
-  - no legacy string attrs (`alpha_expr`, `gamma_diag`, `components`) in emitted ops.
+- Structural validation is now implemented in C++ unit tests (MLIR IR walk),
+  not via fragile shell text-grep.
+- Invariants locked by `tools/Tester/UnitTests.cpp`:
+  - `@tensorium_init` contains `metric4 + decompose3p1_from_metric + init3p1`
+    and uses `tensorium.assign` (no `tensorium.dt_assign`).
+  - `@tensorium_rhs` contains `tensorium.dt_assign` and excludes
+    `metric4/decompose3p1_from_metric/assign`.
+  - `@tensorium_entry` contains exactly 2 calls in order:
+    `@tensorium_init` then `@tensorium_rhs` (plus return).
+  - use-def bridge from init to rhs is checked through entry call operands:
+    fields assigned in init are required to be read in rhs.
+  - RHS checks remain structural:
+    `gammaU` must feed a `mul` used by `contract`,
+    and `alpha*gamma` must be used in the `dt K` path.
+- Added a negative invariant test:
+  - injects a `metric4` op into `@tensorium_rhs` and asserts invariant rejection.
 
 ### 13.B Optimization baseline (minimal CSE/const-fold)
 - Enabled CSE/canonicalization effectiveness by marking pure producers:
@@ -573,10 +580,29 @@ Planned commit sequence (one intention per commit):
   - `2*M/r` subexpression appears once after pipeline normalization.
 
 ### 13.C New regression/negative tests
-- Added MLIR-error fixture:
-  - `tests/semantic/initial_data/offdiag_metric.tn`
-  - expects explicit diagnostic for unsupported non-diagonal metric decomposition.
-- `run_test.sh` extended to check:
-  - presence of `decompose3p1_from_metric` + `init3p1`,
-  - op arities (`decompose=1`, `init3p1=4`),
-  - continued use-def sanity in emitted Schwarzschild MLIR.
+- Added initial-data fixtures:
+  - `tests/semantic/initial_data/offdiag_metric.tn` is now expected to pass
+    (symmetric cross terms).
+  - `tests/semantic/initial_data/04_nonsymmetric_metric_not_supported.tn`
+    is expected to fail with the non-symmetric metric diagnostic.
+- `run_test.sh` no longer performs fragile MLIR-grep for init/rhs architecture;
+  this is enforced by structural unit tests.
+
+## 14) Init/RHS Split Hardening
+
+### 14.A Signature minimization
+- Function signatures are now data-driven from actual field usage:
+  - `@tensorium_init` receives only fields needed for init writes/reads.
+  - `@tensorium_rhs` receives only fields referenced by RHS equations.
+  - `@tensorium_entry` keeps the full program-field signature and forwards the
+    minimal subsets to each callee.
+- Schwarzschild 3D concrete result:
+  - before: init/rhs both took all 8 field arguments.
+  - after: `@tensorium_init` takes 3 args (`alpha`, `gamma`, `gammaU`);
+    `@tensorium_rhs` takes 6 args (`alpha`, `phi`, `H`, `gamma`, `gammaU`, `K`).
+
+### 14.B Rationale
+- Keeps init-time and rhs-time concerns separated in both op placement and API.
+- Reduces accidental coupling (unused args cannot be read/written by construction).
+- Preserves semantics: `init3p1` is retained (still explicit in init path),
+  while stores remain split between `assign` (init) and `dt_assign` (rhs).
