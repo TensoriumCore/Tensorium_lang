@@ -401,3 +401,62 @@ Planned commit sequence (one intention per commit):
 - Result:
   - no remaining `.create<...>` calls in `lib/tensorium_mlir`,
   - build remains green with unchanged behavior.
+
+## 9) Semantic correctness audit
+
+### Findings by severity
+- S0 (incorrect math risk): contraction and derivative semantics were partially implicit.
+  - Before this phase, Einstein contraction information was not represented explicitly in backend IR and differential calls were mostly generic function calls.
+  - Evidence points:
+    - prior contraction/type checks were spread in `include/tensorium/Sema/tensor_type_checker.hpp`; now centralized with `IndexAnalysis` (`include/tensorium/Sema/tensor_type_checker.hpp:32`, `include/tensorium/Sema/tensor_type_checker.hpp:140`, `include/tensorium/Sema/tensor_type_checker.hpp:231`).
+    - backend IR now carries explicit tensor ops (`include/tensorium/Backend/DomainIR.hpp:60`, `include/tensorium/Backend/DomainIR.hpp:115`, `include/tensorium/Backend/DomainIR.hpp:154`, `include/tensorium/Backend/DomainIR.hpp:168`).
+- S1 (ambiguity): collisions between free and bound indices could degrade into less actionable assignment mismatch diagnostics.
+  - Now normalized to explicit collision diagnostics in assignment checking (`include/tensorium/Sema/tensor_type_checker.hpp:553` onward).
+  - `d_i`, `nabla_i`, `covariant_derivative`, `grad`, `div` builtins are explicitly recognized in executable mode (`lib/Sema/CallSupport.cpp:6`).
+- S2 (technical debt): analysis/transformation boundaries were blurry across Sema/lowering.
+  - This phase enforces a clearer split:
+    - Sema: IndexAnalysis + validation (`include/tensorium/Sema/tensor_type_checker.hpp:140`).
+    - IR: explicit op forms (`include/tensorium/Backend/DomainIR.hpp:60`).
+    - Lowering: explicit op materialization and conversion (`lib/Backend/BackendBuilder.cpp:118`, `lib/Backend/BackendBuilder.cpp:159`, `lib/Backend/BackendBuilder.cpp:189`).
+
+### Design decisions (explicit vs implicit)
+- Einstein notation remains source-level friendly, but contractions are now materialized in backend IR as explicit `ContractionIR` with `summedIndices`.
+- Tensor multiplication for tensor operands is represented as `TensorProductIR`; contraction is a distinct step.
+- Differential operations are explicit in IR:
+  - `PartialDerivativeIR`, `GradientIR`, `CovariantDerivativeIR`, `DivergenceIR`.
+- Covariant derivative policy:
+  - accepted only when a connection tensor (`Gamma`/`GammaU`/`Christoffel`, rank-3) is present (`lib/Sema/Sema.cpp:250`, `lib/Sema/Sema.cpp:354`),
+  - otherwise rejected with stable diagnostic.
+
+### Diagnostics examples
+- Invalid contraction variance:
+  - `Tensorium error: Implicit contraction of index 'i' requires explicit metric or inverse metric`
+  - fixture: `tests/semantic/einstein/02_invalid_variance_contraction.tn`
+- Index collision (free vs bound):
+  - `Tensorium error: Index collision: symbol 'i' is both free and bound; rename one index in RHS.`
+  - fixture: `tests/semantic/einstein/05_capture_requires_rename.tn`
+- Missing connection for covariant derivative:
+  - `Tensorium error: Covariant derivative requires connection tensor Gamma (rank-3 field)`
+  - fixture: `tests/semantic/diff/04_covariant_without_gamma_error.tn`
+
+### Schwarzschild 2D/3D status
+- Added regression fixtures:
+  - `tests/fixtures/gr/schwarzschild_2d.tn`
+  - `tests/fixtures/gr/schwarzschild_3d.tn`
+- Added structural checks in regression runner (`run_test.sh`):
+  - fixture validates successfully,
+  - backend IR dump must contain explicit `contraction(...)` and `partial_...(...)`.
+- Optional benchmark scaffold added:
+  - `tools/Bench/bench_schwarzschild.sh` logs validate/codegen timing in `/tmp/tensorium_bench`.
+
+## 10) Semantic phase update
+- Added dedicated semantic test packs:
+  - Einstein: `tests/semantic/einstein/*`
+  - Differential ops: `tests/semantic/diff/*`
+- `run_test.sh` now includes:
+  - acceptance/rejection checks for semantic Einstein and differential cases,
+  - stable diagnostic substring checks for key semantic failures,
+  - Schwarzschild fixture structural non-regression checks.
+- MLIR lowering now consumes explicit backend ops for:
+  - contraction/tensor-product/index operations (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp:184`),
+  - differential operations (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp:216`).
