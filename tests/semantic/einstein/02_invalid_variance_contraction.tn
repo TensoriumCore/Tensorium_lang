@@ -10,5 +10,5 @@ simulation {
 }
 
 evolution EinsteinInvalidVariance {
-  dt s = contract(A[i] * B[i])
+  dt s = A[i] * B[i]
 }

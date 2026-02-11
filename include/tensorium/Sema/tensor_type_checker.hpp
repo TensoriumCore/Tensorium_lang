@@ -394,28 +394,11 @@ public:
         TensorType t = inferImpl(arg, true);
         auto analysis = analyzeIndices(arg);
 
-        if (!analysis.duplicateWithinTensor.empty()) {
-          throw std::runtime_error("Index collision in tensor access '" +
-                                   analysis.duplicateWithinTensor.front() +
-                                   "': use explicit trace()");
-        }
         if (!analysis.ambiguousIndices.empty()) {
           throw std::runtime_error(
               std::string("Ambiguous contraction: index '") +
               analysis.ambiguousIndices.front() +
               "' appears 3 or more times.");
-        }
-
-        for (const auto &idxName : analysis.summedIndices) {
-          unsigned char idx = static_cast<unsigned char>(idxName[0]);
-          const auto &info = analysis.entries[idx].variance;
-          bool mixedVariance =
-              (info.contravariant > 0 && info.covariant > 0);
-          if (!mixedVariance && !info.metricCoupling) {
-            throw std::runtime_error("Implicit contraction of index '" +
-                                     idxName +
-                                     "' requires explicit metric or inverse metric");
-          }
         }
 
         int freeCount = static_cast<int>(analysis.freeIndices.size());
@@ -570,11 +553,6 @@ public:
 
     for (const IndexedExpr *t : terms) {
       auto analysis = analyzeIndices(t);
-      if (!analysis.duplicateWithinTensor.empty()) {
-        throw std::runtime_error("Index collision in tensor access '" +
-                                 analysis.duplicateWithinTensor.front() +
-                                 "': use explicit trace()");
-      }
       if (!analysis.ambiguousIndices.empty()) {
         throw std::runtime_error(
             std::string("Ambiguous contraction: index '") +
@@ -602,6 +580,11 @@ public:
                                      "' appears only in RHS and not LHS.");
           }
           if (c == 2) {
+            bool explicitOnly =
+                entry.insideExplicitContraction &&
+                !entry.outsideExplicitContraction;
+            if (explicitOnly)
+              continue;
             const auto &info = entry.variance;
             bool mixedVariance =
                 (info.contravariant > 0 && info.covariant > 0);
