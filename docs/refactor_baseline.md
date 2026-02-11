@@ -30,3 +30,15 @@ bash run_test.sh
   - CMake targets
   - Declared libraries/executables
   - `lib/*.cpp` files not wired in `lib/CMakeLists.txt`
+
+## Layering Check Helper
+- Layering guard script: `tools/dev/check_layering.sh`
+- Usage:
+
+```bash
+bash tools/dev/check_layering.sh
+```
+
+- Current expected status (pre-architecture split):
+  - script fails on known debt `DomainIR -> AST`.
+  - this is intentional until the `tensoriumIR` split removes that dependency.
