@@ -395,14 +395,26 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
   }
 
   if (init.split3p1.enabled) {
+    auto bindToField = [&](llvm::StringRef name, mlir::Value rhs) {
+      auto it = fieldArg.find(name);
+      if (it == fieldArg.end()) {
+        emitUnsupportedExprError(
+            loc, "split_3p1 target field '" + name.str() +
+                     "' is not available in entry function arguments");
+      }
+      llvm::SmallVector<mlir::Attribute, 0> noIndices;
+      tensorium::mlir::DtAssignOp::create(b, loc, it->second, rhs,
+                                          b.getArrayAttr(noIndices));
+    };
+
     if (init.split3p1.hasAlpha && !init.split3p1.alphaField.empty())
-      fieldArg[init.split3p1.alphaField] = init3p1.getAlpha();
+      bindToField(init.split3p1.alphaField, init3p1.getAlpha());
     if (init.split3p1.hasBeta && !init.split3p1.betaField.empty())
-      fieldArg[init.split3p1.betaField] = init3p1.getBeta();
+      bindToField(init.split3p1.betaField, init3p1.getBeta());
     if (init.split3p1.hasGamma && !init.split3p1.gammaField.empty())
-      fieldArg[init.split3p1.gammaField] = init3p1.getGamma();
+      bindToField(init.split3p1.gammaField, init3p1.getGamma());
     if (init.split3p1.hasGammaU && !init.split3p1.gammaUField.empty())
-      fieldArg[init.split3p1.gammaUField] = init3p1.getGammaU();
+      bindToField(init.split3p1.gammaUField, init3p1.getGammaU());
   }
 
   if (moduleUsesFieldName(module, "gammaU")) {

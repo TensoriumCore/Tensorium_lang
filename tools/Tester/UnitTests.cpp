@@ -684,6 +684,25 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
 
+  ::mlir::Value boundGammaUField;
+  ::mlir::Value boundAlphaField;
+  ::mlir::Value boundGammaField;
+  for (::mlir::Operation &op : func.getBody().front()) {
+    auto assign = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op);
+    if (!assign)
+      continue;
+    if (assign.getRhs() == init3p1Op.getGammaU())
+      boundGammaUField = assign.getField();
+    if (assign.getRhs() == init3p1Op.getAlpha())
+      boundAlphaField = assign.getField();
+    if (assign.getRhs() == init3p1Op.getGamma())
+      boundGammaField = assign.getField();
+  }
+  if (!boundGammaUField || !boundAlphaField || !boundGammaField) {
+    std::cerr << "FAIL: expected init3p1 outputs to be bound via dt_assign\n";
+    return false;
+  }
+
   ::mlir::Value gammaURef;
   ::mlir::Value alphaRef;
   ::mlir::Value gammaRef;
@@ -691,15 +710,15 @@ static bool testSchwarzschildMLIRVerification() {
     auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op);
     if (!ref)
       continue;
-    if (ref.getSource() == init3p1Op.getGammaU())
+    if (ref.getSource() == boundGammaUField)
       gammaURef = ref.getResult();
-    if (ref.getSource() == init3p1Op.getAlpha())
+    if (ref.getSource() == boundAlphaField)
       alphaRef = ref.getResult();
-    if (ref.getSource() == init3p1Op.getGamma())
+    if (ref.getSource() == boundGammaField)
       gammaRef = ref.getResult();
   }
   if (!gammaURef || !alphaRef || !gammaRef) {
-    std::cerr << "FAIL: expected refs sourced from init3p1 alpha/gamma/gammaU\n";
+    std::cerr << "FAIL: expected refs sourced from init3p1-bound fields alpha/gamma/gammaU\n";
     return false;
   }
 
@@ -718,7 +737,7 @@ static bool testSchwarzschildMLIRVerification() {
       break;
   }
   if (!gammaUFeedsContract) {
-    std::cerr << "FAIL: gammaU from init3p1 is not used in contract use-def chain\n";
+    std::cerr << "FAIL: gammaU from init3p1 binding is not used in contract use-def chain\n";
     return false;
   }
 
@@ -733,7 +752,7 @@ static bool testSchwarzschildMLIRVerification() {
     }
   }
   if (!alphaGammaMulFound) {
-    std::cerr << "FAIL: expected dt K to use alpha*gamma values from init3p1\n";
+    std::cerr << "FAIL: expected dt K to use alpha*gamma values from init3p1 binding\n";
     return false;
   }
 
