@@ -76,13 +76,35 @@ add_dependencies(tensorium_mlir_backend
   TensoriumOpsIncGen
 )
 
+set(TENSORIUM_LLVM_MLIR_INCLUDE_DIRS ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+if (NOT TENSORIUM_LLVM_MLIR_INCLUDE_DIRS)
+  get_filename_component(_tensorium_llvm_prefix "${LLVM_DIR}" DIRECTORY)
+  get_filename_component(_tensorium_llvm_prefix "${_tensorium_llvm_prefix}" DIRECTORY)
+  get_filename_component(_tensorium_llvm_prefix "${_tensorium_llvm_prefix}" DIRECTORY)
+  if (EXISTS "${_tensorium_llvm_prefix}/include")
+    list(APPEND TENSORIUM_LLVM_MLIR_INCLUDE_DIRS "${_tensorium_llvm_prefix}/include")
+  endif()
+
+  get_filename_component(_tensorium_mlir_prefix "${MLIR_DIR}" DIRECTORY)
+  get_filename_component(_tensorium_mlir_prefix "${_tensorium_mlir_prefix}" DIRECTORY)
+  get_filename_component(_tensorium_mlir_prefix "${_tensorium_mlir_prefix}" DIRECTORY)
+  if (EXISTS "${_tensorium_mlir_prefix}/include")
+    list(APPEND TENSORIUM_LLVM_MLIR_INCLUDE_DIRS "${_tensorium_mlir_prefix}/include")
+  endif()
+endif()
 target_include_directories(tensorium_mlir_backend SYSTEM PRIVATE
   ${PROJECT_SOURCE_DIR}/include
   ${PROJECT_BINARY_DIR}/lib
   ${CMAKE_CURRENT_BINARY_DIR} 
-  ${LLVM_INCLUDE_DIRS}
-  ${MLIR_INCLUDE_DIRS}
+  ${TENSORIUM_LLVM_MLIR_INCLUDE_DIRS}
 )
+
+# CMake may classify the LLVM/MLIR install include directory as implicit and
+# elide it from target include flags. Force-pass it to keep this target stable
+# across local toolchain layouts.
+foreach(_tensorium_inc IN LISTS TENSORIUM_LLVM_MLIR_INCLUDE_DIRS)
+  target_compile_options(tensorium_mlir_backend PRIVATE "-isystem${_tensorium_inc}")
+endforeach()
 
 # target_include_directories(tensorium_mlir_backend SYSTEM PRIVATE
 #   ${LLVM_INCLUDE_DIRS}
