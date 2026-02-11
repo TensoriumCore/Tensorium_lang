@@ -525,80 +525,57 @@ Planned commit sequence (one intention per commit):
   2. switch index representation from `std::string` to compact interned/char IDs in IR nodes,
   3. reduce temporary allocations in canonical passes (scratch buffers reused per evolution).
 
-## 12) Phase 4 Update (Computable metric4 + split bindings)
+## 12) Phase 4/5 Update (Decompose + Init 3+1)
 
-### 4.A metric4/init3p1 now computed as SSA (no string-eval path)
-- `initial_data metric4` expressions are now lowered through structured init IR nodes:
-  - `InitNumberIR`, `InitSymbolIR`, `InitBinaryIR`, `InitCallIR`.
-- MLIR generation emits real compute ops for metric components:
-  - `tensorium.const`, `tensorium.param`, `tensorium.coord`,
-  - arithmetic ops (`add/sub/mul/div`),
-  - scalar math (`tensorium.sin`, `tensorium.sqrt`).
-- `tensorium.metric4` now carries 16 scalar SSA operands instead of a string array attribute.
-- `tensorium.init3p1` carries computed SSA inputs (`alpha_in`, `beta_in`, `gamma_in`, `gammaU_in`) and returns typed SSA outputs used for field binding.
+### 12.A Operations and semantics
+- Added dedicated MLIR op:
+  - `tensorium.decompose3p1_from_metric(%g) -> (%alpha,%beta,%gamma,%gammaU)`.
+- Kept `tensorium.init3p1(...)` as explicit binding/normalization op for downstream use.
+- Removed semantic ambiguity:
+  - no legacy `tensorium.split3p1` op in emitted MLIR.
 
-### 4.B split_3p1 mapping binds computed outputs to declared fields
-- DSL/AST/Parser/Sema support explicit binding block:
-  - `split_3p1 { alpha -> alpha; gamma -> gamma[i,j]; gammaU -> gammaU[i,j]; }`
-- Sema validates:
-  - mapped fields exist,
-  - expected rank/variance (scalar, covector, cov2, con2),
-  - expected index arity.
-- MLIRGen uses this mapping to rebind field references so RHS expressions consume split results directly.
+### 12.B Lowering behavior
+- Metric path (`metric4` present):
+  1. emit `tensorium.metric4` with 16 SSA operands,
+  2. emit `tensorium.decompose3p1_from_metric(metric)`,
+  3. emit `tensorium.init3p1(decompose results)` and bind mapped fields.
+- Decomposed path (`alpha/beta/gamma/gammaU` present):
+  - emit `tensorium.init3p1` directly from decomposed expressions.
+- `split_3p1` mapping validation now accepts:
+  - metric-based initial data,
+  - or decomposed initial data.
 
-### 4.C Schwarzschild relevance and regression checks strengthened
-- Updated fixture:
-  - `tests/fixtures/gr/schwarzschild_3d.tn` now includes explicit `split_3p1` mapping.
-- Added negative test:
-  - `tests/semantic/initial_data/03_missing_gammau_binding.tn`
-  - fails with diagnostic when `gammaU` is used in equations but not bound by `split_3p1`.
-- `run_test.sh` now checks:
-  - structural MLIR presence of metric/init/math/build ops,
-  - use-def chain proving RHS contraction uses `gammaU` value produced by `tensorium.init3p1`.
-
-### Current limitation
-- `metric4 -> init3p1` lowering currently supports the zero-shift case (`beta = 0` path).
-- Non-zero shift path is intentionally rejected with explicit diagnostic:
-  - `"metric4 -> init3p1 lowering with non-zero shift is not implemented yet"`.
+### 12.C Supported decomposition scope
+- Implemented scope is intentionally minimal and explicit:
+  - diagonal metric + zero shift (`beta = 0`) only.
+- If metric is non-diagonal or has non-zero shift terms, lowering fails with:
+  - `"decompose3p1_from_metric: not implemented for non-diagonal or beta!=0"`.
 
 ## 13) Schwarzschild MLIR verification
 
-### Scope and method
-- Verified on `tests/fixtures/gr/schwarzschild_3d.tn`.
-- Verification is now structural (SSA/use-def over in-memory MLIR module), not only shell `grep`:
-  - implemented in `tools/Tester/UnitTests.cpp` (`testSchwarzschildMLIRVerification`),
-  - executed by `Tensorium_unittests`, therefore covered by `bash run_test.sh`.
+### 13.A Structural proof (robust, SSA-level)
+- Added in-memory MLIR structural test (`tools/Tester/UnitTests.cpp`):
+  - verifies chain `metric4 -> decompose3p1_from_metric -> init3p1`,
+  - verifies `init3p1` consumes decompose results (use-def equality),
+  - verifies RHS consumes refs from `init3p1` outputs:
+    - `gammaU` feeds `mul` then `contract` in `dt H`,
+    - `alpha` and `gamma` feed the same `mul` in `dt K`.
+- Legacy checks:
+  - `tensorium.split3p1` must be absent,
+  - no legacy string attrs (`alpha_expr`, `gamma_diag`, `components`) in emitted ops.
 
-### A) Use-def proof for bound 3+1 fields
-- Confirmed chain for `gammaU` in `dt H`:
-  - `tensorium.ref` source is `init3p1` result `gammaU`,
-  - that ref feeds `tensorium.mul`,
-  - the mul result feeds `tensorium.contract`.
-- Confirmed chain for `alpha` and `gamma` in `dt K`:
-  - both refs source from `init3p1` results,
-  - both are consumed by the same `tensorium.mul` (`alpha * gamma` term).
-- Legacy bypass check:
-  - `tensorium.split3p1` must be absent.
+### 13.B Optimization baseline (minimal CSE/const-fold)
+- Enabled CSE/canonicalization effectiveness by marking pure producers:
+  - `tensorium.const`, `tensorium.param`, `tensorium.coord` now `Pure`.
+- Pipeline continues to run `canonicalizer` + `CSE`.
+- Added structural assertion for Schwarzschild:
+  - `2*M/r` subexpression appears once after pipeline normalization.
 
-### B) Metric and derived 3+1 quantities are SSA-computed
-- Verified `metric4` has exactly 16 SSA operands and no string `components` attr.
-- Verified Schwarzschild structure in SSA def graph:
-  - `f = 1 - 2*M/r`,
-  - `g_tt = -f`,
-  - `g_rr = 1/f`,
-  - `g_thth = r*r`,
-  - `g_phph` depends on `sin(theta)` and `theta`.
-- Verified derived 3+1 quantities:
-  - `alpha` input to `init3p1` is `sqrt(...)` depending on `f`,
-  - `gammaU` input to `init3p1` is diagonal and equals `{1/g11, 1/g22, 1/g33}`.
-- Forbidden legacy attrs check:
-  - no `alpha_expr`/`gamma_diag` attributes on emitted ops.
-
-### C) Identified inconsistencies and actions
-- Inconsistency found and fixed:
-  - previous `split3p1(metric, alpha, beta, gamma, gammaU)` behaved as packaging, not a true split.
-  - replaced by `init3p1(alpha,beta,gamma,gammaU)` (Option B) to make semantics explicit.
-- Remaining optimization debt (non-blocking correctness):
-  - duplicated `2*M/r` subgraph may still appear before deeper common-subexpression normalization.
-  - repeated scalar constants (`0`, `1`, `-1`) are still emitted in several places.
-- Current behavior is correct and validated; micro-optimization pass is deferred to a dedicated perf step.
+### 13.C New regression/negative tests
+- Added MLIR-error fixture:
+  - `tests/semantic/initial_data/04_metric_nondiag_not_implemented.tn`
+  - expects explicit diagnostic for unsupported non-diagonal metric decomposition.
+- `run_test.sh` extended to check:
+  - presence of `decompose3p1_from_metric` + `init3p1`,
+  - op arities (`decompose=1`, `init3p1=4`),
+  - continued use-def sanity in emitted Schwarzschild MLIR.
