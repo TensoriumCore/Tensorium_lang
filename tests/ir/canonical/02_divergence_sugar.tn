@@ -1,0 +1,7 @@
+field cov_tensor3 Gamma[i,j,k]
+field vector V[i]
+field scalar S
+
+evolution CanonicalDivergence {
+  dt S = divergence(V[i])
+}

@@ -1,0 +1,6 @@
+field scalar phi
+field covector G[i]
+
+evolution CanonicalGradient {
+  dt G[i] = gradient(phi)
+}

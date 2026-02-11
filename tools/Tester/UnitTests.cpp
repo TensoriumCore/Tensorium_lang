@@ -3,11 +3,136 @@
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Validation/IRCanonicalize.hpp"
+#include "tensorium/Validation/IRVerifier.hpp"
 
+#include <fstream>
 #include <iostream>
+#include <memory>
+#include <sstream>
 #include <string>
+#include <vector>
 
 using namespace tensorium;
+
+static std::string readFile(const std::string &path) {
+  std::ifstream in(path);
+  if (!in)
+    throw std::runtime_error("cannot open fixture: " + path);
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  return ss.str();
+}
+
+static backend::ModuleIR buildModuleFromSource(const std::string &source,
+                                               CompilationMode mode) {
+  Lexer lex(source.c_str());
+  Parser parser(lex);
+  Program prog = parser.parseProgram();
+  SemanticAnalyzer sem(prog, mode);
+  return backend::BackendBuilder::build(prog, sem);
+}
+
+static backend::ModuleIR buildModuleFromFile(const std::string &path,
+                                             CompilationMode mode) {
+  return buildModuleFromSource(readFile(path), mode);
+}
+
+static bool verifyCanonicalIR(const backend::ModuleIR &mod,
+                              const std::string &label) {
+  auto verify = validation::verifyIR(mod);
+  if (verify.ok())
+    return true;
+
+  for (const auto &diag : verify.diags)
+    std::cerr << "FAIL(" << label << "): " << diag.message << "\n";
+  return false;
+}
+
+struct IRStats {
+  int contractions = 0;
+  int partials = 0;
+  int gradients = 0;
+  int divergences = 0;
+  int covariant = 0;
+  int renames = 0;
+};
+
+static void collectExprStats(const backend::ExprIR *expr, IRStats &stats) {
+  using backend::ExprIR;
+  if (!expr)
+    return;
+
+  switch (expr->kind) {
+  case ExprIR::Kind::Number:
+  case ExprIR::Kind::Var:
+    return;
+  case ExprIR::Kind::Binary: {
+    auto *bin = static_cast<const backend::BinaryIR *>(expr);
+    collectExprStats(bin->lhs.get(), stats);
+    collectExprStats(bin->rhs.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::Call: {
+    auto *call = static_cast<const backend::CallIR *>(expr);
+    for (const auto &arg : call->args)
+      collectExprStats(arg.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::TensorProduct: {
+    auto *prod = static_cast<const backend::TensorProductIR *>(expr);
+    collectExprStats(prod->lhs.get(), stats);
+    collectExprStats(prod->rhs.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *ctr = static_cast<const backend::ContractionIR *>(expr);
+    stats.contractions += 1;
+    collectExprStats(ctr->in.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *rename = static_cast<const backend::IndexRenameIR *>(expr);
+    stats.renames += 1;
+    collectExprStats(rename->in.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *perm = static_cast<const backend::IndexPermuteIR *>(expr);
+    collectExprStats(perm->in.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::Trace: {
+    auto *trace = static_cast<const backend::TraceIR *>(expr);
+    collectExprStats(trace->in.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *diff = static_cast<const backend::PartialDerivativeIR *>(expr);
+    stats.partials += 1;
+    collectExprStats(diff->in.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *grad = static_cast<const backend::GradientIR *>(expr);
+    stats.gradients += 1;
+    collectExprStats(grad->in.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    auto *diff = static_cast<const backend::CovariantDerivativeIR *>(expr);
+    stats.covariant += 1;
+    collectExprStats(diff->in.get(), stats);
+    return;
+  }
+  case ExprIR::Kind::Divergence: {
+    auto *div = static_cast<const backend::DivergenceIR *>(expr);
+    stats.divergences += 1;
+    collectExprStats(div->in.get(), stats);
+    return;
+  }
+  }
+}
 
 static bool testConTensor3Lowering() {
   static const char *kSource = R"(
@@ -25,11 +150,8 @@ static bool testConTensor3Lowering() {
     }
   )";
 
-  Lexer lex(kSource);
-  Parser parser(lex);
-  Program prog = parser.parseProgram();
-  SemanticAnalyzer sem(prog, CompilationMode::Executable);
-  backend::ModuleIR mod = backend::BackendBuilder::build(prog, sem);
+  backend::ModuleIR mod =
+      buildModuleFromSource(kSource, CompilationMode::Executable);
 
   for (const auto &field : mod.fields) {
     if (field.name != "A")
@@ -98,11 +220,8 @@ static bool testIRTensorTypeMappingForExternCall() {
     }
   )";
 
-  Lexer lex(kSource);
-  Parser parser(lex);
-  Program prog = parser.parseProgram();
-  SemanticAnalyzer sem(prog, CompilationMode::Symbolic);
-  backend::ModuleIR mod = backend::BackendBuilder::build(prog, sem);
+  backend::ModuleIR mod =
+      buildModuleFromSource(kSource, CompilationMode::Symbolic);
 
   if (mod.evolutions.empty() || mod.evolutions[0].equations.size() != 2) {
     std::cerr << "FAIL: expected two equations in IR extern mapping test\n";
@@ -137,11 +256,218 @@ static bool testIRTensorTypeMappingForExternCall() {
   return true;
 }
 
+static bool testIRCanonicalGradientFromFixture() {
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/ir/canonical/01_gradient_sugar.tn", CompilationMode::Symbolic);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+
+  if (!verifyCanonicalIR(mod, "gradient"))
+    return false;
+
+  const auto *rhs = mod.evolutions[0].equations[0].rhs.get();
+  if (!rhs || rhs->kind != backend::ExprIR::Kind::PartialDerivative) {
+    std::cerr << "FAIL: expected gradient sugar to canonicalize to partial "
+                 "derivative\n";
+    return false;
+  }
+
+  IRStats stats;
+  collectExprStats(rhs, stats);
+  if (stats.gradients != 0 || stats.partials == 0) {
+    std::cerr << "FAIL: expected no gradient nodes and at least one partial "
+                 "derivative node\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testIRCanonicalDivergenceFromFixture() {
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/ir/canonical/02_divergence_sugar.tn", CompilationMode::Symbolic);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+
+  if (!verifyCanonicalIR(mod, "divergence"))
+    return false;
+
+  const auto *rhs = mod.evolutions[0].equations[0].rhs.get();
+  if (!rhs || rhs->kind != backend::ExprIR::Kind::Contraction) {
+    std::cerr << "FAIL: expected divergence sugar to canonicalize to "
+                 "contraction(covariant_derivative(.))\n";
+    return false;
+  }
+
+  auto *ctr = static_cast<const backend::ContractionIR *>(rhs);
+  if (!ctr->in || ctr->in->kind != backend::ExprIR::Kind::CovariantDerivative) {
+    std::cerr << "FAIL: divergence canonical form must contain covariant "
+                 "derivative\n";
+    return false;
+  }
+  if (ctr->summedIndices.empty()) {
+    std::cerr << "FAIL: divergence canonical contraction must carry summed "
+                 "index\n";
+    return false;
+  }
+
+  IRStats stats;
+  collectExprStats(rhs, stats);
+  if (stats.divergences != 0 || stats.contractions == 0 || stats.covariant == 0) {
+    std::cerr << "FAIL: expected divergence eliminated into contraction + "
+                 "covariant derivative\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testIRCanonicalTraceFromFixture() {
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/ir/canonical/03_trace_from_contract.tn", CompilationMode::Symbolic);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+
+  if (!verifyCanonicalIR(mod, "trace"))
+    return false;
+
+  const auto *rhs = mod.evolutions[0].equations[0].rhs.get();
+  if (!rhs || rhs->kind != backend::ExprIR::Kind::Trace) {
+    std::cerr << "FAIL: expected contract(A[i,i]) to canonicalize to trace(A)\n";
+    return false;
+  }
+
+  auto *trace = static_cast<const backend::TraceIR *>(rhs);
+  if (trace->tracedIndices.empty()) {
+    std::cerr << "FAIL: canonical trace must contain traced indices\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testIRCanonicalEinsteinRenameInsert() {
+  backend::ModuleIR mod;
+  backend::EvolutionIR evo;
+  evo.name = "E";
+  backend::EquationIR eq;
+  eq.fieldName = "S";
+
+  auto makeVar = [](const std::string &name,
+                    const std::vector<std::string> &indices) {
+    auto var = std::make_unique<backend::VarIR>(name, backend::VarKind::Field);
+    var->tensorIndexNames = indices;
+    return var;
+  };
+
+  auto lhs = std::make_unique<backend::TensorProductIR>(makeVar("A", {"j"}),
+                                                         makeVar("B", {"j"}));
+  auto product = std::make_unique<backend::TensorProductIR>(std::move(lhs),
+                                                             makeVar("C", {"j"}));
+  auto contraction = std::make_unique<backend::ContractionIR>(std::move(product));
+  contraction->summedIndices = {"j"};
+  eq.rhs = std::move(contraction);
+  evo.equations.push_back(std::move(eq));
+  mod.evolutions.push_back(std::move(evo));
+
+  validation::canonicalizeEinsteinIR(mod);
+
+  const auto *rhs = mod.evolutions[0].equations[0].rhs.get();
+  if (!rhs || rhs->kind != backend::ExprIR::Kind::Contraction) {
+    std::cerr << "FAIL: expected contraction root after canonicalization\n";
+    return false;
+  }
+
+  auto *ctr = static_cast<const backend::ContractionIR *>(rhs);
+  if (!ctr->in || ctr->in->kind != backend::ExprIR::Kind::IndexRename) {
+    std::cerr << "FAIL: expected alpha-rename insertion for risky index capture\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testIRVerifierRejectsUncanonicalizedGradient() {
+  backend::ModuleIR mod;
+  backend::EvolutionIR evo;
+  evo.name = "E";
+  backend::EquationIR eq;
+  eq.fieldName = "S";
+
+  auto var = std::make_unique<backend::VarIR>("phi", backend::VarKind::Field);
+  eq.rhs = std::make_unique<backend::GradientIR>(std::move(var));
+  evo.equations.push_back(std::move(eq));
+  mod.evolutions.push_back(std::move(evo));
+
+  auto verify = validation::verifyIR(mod);
+  if (verify.ok()) {
+    std::cerr << "FAIL: verifier should reject uncanonicalized gradient nodes\n";
+    return false;
+  }
+
+  bool found = false;
+  for (const auto &diag : verify.diags) {
+    if (diag.message.find("uncanonicalized gradient") != std::string::npos) {
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    std::cerr << "FAIL: expected uncanonicalized gradient diagnostic\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSchwarzschildCanonicalPatterns() {
+  const std::vector<std::string> fixtures = {
+      "tests/fixtures/gr/schwarzschild_2d.tn",
+      "tests/fixtures/gr/schwarzschild_3d.tn",
+  };
+
+  for (const auto &fixture : fixtures) {
+    backend::ModuleIR mod =
+        buildModuleFromFile(fixture, CompilationMode::Executable);
+    validation::canonicalizeDifferentialIR(mod);
+    validation::canonicalizeEinsteinIR(mod);
+
+    if (!verifyCanonicalIR(mod, fixture))
+      return false;
+
+    IRStats stats;
+    for (const auto &evo : mod.evolutions) {
+      for (const auto &eq : evo.equations)
+        collectExprStats(eq.rhs.get(), stats);
+      for (const auto &tmp : evo.temporaries)
+        collectExprStats(tmp.rhs.get(), stats);
+    }
+
+    if (stats.contractions == 0 || stats.partials == 0) {
+      std::cerr << "FAIL(" << fixture
+                << "): expected canonical IR to contain contraction + partial "
+                   "derivative nodes\n";
+      return false;
+    }
+    if (stats.gradients != 0 || stats.divergences != 0) {
+      std::cerr << "FAIL(" << fixture
+                << "): expected canonical IR to eliminate gradient/divergence "
+                   "sugar\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
 int main() {
   bool ok = true;
   ok &= testConTensor3Lowering();
   ok &= testIndexSetPolicy();
   ok &= testIRTensorTypeMappingForExternCall();
+  ok &= testIRCanonicalGradientFromFixture();
+  ok &= testIRCanonicalDivergenceFromFixture();
+  ok &= testIRCanonicalTraceFromFixture();
+  ok &= testIRCanonicalEinsteinRenameInsert();
+  ok &= testIRVerifierRejectsUncanonicalizedGradient();
+  ok &= testSchwarzschildCanonicalPatterns();
 
   if (!ok)
     return 1;
