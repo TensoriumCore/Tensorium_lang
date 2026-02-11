@@ -154,14 +154,13 @@ struct LowerContractToEinsum final
           rewriter.getNamedAttr("spec", rewriter.getStringAttr(spec));
 
       auto resultType = destField.getType();
-      auto eins = rewriter.create<tensorium::mlir::EinsumOp>(
-          loc, resultType, inputs,
+      auto eins = tensorium::mlir::EinsumOp::create(
+          rewriter, loc, resultType, inputs,
           llvm::ArrayRef<NamedAttribute>{specAttr});
 
       Value out = eins.getResult();
       for (Value s : scalars)
-        out = rewriter
-                  .create<tensorium::mlir::MulOp>(loc, resultType, out, s)
+        out = tensorium::mlir::MulOp::create(rewriter, loc, resultType, out, s)
                   .getResult();
 
       return out;
@@ -181,15 +180,15 @@ struct LowerContractToEinsum final
         firstTerm = false;
         continue;
       }
-      accumulator = rewriter.create<tensorium::mlir::AddOp>(
-          loc, destField.getType(), accumulator, *lowered);
+      accumulator = tensorium::mlir::AddOp::create(
+          rewriter, loc, destField.getType(), accumulator, *lowered);
     }
 
     if (!accumulator)
       return failure();
 
-    rewriter.create<tensorium::mlir::DtAssignOp>(loc, destField, accumulator,
-                                                 lhsIdxAttr);
+    tensorium::mlir::DtAssignOp::create(rewriter, loc, destField, accumulator,
+                                        lhsIdxAttr);
 
     rewriter.eraseOp(op);
     return success();
@@ -282,14 +281,14 @@ struct LowerContractOp final : OpRewritePattern<tensorium::mlir::ContractOp> {
       inputs.push_back(o->getResult(0));
 
     auto resultType = op.getResult().getType();
-    auto eins = rewriter.create<tensorium::mlir::EinsumOp>(
-        op.getLoc(), resultType, inputs,
+    auto eins = tensorium::mlir::EinsumOp::create(
+        rewriter, op.getLoc(), resultType, inputs,
         rewriter.getNamedAttr("spec", rewriter.getStringAttr(spec)));
 
     Value out = eins.getResult();
     for (Value s : scalars)
-      out = rewriter
-                .create<tensorium::mlir::MulOp>(op.getLoc(), resultType, out, s)
+      out = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), resultType,
+                                           out, s)
                 .getResult();
 
     rewriter.replaceOp(op, out);
@@ -313,7 +312,7 @@ struct TensoriumEinsteinLoweringPass final
     patterns.add<LowerContractOp>(&getContext());
 
     GreedyRewriteConfig cfg;
-    cfg.useTopDownTraversal = true;
+    cfg.setUseTopDownTraversal(true);
 
     if (failed(applyPatternsGreedily(m, std::move(patterns), cfg)))
       signalPassFailure();

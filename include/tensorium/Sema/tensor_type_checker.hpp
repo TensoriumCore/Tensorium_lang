@@ -1,6 +1,7 @@
 #pragma once
 #include "tensorium/AST/AST.hpp"
 #include "tensorium/AST/IndexedAST.hpp"
+#include "tensorium/Core/IndexSet.h"
 #include <algorithm>
 #include <array>
 #include <stdexcept>
@@ -64,9 +65,7 @@ class TensorTypeChecker {
       return false;
     if (name[0] != 'd' || name[1] != '_')
       return false;
-    char c = name[2];
-    return (c == 'i' || c == 'j' || c == 'k' || c == 'l' || c == 'm' ||
-            c == 'n');
+    return core::isSpatialIndexChar(name[2]);
   }
 
   bool isScalarExpr(const IndexedExpr *e) const {
@@ -92,11 +91,6 @@ class TensorTypeChecker {
     return false;
   }
 
-  static bool isTensorIndexChar(char c) {
-    return (c == 'i' || c == 'j' || c == 'k' || c == 'l' || c == 'm' ||
-            c == 'n');
-  }
-
   void collectIndexCounts(const IndexedExpr *e, int counts[256]) const {
     if (!e)
       return;
@@ -105,7 +99,7 @@ class TensorTypeChecker {
       for (const auto &name : v->tensorIndexNames) {
         if (!name.empty()) {
           char c = name[0];
-          if (isTensorIndexChar(c))
+          if (core::isTensorIndexChar(c))
             counts[(unsigned char)c]++;
         }
       }
@@ -128,7 +122,7 @@ class TensorTypeChecker {
         int tmp[256] = {0};
         collectIndexCounts(c->args[0].get(), tmp);
 
-        for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
+        for (char idx : core::kTensorIndices) {
           int cc = tmp[(unsigned char)idx];
           if (cc == 0)
             continue;
@@ -176,7 +170,7 @@ class TensorTypeChecker {
         if (name.empty())
           continue;
         char c = name[0];
-        if (!isTensorIndexChar(c))
+        if (!core::isTensorIndexChar(c))
           continue;
         auto &entry = info[(unsigned char)c];
         bool isUp = false;
@@ -357,7 +351,7 @@ public:
         int freeCount = 0;
         int contracted = 0;
 
-        for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
+        for (char idx : core::kTensorIndices) {
           int c = counts[(unsigned char)idx];
           if (c == 0)
             continue;
@@ -485,7 +479,7 @@ public:
       if (nm.empty())
         continue;
       char c = nm[0];
-      if (!isTensorIndexChar(c))
+      if (!core::isTensorIndexChar(c))
         throw std::runtime_error("Invalid tensor index '" + nm + "'");
       lhsSet[(unsigned char)c] = true;
     }
@@ -499,7 +493,7 @@ public:
       std::array<IndexVarianceInfo, 256> variance{};
       collectIndexVariance(t, variance);
 
-      for (char idx : {'i', 'j', 'k', 'l', 'm', 'n'}) {
+      for (char idx : core::kTensorIndices) {
         int c = counts[(unsigned char)idx];
         bool inLhs = lhsSet[(unsigned char)idx];
 

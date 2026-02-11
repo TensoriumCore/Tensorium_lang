@@ -6,8 +6,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-static const std::unordered_set<std::string> SPATIAL_INDICES = {"i", "j", "k",
-                                                                "l", "m", "n"};
 namespace tensorium {
 
 enum class CompilationMode { Executable, Symbolic };

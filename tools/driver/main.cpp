@@ -8,7 +8,7 @@
 #include "tensorium/Backend/IRPrinter.hpp"
 #include "tensorium/Runtime/CpuRuntime.hpp"
 #include "tensorium/Runtime/Eval.hpp"
-#include "tensorium/Sema/ProgramValidator.hpp"
+#include "tensorium/Validation/ProgramValidator.hpp"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 
 #include <fstream>
@@ -100,7 +100,8 @@ static void printIndexedExpr(const IndexedExpr *e) {
 int main(int argc, char **argv) {
   bool dumpAST = false;
   bool dumpIndexed = false;
-  bool dumpBackend, dumpBackendExpr = false;
+  bool dumpBackend = false;
+  bool dumpBackendExpr = false;
   bool runCpu = false;
   size_t steps = 10;
   double initScalar = 1.0;
@@ -239,10 +240,10 @@ int main(int argc, char **argv) {
       }
       auto mod = tensorium::backend::BackendBuilder::build(prog, sem);
       if (validateOnly) {
-        auto result = tensorium::sema::validateProgram(mod);
+        auto result = tensorium::validation::validateProgram(mod);
 
         for (const auto &d : result.diags) {
-          std::cerr << (d.kind == tensorium::sema::Diagnostic::Kind::Error
+          std::cerr << (d.kind == tensorium::validation::Diagnostic::Kind::Error
                             ? "error: "
                             : "warning: ")
                     << d.message << "\n";
@@ -264,7 +265,7 @@ int main(int argc, char **argv) {
 
         std::cout << "Fields:\n";
         for (const auto &f : mod.fields) {
-          std::cout << "  " << f.name << " (up=" << f.up << ",down=" << f.down
+          std::cout << "  " << f.name << " (up=" << f.tensorType.up << ",down=" << f.tensorType.down
                     << ")\n";
         }
 

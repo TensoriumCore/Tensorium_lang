@@ -1,4 +1,5 @@
 #include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Core/IndexSet.h"
 #include "tensorium/Sema/CallSupport.hpp"
 #include "tensorium/Sema/tensor_type_checker.hpp"
 #include <algorithm>
@@ -16,7 +17,7 @@ static bool isScalarDesc(const TensorTypeDesc &desc) {
 }
 
 void SemanticAnalyzer::validateSpatialIndex(const std::string &idx) {
-  if (!SPATIAL_INDICES.count(idx)) {
+  if (!core::isSpatialIndexName(idx)) {
     throw std::runtime_error("Invalid tensor index '" + idx +
                              "'. Allowed: {i, j, k, l, m, n}.");
   }

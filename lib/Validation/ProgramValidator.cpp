@@ -1,20 +1,16 @@
-#include "tensorium/Sema/ProgramValidator.hpp"
+#include "tensorium/Core/IndexSet.h"
+#include "tensorium/Validation/ProgramValidator.hpp"
 #include <unordered_map>
 
 using namespace tensorium;
 using namespace tensorium::backend;
-using namespace tensorium::sema;
-
-static bool isValidIndexName(const std::string &s) {
-  return s == "i" || s == "j" || s == "k" || s == "l" || s == "m" ||
-         s == "n";
-}
+using namespace tensorium::validation;
 
 static int fieldRank(const FieldIR &f) {
-  return f.up + f.down;
+  return f.tensorType.rank();
 }
 
-ValidationResult sema::validateProgram(const ModuleIR &m) {
+ValidationResult validation::validateProgram(const ModuleIR &m) {
   ValidationResult res;
 
   std::unordered_map<std::string, const FieldIR *> fieldMap;
@@ -42,7 +38,7 @@ ValidationResult sema::validateProgram(const ModuleIR &m) {
       }
 
       for (auto &idx : eq.indices) {
-        if (!isValidIndexName(idx)) {
+        if (!core::isTensorIndexName(idx)) {
           res.diags.push_back(
               {Diagnostic::Kind::Error,
                "invalid index name: '" + idx + "'"});

@@ -36,7 +36,7 @@ static mlir::ArrayAttr makeIndexArrayAttr(mlir::OpBuilder &b,
 }
 
 static tensorium::mlir::FieldType
-asFieldType(mlir::OpBuilder &b, const tensorium::TensorTypeDesc &desc) {
+asFieldType(mlir::OpBuilder &b, const tensorium::ir::TensorType &desc) {
   auto *ctx = b.getContext();
   auto elementType = b.getF64Type();
   unsigned up = desc.up < 0 ? 0u : static_cast<unsigned>(desc.up);
@@ -55,8 +55,8 @@ extractFields(const tensorium::backend::ModuleIR &module) {
   for (const auto &f : module.fields) {
     FieldDesc d;
     d.name = f.name;
-    d.up = static_cast<unsigned>(std::max(0, f.up));
-    d.down = static_cast<unsigned>(std::max(0, f.down));
+    d.up = static_cast<unsigned>(std::max(0, f.tensorType.up));
+    d.down = static_cast<unsigned>(std::max(0, f.tensorType.down));
     out.push_back(std::move(d));
   }
   return out;
@@ -91,8 +91,9 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
   switch (e->kind) {
   case ExprIR::Kind::Number: {
     auto *n = static_cast<const NumberIR *>(e);
-    return b.create<tensorium::mlir::ConstOp>(loc, desiredType,
-                                              b.getF64FloatAttr(n->value));
+    return tensorium::mlir::ConstOp::create(b, loc, desiredType,
+                                            b.getF64FloatAttr(n->value))
+        .getResult();
   }
   case ExprIR::Kind::Var: {
     auto *v = static_cast<const VarIR *>(e);
@@ -127,9 +128,9 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
       emitUnsupportedExprError(loc, "field argument '" + v->name +
                                        "' does not have tensorium.field type");
 
-    auto r = b.create<tensorium::mlir::RefOp>(loc, sourceType, it->second,
-                                              b.getStringAttr("field"),
-                                              indicesAttr, mlir::ArrayAttr());
+    auto r = tensorium::mlir::RefOp::create(
+        b, loc, sourceType, it->second, b.getStringAttr("field"), indicesAttr,
+        mlir::ArrayAttr());
 
     return r.getResult();
   }
@@ -139,13 +140,17 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
     auto R = emitExpr(b, loc, bin->rhs.get(), fieldArg, localTemps);
 
     if (bin->op == "+")
-      return b.create<tensorium::mlir::AddOp>(loc, desiredType, L, R);
+      return tensorium::mlir::AddOp::create(b, loc, desiredType, L, R)
+          .getResult();
     if (bin->op == "*")
-      return b.create<tensorium::mlir::MulOp>(loc, desiredType, L, R);
+      return tensorium::mlir::MulOp::create(b, loc, desiredType, L, R)
+          .getResult();
     if (bin->op == "-")
-      return b.create<tensorium::mlir::SubOp>(loc, desiredType, L, R);
+      return tensorium::mlir::SubOp::create(b, loc, desiredType, L, R)
+          .getResult();
     if (bin->op == "/")
-      return b.create<tensorium::mlir::DivOp>(loc, desiredType, L, R);
+      return tensorium::mlir::DivOp::create(b, loc, desiredType, L, R)
+          .getResult();
 
     emitUnsupportedExprError(loc,
                              "binary operator '" + bin->op +
@@ -158,8 +163,7 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
         emitUnsupportedExprError(loc,
                                  "d_* expects exactly one argument in MLIR emission");
       auto arg0 = emitExpr(b, loc, c->args[0].get(), fieldArg, localTemps);
-      auto deriv =
-          b.create<tensorium::mlir::DerivOp>(loc, desiredType, arg0);
+      auto deriv = tensorium::mlir::DerivOp::create(b, loc, desiredType, arg0);
       deriv->setAttr("index", b.getStringAttr(std::string(1, c->callee[2])));
       return deriv.getResult();
     }
@@ -168,7 +172,8 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
         emitUnsupportedExprError(loc,
                                  "contract() expects exactly one argument in MLIR emission");
       auto arg0 = emitExpr(b, loc, c->args[0].get(), fieldArg, localTemps);
-      return b.create<tensorium::mlir::ContractOp>(loc, desiredType, arg0);
+      return tensorium::mlir::ContractOp::create(b, loc, desiredType, arg0)
+          .getResult();
     }
     if (c->isExtern)
       emitExternLoweringError(loc, c->callee);
@@ -239,7 +244,7 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
   }
 
   auto funcTy = b.getFunctionType(argTypes, {});
-  auto f = b.create<mlir::func::FuncOp>(loc, "tensorium_entry", funcTy);
+  auto f = mlir::func::FuncOp::create(loc, "tensorium_entry", funcTy);
   auto *entry = f.addEntryBlock();
   b.setInsertionPointToEnd(entry);
 
@@ -276,19 +281,19 @@ void emitMLIR(const tensorium::backend::ModuleIR &module,
         emitUnsupportedExprError(loc, "rhs expression did not produce tensorium.field type");
       if (rhsTy.getRank() == 0) {
         rhsV =
-            b.create<tensorium::mlir::PromoteOp>(loc, fieldTy, rhsV).getResult();
+            tensorium::mlir::PromoteOp::create(b, loc, fieldTy, rhsV).getResult();
       } else if (fieldTy != rhsTy) {
         emitUnsupportedExprError(loc, "tensor assignment variance mismatch");
       }
-      b.create<tensorium::mlir::DtAssignOp>(loc, it->second, rhsV,
-                                            makeIndexArrayAttr(b, eq.indices));
+      tensorium::mlir::DtAssignOp::create(b, loc, it->second, rhsV,
+                                          makeIndexArrayAttr(b, eq.indices));
     }
   }
   if (module.simulation) {
     moduleOp->setAttr("tensorium.sim.dim",
                       b.getI64IntegerAttr(module.simulation->dimension));
   }
-  b.create<mlir::func::ReturnOp>(loc);
+  mlir::func::ReturnOp::create(b, loc);
   moduleOp.push_back(f);
 
   MLIRGenOptions pipelineOpts = opts;
