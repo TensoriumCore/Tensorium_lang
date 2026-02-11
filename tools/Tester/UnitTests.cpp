@@ -6,6 +6,7 @@
 #include "tensorium/Validation/IRCanonicalize.hpp"
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
+#include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -538,18 +539,28 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
 
-  bool entryCallsInit = false;
-  bool entryCallsRhs = false;
-  for (::mlir::Operation &op : entryFunc.getBody().front()) {
-    auto call = llvm::dyn_cast<::mlir::func::CallOp>(&op);
-    if (!call)
-      continue;
-    if (call.getCallee() == "tensorium_init")
-      entryCallsInit = true;
-    if (call.getCallee() == "tensorium_rhs")
-      entryCallsRhs = true;
+  if (initFunc.getNumArguments() != 3) {
+    std::cerr << "FAIL: expected tensorium_init signature to have 3 arguments for Schwarzschild fixture\n";
+    return false;
   }
-  if (!entryCallsInit || !entryCallsRhs) {
+  if (rhsFunc.getNumArguments() != 6) {
+    std::cerr << "FAIL: expected tensorium_rhs signature to have 6 arguments for Schwarzschild fixture\n";
+    return false;
+  }
+
+  std::vector<std::string> entryCalls;
+  for (::mlir::Operation &op : entryFunc.getBody().front()) {
+    if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(&op)) {
+      entryCalls.emplace_back(call.getCallee().str());
+      continue;
+    }
+    if (!llvm::isa<::mlir::func::ReturnOp>(&op)) {
+      std::cerr << "FAIL: tensorium_entry must only contain function calls + return\n";
+      return false;
+    }
+  }
+  if (entryCalls.size() != 2 || entryCalls[0] != "tensorium_init" ||
+      entryCalls[1] != "tensorium_rhs") {
     std::cerr << "FAIL: tensorium_entry must call tensorium_init then tensorium_rhs\n";
     return false;
   }
@@ -563,15 +574,18 @@ static bool testSchwarzschildMLIRVerification() {
   bool hasCoordTheta = false;
   bool hasSin = false;
   bool initHasDtAssign = false;
-  bool initBindsAlpha = false;
-  bool initBindsGamma = false;
-  bool initBindsGammaU = false;
+  int initAssignCount = 0;
+  ::mlir::Value initAssignedAlphaField;
+  ::mlir::Value initAssignedGammaField;
+  ::mlir::Value initAssignedGammaUField;
   bool rhsHasAssign = false;
   bool rhsHasMetric = false;
   bool rhsHasDecompose = false;
   bool rhsHasInit3p1 = false;
-  bool rhsDtTargetsOnlyHK = true;
+  bool rhsDtTargetsValid = true;
   int rhsDtAssignCount = 0;
+  int rhsScalarDtAssignCount = 0;
+  int rhsTensorDtAssignCount = 0;
 
   for (::mlir::Operation &op : initFunc.getBody().front()) {
     if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op))
@@ -583,15 +597,13 @@ static bool testSchwarzschildMLIRVerification() {
     if (llvm::isa<tensorium::mlir::DtAssignOp>(&op))
       initHasDtAssign = true;
     if (auto assign = llvm::dyn_cast<tensorium::mlir::AssignOp>(&op)) {
-      if (assign.getRhs() == init3p1Op.getAlpha() &&
-          assign.getField() == initFunc.getArgument(2))
-        initBindsAlpha = true;
-      if (assign.getRhs() == init3p1Op.getGamma() &&
-          assign.getField() == initFunc.getArgument(5))
-        initBindsGamma = true;
-      if (assign.getRhs() == init3p1Op.getGammaU() &&
-          assign.getField() == initFunc.getArgument(6))
-        initBindsGammaU = true;
+      ++initAssignCount;
+      if (assign.getRhs() == init3p1Op.getAlpha())
+        initAssignedAlphaField = assign.getField();
+      if (assign.getRhs() == init3p1Op.getGamma())
+        initAssignedGammaField = assign.getField();
+      if (assign.getRhs() == init3p1Op.getGammaU())
+        initAssignedGammaUField = assign.getField();
     }
     if (auto param = llvm::dyn_cast<tensorium::mlir::ParamOp>(&op)) {
       if (param.getName() == "M")
@@ -626,9 +638,20 @@ static bool testSchwarzschildMLIRVerification() {
       rhsHasInit3p1 = true;
     if (auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op)) {
       ++rhsDtAssignCount;
-      if (dt.getField() != rhsFunc.getArgument(4) &&
-          dt.getField() != rhsFunc.getArgument(7))
-        rhsDtTargetsOnlyHK = false;
+      if (!llvm::isa<::mlir::BlockArgument>(dt.getField()))
+        rhsDtTargetsValid = false;
+      auto idx = dt.getIndices();
+      if (idx.size() == 0) {
+        ++rhsScalarDtAssignCount;
+      } else if (idx.size() == 2) {
+        auto i0 = llvm::dyn_cast<::mlir::StringAttr>(idx[0]);
+        auto i1 = llvm::dyn_cast<::mlir::StringAttr>(idx[1]);
+        if (!i0 || !i1 || i0.getValue() != "i" || i1.getValue() != "j")
+          rhsDtTargetsValid = false;
+        ++rhsTensorDtAssignCount;
+      } else {
+        rhsDtTargetsValid = false;
+      }
     }
   }
 
@@ -640,15 +663,23 @@ static bool testSchwarzschildMLIRVerification() {
     std::cerr << "FAIL: tensorium_init must not use dt_assign\n";
     return false;
   }
-  if (!initBindsAlpha || !initBindsGamma || !initBindsGammaU) {
+  if (initAssignCount != 3 || !initAssignedAlphaField || !initAssignedGammaField ||
+      !initAssignedGammaUField) {
     std::cerr << "FAIL: tensorium_init must bind alpha/gamma/gammaU via tensorium.assign\n";
+    return false;
+  }
+  if (!llvm::isa<::mlir::BlockArgument>(initAssignedAlphaField) ||
+      !llvm::isa<::mlir::BlockArgument>(initAssignedGammaField) ||
+      !llvm::isa<::mlir::BlockArgument>(initAssignedGammaUField)) {
+    std::cerr << "FAIL: tensorium_init assign targets must be function arguments\n";
     return false;
   }
   if (rhsHasAssign || rhsHasMetric || rhsHasDecompose || rhsHasInit3p1) {
     std::cerr << "FAIL: tensorium_rhs must not contain init-time metric/decompose/assign ops\n";
     return false;
   }
-  if (!rhsDtTargetsOnlyHK || rhsDtAssignCount != 2) {
+  if (!rhsDtTargetsValid || rhsDtAssignCount != 2 || rhsScalarDtAssignCount != 1 ||
+      rhsTensorDtAssignCount != 1) {
     std::cerr << "FAIL: tensorium_rhs dt_assign must target only H and K\n";
     return false;
   }
@@ -761,19 +792,39 @@ static bool testSchwarzschildMLIRVerification() {
   ::mlir::Value gammaURef;
   ::mlir::Value alphaRef;
   ::mlir::Value gammaRef;
+  auto isScalarField = [](::mlir::Value v) {
+    auto ty = llvm::dyn_cast<tensorium::mlir::FieldType>(v.getType());
+    return ty && ty.getRank() == 0;
+  };
   for (::mlir::Operation &op : rhsFunc.getBody().front()) {
     auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op);
     if (!ref)
       continue;
-    if (ref.getSource() == rhsFunc.getArgument(6))
+    auto srcTy = llvm::dyn_cast<tensorium::mlir::FieldType>(ref.getSource().getType());
+    if (!srcTy)
+      continue;
+    auto idx = ref.getIndices();
+    if (srcTy.getUp() == 2 && srcTy.getDown() == 0 && idx && idx->size() == 2)
       gammaURef = ref.getResult();
-    if (ref.getSource() == rhsFunc.getArgument(2))
-      alphaRef = ref.getResult();
-    if (ref.getSource() == rhsFunc.getArgument(5))
+    if (srcTy.getUp() == 0 && srcTy.getDown() == 2 && idx && idx->size() == 2)
       gammaRef = ref.getResult();
   }
-  if (!gammaURef || !alphaRef || !gammaRef) {
-    std::cerr << "FAIL: expected refs sourced from alpha/gamma/gammaU fields in tensorium_rhs\n";
+  if (!gammaURef || !gammaRef) {
+    std::cerr << "FAIL: expected gamma/gammaU refs in tensorium_rhs\n";
+    return false;
+  }
+
+  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+    auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(&op);
+    if (!mul)
+      continue;
+    if (mul.getLhs() == gammaRef && isScalarField(mul.getRhs()))
+      alphaRef = mul.getRhs();
+    if (mul.getRhs() == gammaRef && isScalarField(mul.getLhs()))
+      alphaRef = mul.getLhs();
+  }
+  if (!alphaRef) {
+    std::cerr << "FAIL: expected alpha scalar ref multiplied with gamma in tensorium_rhs\n";
     return false;
   }
 
@@ -797,11 +848,12 @@ static bool testSchwarzschildMLIRVerification() {
   }
 
   bool alphaGammaMulFound = false;
-  for (::mlir::Operation *user : alphaRef.getUsers()) {
-    auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(user);
+  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+    auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(&op);
     if (!mul)
       continue;
-    if (mul.getLhs() == gammaRef || mul.getRhs() == gammaRef) {
+    if ((mul.getLhs() == alphaRef && mul.getRhs() == gammaRef) ||
+        (mul.getRhs() == alphaRef && mul.getLhs() == gammaRef)) {
       alphaGammaMulFound = true;
       break;
     }

@@ -108,7 +108,11 @@ INITIAL_DATA_ERROR_TESTS=(
 
 INITIAL_DATA_MLIR_ERROR_TESTS=(
   "tests/semantic/initial_data/03_missing_gammau_binding.tn|split_3p1 does not bind gammaU"
-  "tests/semantic/initial_data/offdiag_metric.tn|decompose3p1_from_metric: not implemented for non-diagonal or beta!=0"
+  "tests/semantic/initial_data/04_nonsymmetric_metric_not_supported.tn|decompose3p1_from_metric requires symmetric metric components"
+)
+
+INITIAL_DATA_VALID_TESTS=(
+  tests/semantic/initial_data/offdiag_metric.tn
 )
 
 GR_FIXTURES=(
@@ -274,6 +278,16 @@ done
 
 echo
 echo "=============================="
+echo " RUN INITIAL DATA VALID TESTS"
+echo "=============================="
+
+for f in "${INITIAL_DATA_VALID_TESTS[@]}"; do
+  echo "[INITIAL_DATA OK EXPECTED] $f"
+  "$BIN" "${PIPELINE_BASE[@]}" "$f" > /dev/null
+done
+
+echo
+echo "=============================="
 echo " RUN INITIAL DATA ERROR TESTS"
 echo "=============================="
 
@@ -354,6 +368,7 @@ fi
 
 INIT_FUNC_OUT="$OUT/schwarzschild_3d_init.func.mlir"
 RHS_FUNC_OUT="$OUT/schwarzschild_3d_rhs.func.mlir"
+ENTRY_FUNC_OUT="$OUT/schwarzschild_3d_entry.func.mlir"
 awk '
   /^[[:space:]]*func\.func @tensorium_init\(/ {in_fn=1}
   in_fn {print}
@@ -364,6 +379,51 @@ awk '
   in_fn {print}
   in_fn && /^[[:space:]]*}/ {exit}
 ' "$SPLIT_OUT" > "$RHS_FUNC_OUT"
+awk '
+  /^[[:space:]]*func\.func @tensorium_entry\(/ {in_fn=1}
+  in_fn {print}
+  in_fn && /^[[:space:]]*}/ {exit}
+' "$SPLIT_OUT" > "$ENTRY_FUNC_OUT"
+
+INIT_SIG_LINE=$(rg -m1 "^[[:space:]]*func\\.func @tensorium_init\\(" "$SPLIT_OUT" || true)
+RHS_SIG_LINE=$(rg -m1 "^[[:space:]]*func\\.func @tensorium_rhs\\(" "$SPLIT_OUT" || true)
+if [[ -z "$INIT_SIG_LINE" || -z "$RHS_SIG_LINE" ]]; then
+  echo "ERROR: could not extract init/rhs function signatures"
+  exit 1
+fi
+INIT_ARG_LIST=$(echo "$INIT_SIG_LINE" | sed -E 's/^[^(]*\(([^)]*)\).*/\1/')
+RHS_ARG_LIST=$(echo "$RHS_SIG_LINE" | sed -E 's/^[^(]*\(([^)]*)\).*/\1/')
+INIT_ARGC=$(echo "$INIT_ARG_LIST" | rg -o "%arg[0-9]+:" | wc -l | tr -d ' ')
+RHS_ARGC=$(echo "$RHS_ARG_LIST" | rg -o "%arg[0-9]+:" | wc -l | tr -d ' ')
+if [[ "$INIT_ARGC" -ne 3 ]]; then
+  echo "ERROR: expected @tensorium_init to take 3 args (alpha/gamma/gammaU), got $INIT_ARGC"
+  echo "$INIT_SIG_LINE"
+  exit 1
+fi
+if [[ "$RHS_ARGC" -ne 6 ]]; then
+  echo "ERROR: expected @tensorium_rhs to take 6 args (phi/alpha/gamma/gammaU/H/K), got $RHS_ARGC"
+  echo "$RHS_SIG_LINE"
+  exit 1
+fi
+
+ENTRY_CALL_LINES=$(rg "^[[:space:]]*call @" "$ENTRY_FUNC_OUT" || true)
+ENTRY_CALL_COUNT=$(echo "$ENTRY_CALL_LINES" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')
+if [[ "$ENTRY_CALL_COUNT" -ne 2 ]]; then
+  echo "ERROR: @tensorium_entry must contain exactly 2 calls (init then rhs)"
+  cat "$ENTRY_FUNC_OUT"
+  exit 1
+fi
+ENTRY_CALL_1=$(echo "$ENTRY_CALL_LINES" | sed -n '1p')
+ENTRY_CALL_2=$(echo "$ENTRY_CALL_LINES" | sed -n '2p')
+if [[ "$ENTRY_CALL_1" != *"call @tensorium_init"* || "$ENTRY_CALL_2" != *"call @tensorium_rhs"* ]]; then
+  echo "ERROR: @tensorium_entry call order must be init then rhs"
+  cat "$ENTRY_FUNC_OUT"
+  exit 1
+fi
+if rg -q "tensorium\\.metric4|tensorium\\.decompose3p1_from_metric|tensorium\\.init3p1|tensorium\\.assign|tensorium\\.dt_assign" "$ENTRY_FUNC_OUT"; then
+  echo "ERROR: @tensorium_entry must not contain tensorium compute ops"
+  exit 1
+fi
 
 if ! rg -q "tensorium\\.metric4" "$INIT_FUNC_OUT"; then
   echo "ERROR: expected tensorium.metric4 op in @tensorium_init"
@@ -379,6 +439,11 @@ if ! rg -q "tensorium\\.init3p1" "$INIT_FUNC_OUT"; then
 fi
 if ! rg -q "tensorium\\.assign" "$INIT_FUNC_OUT"; then
   echo "ERROR: expected tensorium.assign stores in @tensorium_init"
+  exit 1
+fi
+INIT_ASSIGN_COUNT=$(rg -c "\"tensorium\\.assign\"\\(" "$INIT_FUNC_OUT")
+if [[ "$INIT_ASSIGN_COUNT" -ne 3 ]]; then
+  echo "ERROR: expected exactly 3 tensorium.assign stores in @tensorium_init, got $INIT_ASSIGN_COUNT"
   exit 1
 fi
 if rg -q "tensorium\\.dt_assign" "$INIT_FUNC_OUT"; then
@@ -413,21 +478,17 @@ if ! rg -q "tensorium\\.dt_assign" "$RHS_FUNC_OUT"; then
   echo "ERROR: expected tensorium.dt_assign ops in @tensorium_rhs"
   exit 1
 fi
-BAD_RHS_DT=$(rg "\"tensorium\\.dt_assign\"\\(%arg[0-9]+," "$RHS_FUNC_OUT" | rg -v "\"tensorium\\.dt_assign\"\\(%arg(4|7)," || true)
-if [[ -n "$BAD_RHS_DT" ]]; then
-  echo "ERROR: @tensorium_rhs has dt_assign target not in {H,K}"
-  echo "$BAD_RHS_DT"
-  exit 1
-fi
-RHS_DT_COUNT=$(rg -c "\"tensorium\\.dt_assign\"\\(%arg(4|7)," "$RHS_FUNC_OUT")
-if [[ "$RHS_DT_COUNT" -ne 2 ]]; then
-  echo "ERROR: expected exactly 2 dt_assign ops for H and K in @tensorium_rhs, got $RHS_DT_COUNT"
+RHS_DT_COUNT=$(rg -c "\"tensorium\\.dt_assign\"\\(" "$RHS_FUNC_OUT")
+RHS_DT_SCALAR_COUNT=$(rg -c "\"tensorium\\.dt_assign\"\\([^\\n]*indices = \\[\\]" "$RHS_FUNC_OUT")
+RHS_DT_TENSOR_COUNT=$(rg -c "\"tensorium\\.dt_assign\"\\([^\\n]*indices = \\[\"i\", \"j\"\\]" "$RHS_FUNC_OUT")
+if [[ "$RHS_DT_COUNT" -ne 2 || "$RHS_DT_SCALAR_COUNT" -ne 1 || "$RHS_DT_TENSOR_COUNT" -ne 1 ]]; then
+  echo "ERROR: expected @tensorium_rhs dt_assign only for H (scalar) and K (i,j); got total=$RHS_DT_COUNT scalar=$RHS_DT_SCALAR_COUNT tensor=$RHS_DT_TENSOR_COUNT"
   exit 1
 fi
 
-REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+%arg6\\b|\"tensorium\\.ref\"\\(%arg6" "$RHS_FUNC_OUT" || true)
+REF_LINE=$(rg -m1 "tensorium\\.ref[[:space:]]+%arg[0-9]+[[:space:]]+\\{indices = \\[\"i\", \"j\"\\], kind = \"field\"\\}.*!tensorium\\.field<f64, 2, 0>[[:space:]]*->[[:space:]]*!tensorium\\.field<f64, 2, 0>|\"tensorium\\.ref\"\\(%arg[0-9]+\\).*!tensorium\\.field<f64, 2, 0>[[:space:]]*->[[:space:]]*!tensorium\\.field<f64, 2, 0>" "$RHS_FUNC_OUT" || true)
 if [[ -z "$REF_LINE" ]]; then
-  echo "ERROR: expected a tensorium.ref from gammaU field (%arg6) in @tensorium_rhs"
+  echo "ERROR: expected a tensorium.ref from gammaU field in @tensorium_rhs"
   exit 1
 fi
 REF_GAMMAU=$(echo "$REF_LINE" | sed -E 's/^([[:space:]]*%[A-Za-z0-9_$.]+).*/\1/' | xargs)
@@ -437,7 +498,7 @@ if [[ -z "$REF_GAMMAU" ]]; then
   exit 1
 fi
 if ! rg -q "\"tensorium\\.mul\"\\(${REF_GAMMAU},|tensorium\\.mul[[:space:]]+${REF_GAMMAU}," "$RHS_FUNC_OUT"; then
-  echo "ERROR: expected RHS contraction to use gammaU from field %arg6"
+  echo "ERROR: expected RHS contraction to use gammaU field ref"
   echo "ref gammaU value: $REF_GAMMAU"
   exit 1
 fi
