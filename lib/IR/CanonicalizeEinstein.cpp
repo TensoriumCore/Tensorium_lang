@@ -287,7 +287,7 @@ static void canonicalizeExpr(std::unique_ptr<backend::ExprIR> &expr) {
 
     sortAndUnique(ctr->summedIndices);
 
-    if (ctr->in && ctr->in->kind != ExprIR::Kind::TensorProduct) {
+    if (ctr->in && ctr->in->kind == ExprIR::Kind::Var) {
       auto trace = std::make_unique<backend::TraceIR>(std::move(ctr->in));
       trace->tracedIndices = ctr->summedIndices;
       trace->exprType = ctr->exprType;

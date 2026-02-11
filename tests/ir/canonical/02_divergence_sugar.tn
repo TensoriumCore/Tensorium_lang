@@ -3,5 +3,5 @@ field vector V[i]
 field scalar S
 
 evolution CanonicalDivergence {
-  dt S = divergence(V[i])
+  dt S = divergence(V)
 }
