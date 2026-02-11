@@ -303,3 +303,41 @@ Planned commit sequence (one intention per commit):
 - LLVM/MLIR 20 is the active toolchain.
 - Current official regression command is `bash run_test.sh` (no CTest yet).
 - Refactor target is behavior-preserving, except isolated bug fixes covered by tests.
+
+## 8) Phase Execution Update
+
+### Phase 1 done
+- Fixed backend lowering defect:
+  - `TensorKind::ConTensor3` now maps to `FieldKind::ConTensor3` in `lib/Backend/BackendBuilder.cpp`.
+- Added non-regression test:
+  - `tools/Tester/UnitTests.cpp` validates backend kind for a `con_tensor3` field.
+  - Behavior demonstrated:
+    - before fix: test failed (`expected backend kind ConTensor3`),
+    - after fix: test passes.
+- Fixed driver hygiene:
+  - initialized `dumpBackend` explicitly in `tools/driver/main.cpp`.
+- Regression suite now executes internal unit tests from `run_test.sh`.
+
+### Layering check added
+- Added mechanical boundary checker: `tools/dev/check_layering.sh`.
+- Rule coverage:
+  - forbid `DomainIR` -> `AST` includes,
+  - forbid `lib/Runtime` -> `Parse/Sema`,
+  - forbid `lib/Parse` -> `Runtime/Backend/MLIR`.
+- Integration choice:
+  - usage documented in `docs/refactor_baseline.md`,
+  - not yet wired into `run_test.sh` while known debt `DomainIR -> AST` still exists.
+
+### IndexSet extracted
+- Added shared index policy utility: `include/tensorium/Core/IndexSet.h`.
+- Replaced duplicated index helpers in:
+  - `include/tensorium/Sema/Sema.hpp`,
+  - `lib/Sema/Sema.cpp`,
+  - `lib/Sema/CallSupport.cpp`,
+  - `lib/Sema/ProgramValidator.cpp`,
+  - `include/tensorium/Sema/tensor_type_checker.hpp`.
+- Extended unit tests with accepted/rejected index checks in
+  - `tools/Tester/UnitTests.cpp`.
+- Validation status:
+  - `cmake --build build -j` passes,
+  - `bash run_test.sh` passes.
