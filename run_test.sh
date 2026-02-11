@@ -78,6 +78,7 @@ ERROR_TESTS=(
   tests/54_error_dt_assign_rank.tn
   tests/55_error_implicit_contraction.tn
   tests/57_error_metric_rank.tn
+  tests/58_error_non_dt_field_assign.tn
 )
 
 SEMANTIC_EINSTEIN_VALID_TESTS=(
