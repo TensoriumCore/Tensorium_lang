@@ -142,6 +142,14 @@ def Tensorium_DtAssignOp : Tensorium_Op<"dt_assign"> {
   let hasVerifier = 1;
 }
 
+def Tensorium_AssignOp : Tensorium_Op<"assign"> {
+
+  let arguments = (ins Tensorium_FieldType:$field, Tensorium_FieldType:$rhs,
+                   ArrayAttr:$indices);
+  let results = (outs);
+  let hasVerifier = 1;
+}
+
 def Tensorium_Metric4Op : Tensorium_Op<"metric4"> {
   let summary = "Carry explicit 4D metric initial data";
   let arguments = (ins Variadic<Tensorium_FieldType>:$components,

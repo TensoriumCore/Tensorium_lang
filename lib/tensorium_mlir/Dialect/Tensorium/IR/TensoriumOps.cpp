@@ -258,6 +258,16 @@ LogicalResult tensorium::mlir::DtAssignOp::verify() {
   return success();
 }
 
+LogicalResult tensorium::mlir::AssignOp::verify() {
+  FieldType fieldTy, rhsTy;
+  if (failed(requireFieldType(getField(), *this, "field", fieldTy)) ||
+      failed(requireFieldType(getRhs(), *this, "rhs", rhsTy)))
+    return failure();
+  if (fieldTy != rhsTy)
+    return emitOpError("rhs tensor type must match field type");
+  return success();
+}
+
 LogicalResult tensorium::mlir::Metric4Op::verify() {
   FieldType metricTy;
   if (failed(requireFieldType(getMetric(), *this, "metric result", metricTy)))
