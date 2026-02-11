@@ -29,6 +29,11 @@ struct FieldDesc {
 
 [[noreturn]] static void emitUnsupportedExprError(mlir::Location loc,
                                                  const std::string &detail);
+static mlir::Value
+emitExpr(mlir::OpBuilder &b, mlir::Location loc,
+         const tensorium::backend::ExprIR *e,
+         const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg,
+         llvm::StringMap<mlir::Value> *localTemps);
 
 static mlir::ArrayAttr makeIndexArrayAttr(mlir::OpBuilder &b,
                                           const std::vector<std::string> &idx) {
@@ -403,8 +408,8 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
                      "' is not available in entry function arguments");
       }
       llvm::SmallVector<mlir::Attribute, 0> noIndices;
-      tensorium::mlir::DtAssignOp::create(b, loc, it->second, rhs,
-                                          b.getArrayAttr(noIndices));
+      tensorium::mlir::AssignOp::create(b, loc, it->second, rhs,
+                                        b.getArrayAttr(noIndices));
     };
 
     if (init.split3p1.hasAlpha && !init.split3p1.alphaField.empty())
@@ -421,6 +426,47 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
     if (!(init.split3p1.enabled && init.split3p1.hasGammaU)) {
       emitUnsupportedExprError(
           loc, "field 'gammaU' is used in equations but split_3p1 does not bind gammaU");
+    }
+  }
+}
+
+static void emitEvolutionOps(
+    mlir::OpBuilder &b, mlir::Location loc,
+    const tensorium::backend::ModuleIR &module,
+    const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg) {
+  for (const auto &evo : module.evolutions) {
+    llvm::StringMap<mlir::Value> tempValues;
+
+    for (const auto &tmp : evo.temporaries) {
+      if (!tmp.indexOffsets.empty()) {
+        emitUnsupportedExprError(
+            loc, "non-scalar temporary '" + tmp.name +
+                     "' is not supported in executable mode");
+      }
+      auto rhsV = emitExpr(b, loc, tmp.rhs.get(), fieldArg, &tempValues);
+      tempValues[tmp.name] = rhsV;
+    }
+
+    for (const auto &eq : evo.equations) {
+      auto it = fieldArg.find(eq.fieldName);
+      if (it == fieldArg.end())
+        continue;
+      auto fieldTy = mlir::dyn_cast<tensorium::mlir::FieldType>(it->second.getType());
+      if (!fieldTy)
+        emitUnsupportedExprError(loc, "field argument lacks tensorium.field type");
+      auto rhsV = emitExpr(b, loc, eq.rhs.get(), fieldArg, &tempValues);
+      if (!rhsV)
+        continue;
+      auto rhsTy = mlir::dyn_cast<tensorium::mlir::FieldType>(rhsV.getType());
+      if (!rhsTy)
+        emitUnsupportedExprError(loc, "rhs expression did not produce tensorium.field type");
+      if (rhsTy.getRank() == 0) {
+        rhsV = tensorium::mlir::PromoteOp::create(b, loc, fieldTy, rhsV).getResult();
+      } else if (fieldTy != rhsTy) {
+        emitUnsupportedExprError(loc, "tensor assignment variance mismatch");
+      }
+      tensorium::mlir::DtAssignOp::create(b, loc, it->second, rhsV,
+                                          makeIndexArrayAttr(b, eq.indices));
     }
   }
 }
@@ -675,59 +721,44 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   }
 
   auto funcTy = b.getFunctionType(argTypes, {});
-  auto f = mlir::func::FuncOp::create(loc, "tensorium_entry", funcTy);
-  auto *entry = f.addEntryBlock();
-  b.setInsertionPointToEnd(entry);
+  auto initFunc = mlir::func::FuncOp::create(loc, "tensorium_init", funcTy);
+  auto rhsFunc = mlir::func::FuncOp::create(loc, "tensorium_rhs", funcTy);
+  auto entryFunc = mlir::func::FuncOp::create(loc, "tensorium_entry", funcTy);
 
-  llvm::DenseMap<llvm::StringRef, mlir::Value> fieldArg;
-  for (unsigned i = 0; i < fields.size(); ++i) {
-    fieldArg[fields[i].name] = entry->getArgument(i);
-  }
-
-  emitInitialDataOps(b, loc, module, fieldArg);
-
-  for (const auto &evo : module.evolutions) {
-    llvm::StringMap<mlir::Value> tempValues;
-
-    for (const auto &tmp : evo.temporaries) {
-      if (!tmp.indexOffsets.empty()) {
-        emitUnsupportedExprError(
-            loc, "non-scalar temporary '" + tmp.name +
-                     "' is not supported in executable mode");
-      }
-      auto rhsV = emitExpr(b, loc, tmp.rhs.get(), fieldArg, &tempValues);
-      tempValues[tmp.name] = rhsV;
+  auto mapFieldArgs = [&](mlir::Block *block) {
+    llvm::DenseMap<llvm::StringRef, mlir::Value> fieldArg;
+    for (unsigned i = 0; i < fields.size(); ++i) {
+      fieldArg[fields[i].name] = block->getArgument(i);
     }
+    return fieldArg;
+  };
 
-    for (const auto &eq : evo.equations) {
-      auto it = fieldArg.find(eq.fieldName);
-      if (it == fieldArg.end())
-        continue;
-      auto fieldTy = mlir::dyn_cast<tensorium::mlir::FieldType>(it->second.getType());
-      if (!fieldTy)
-        emitUnsupportedExprError(loc, "field argument lacks tensorium.field type");
-      auto rhsV = emitExpr(b, loc, eq.rhs.get(), fieldArg, &tempValues);
-      if (!rhsV)
-        continue;
-      auto rhsTy = mlir::dyn_cast<tensorium::mlir::FieldType>(rhsV.getType());
-      if (!rhsTy)
-        emitUnsupportedExprError(loc, "rhs expression did not produce tensorium.field type");
-      if (rhsTy.getRank() == 0) {
-        rhsV =
-            tensorium::mlir::PromoteOp::create(b, loc, fieldTy, rhsV).getResult();
-      } else if (fieldTy != rhsTy) {
-        emitUnsupportedExprError(loc, "tensor assignment variance mismatch");
-      }
-      tensorium::mlir::DtAssignOp::create(b, loc, it->second, rhsV,
-                                          makeIndexArrayAttr(b, eq.indices));
-    }
-  }
+  auto *initBlock = initFunc.addEntryBlock();
+  b.setInsertionPointToEnd(initBlock);
+  auto initFieldArg = mapFieldArgs(initBlock);
+  emitInitialDataOps(b, loc, module, initFieldArg);
+  mlir::func::ReturnOp::create(b, loc);
+
+  auto *rhsBlock = rhsFunc.addEntryBlock();
+  b.setInsertionPointToEnd(rhsBlock);
+  auto rhsFieldArg = mapFieldArgs(rhsBlock);
+  emitEvolutionOps(b, loc, module, rhsFieldArg);
+  mlir::func::ReturnOp::create(b, loc);
+
+  auto *entryBlock = entryFunc.addEntryBlock();
+  b.setInsertionPointToEnd(entryBlock);
+  mlir::func::CallOp::create(b, loc, "tensorium_init", mlir::TypeRange{},
+                             entryBlock->getArguments());
+  mlir::func::CallOp::create(b, loc, "tensorium_rhs", mlir::TypeRange{},
+                             entryBlock->getArguments());
+  mlir::func::ReturnOp::create(b, loc);
   if (module.simulation) {
     moduleOp->getOperation()->setAttr("tensorium.sim.dim",
                                       b.getI64IntegerAttr(module.simulation->dimension));
   }
-  mlir::func::ReturnOp::create(b, loc);
-  moduleOp->push_back(f);
+  moduleOp->push_back(initFunc);
+  moduleOp->push_back(rhsFunc);
+  moduleOp->push_back(entryFunc);
 
   MLIRGenOptions pipelineOpts = opts;
   if (module.simulation) {
