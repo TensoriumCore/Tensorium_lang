@@ -527,7 +527,7 @@ Planned commit sequence (one intention per commit):
 
 ## 12) Phase 4 Update (Computable metric4 + split bindings)
 
-### 4.A metric4/split3p1 now computed as SSA (no string-eval path)
+### 4.A metric4/init3p1 now computed as SSA (no string-eval path)
 - `initial_data metric4` expressions are now lowered through structured init IR nodes:
   - `InitNumberIR`, `InitSymbolIR`, `InitBinaryIR`, `InitCallIR`.
 - MLIR generation emits real compute ops for metric components:
@@ -535,7 +535,7 @@ Planned commit sequence (one intention per commit):
   - arithmetic ops (`add/sub/mul/div`),
   - scalar math (`tensorium.sin`, `tensorium.sqrt`).
 - `tensorium.metric4` now carries 16 scalar SSA operands instead of a string array attribute.
-- `tensorium.split3p1` now takes computed SSA inputs (`alpha_in`, `beta_in`, `gamma_in`, `gammaU_in`) and returns typed SSA outputs.
+- `tensorium.init3p1` carries computed SSA inputs (`alpha_in`, `beta_in`, `gamma_in`, `gammaU_in`) and returns typed SSA outputs used for field binding.
 
 ### 4.B split_3p1 mapping binds computed outputs to declared fields
 - DSL/AST/Parser/Sema support explicit binding block:
@@ -553,10 +553,52 @@ Planned commit sequence (one intention per commit):
   - `tests/semantic/initial_data/03_missing_gammau_binding.tn`
   - fails with diagnostic when `gammaU` is used in equations but not bound by `split_3p1`.
 - `run_test.sh` now checks:
-  - structural MLIR presence of metric/split/math/build ops,
-  - use-def chain proving RHS contraction uses `gammaU` value produced by `tensorium.split3p1`.
+  - structural MLIR presence of metric/init/math/build ops,
+  - use-def chain proving RHS contraction uses `gammaU` value produced by `tensorium.init3p1`.
 
 ### Current limitation
-- `split3p1` lowering currently supports the zero-shift case (`beta = 0` path).
+- `metric4 -> init3p1` lowering currently supports the zero-shift case (`beta = 0` path).
 - Non-zero shift path is intentionally rejected with explicit diagnostic:
-  - `"split3p1 with non-zero shift is not implemented yet"`.
+  - `"metric4 -> init3p1 lowering with non-zero shift is not implemented yet"`.
+
+## 13) Schwarzschild MLIR verification
+
+### Scope and method
+- Verified on `tests/fixtures/gr/schwarzschild_3d.tn`.
+- Verification is now structural (SSA/use-def over in-memory MLIR module), not only shell `grep`:
+  - implemented in `tools/Tester/UnitTests.cpp` (`testSchwarzschildMLIRVerification`),
+  - executed by `Tensorium_unittests`, therefore covered by `bash run_test.sh`.
+
+### A) Use-def proof for bound 3+1 fields
+- Confirmed chain for `gammaU` in `dt H`:
+  - `tensorium.ref` source is `init3p1` result `gammaU`,
+  - that ref feeds `tensorium.mul`,
+  - the mul result feeds `tensorium.contract`.
+- Confirmed chain for `alpha` and `gamma` in `dt K`:
+  - both refs source from `init3p1` results,
+  - both are consumed by the same `tensorium.mul` (`alpha * gamma` term).
+- Legacy bypass check:
+  - `tensorium.split3p1` must be absent.
+
+### B) Metric and derived 3+1 quantities are SSA-computed
+- Verified `metric4` has exactly 16 SSA operands and no string `components` attr.
+- Verified Schwarzschild structure in SSA def graph:
+  - `f = 1 - 2*M/r`,
+  - `g_tt = -f`,
+  - `g_rr = 1/f`,
+  - `g_thth = r*r`,
+  - `g_phph` depends on `sin(theta)` and `theta`.
+- Verified derived 3+1 quantities:
+  - `alpha` input to `init3p1` is `sqrt(...)` depending on `f`,
+  - `gammaU` input to `init3p1` is diagonal and equals `{1/g11, 1/g22, 1/g33}`.
+- Forbidden legacy attrs check:
+  - no `alpha_expr`/`gamma_diag` attributes on emitted ops.
+
+### C) Identified inconsistencies and actions
+- Inconsistency found and fixed:
+  - previous `split3p1(metric, alpha, beta, gamma, gammaU)` behaved as packaging, not a true split.
+  - replaced by `init3p1(alpha,beta,gamma,gammaU)` (Option B) to make semantics explicit.
+- Remaining optimization debt (non-blocking correctness):
+  - duplicated `2*M/r` subgraph may still appear before deeper common-subexpression normalization.
+  - repeated scalar constants (`0`, `1`, `-1`) are still emitted in several places.
+- Current behavior is correct and validated; micro-optimization pass is deferred to a dedicated perf step.
