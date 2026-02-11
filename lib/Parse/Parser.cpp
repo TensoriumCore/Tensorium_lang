@@ -441,7 +441,7 @@ InitialDataDecl Parser::parseInitialData() {
 
     if (cur.type == TokenType::Identifier && cur.text == "alpha") {
       if (init.hasMetric4)
-        syntaxError("initial_data must use either metric4 or alpha/beta/gamma");
+        syntaxError("initial_data must use either metric4 or alpha/beta/gamma/gammaU");
       init.hasDecomposed = true;
       advance();
       expect(TokenType::Equals);
@@ -451,7 +451,7 @@ InitialDataDecl Parser::parseInitialData() {
 
     if (cur.type == TokenType::Identifier && cur.text == "beta") {
       if (init.hasMetric4)
-        syntaxError("initial_data must use either metric4 or alpha/beta/gamma");
+        syntaxError("initial_data must use either metric4 or alpha/beta/gamma/gammaU");
       init.hasDecomposed = true;
       advance();
       if (cur.type == TokenType::LBracket) {
@@ -468,7 +468,7 @@ InitialDataDecl Parser::parseInitialData() {
 
     if (cur.type == TokenType::Identifier && cur.text == "gamma") {
       if (init.hasMetric4)
-        syntaxError("initial_data must use either metric4 or alpha/beta/gamma");
+        syntaxError("initial_data must use either metric4 or alpha/beta/gamma/gammaU");
       init.hasDecomposed = true;
       advance();
       if (cur.type == TokenType::LBracket) {
@@ -484,6 +484,27 @@ InitialDataDecl Parser::parseInitialData() {
       }
       expect(TokenType::Equals);
       init.decomposed.gamma = parseExprMatrixLiteral(3, 3, "gamma 3x3 matrix");
+      continue;
+    }
+
+    if (cur.type == TokenType::Identifier && cur.text == "gammaU") {
+      if (init.hasMetric4)
+        syntaxError("initial_data must use either metric4 or alpha/beta/gamma/gammaU");
+      init.hasDecomposed = true;
+      advance();
+      if (cur.type == TokenType::LBracket) {
+        advance();
+        if (cur.type != TokenType::Identifier)
+          syntaxError("gammaU expects first index symbol");
+        advance();
+        expect(TokenType::Comma);
+        if (cur.type != TokenType::Identifier)
+          syntaxError("gammaU expects second index symbol");
+        advance();
+        expect(TokenType::RBracket);
+      }
+      expect(TokenType::Equals);
+      init.decomposed.gammaU = parseExprMatrixLiteral(3, 3, "gammaU 3x3 matrix");
       continue;
     }
 
@@ -532,7 +553,7 @@ InitialDataDecl Parser::parseInitialData() {
   expect(TokenType::RBrace);
 
   if (!init.hasMetric4 && !init.hasDecomposed) {
-    syntaxError("initial_data requires metric4 or alpha/beta/gamma definitions");
+    syntaxError("initial_data requires metric4 or alpha/beta/gamma/gammaU definitions");
   }
   if (init.hasDecomposed &&
       (!init.decomposed.alpha || init.decomposed.beta.empty() ||

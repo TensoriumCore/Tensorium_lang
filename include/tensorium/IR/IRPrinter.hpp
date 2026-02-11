@@ -243,6 +243,15 @@ inline void printModuleIR(const ModuleIR &m) {
       std::cout << "    alpha = ";
       printInitExpr(m.initialData->decomposed.alphaExpr.get());
       std::cout << "\n";
+      if (!m.initialData->decomposed.gammaUExpr.empty()) {
+        std::cout << "    gammaU = [";
+        for (size_t i = 0; i < m.initialData->decomposed.gammaUExpr.size(); ++i) {
+          printInitExpr(m.initialData->decomposed.gammaUExpr[i].get());
+          if (i + 1 < m.initialData->decomposed.gammaUExpr.size())
+            std::cout << ",";
+        }
+        std::cout << "]\n";
+      }
     }
     if (m.initialData->split3p1.enabled) {
       std::cout << "    split_3p1:\n";

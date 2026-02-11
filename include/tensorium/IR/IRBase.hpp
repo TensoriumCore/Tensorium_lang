@@ -179,6 +179,7 @@ struct DecomposedInitIR {
   std::unique_ptr<InitExprIR> alphaExpr;
   std::vector<std::unique_ptr<InitExprIR>> betaExpr;
   std::vector<std::unique_ptr<InitExprIR>> gammaExpr;
+  std::vector<std::unique_ptr<InitExprIR>> gammaUExpr;
 };
 
 struct Split3P1BindingIR {

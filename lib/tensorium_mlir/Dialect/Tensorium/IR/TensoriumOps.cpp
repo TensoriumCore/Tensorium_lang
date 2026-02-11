@@ -285,6 +285,29 @@ LogicalResult tensorium::mlir::Metric4Op::verify() {
   return success();
 }
 
+LogicalResult tensorium::mlir::Decompose3P1FromMetricOp::verify() {
+  FieldType metricTy, alphaTy, betaTy, gammaTy, gammaUTy;
+  if (failed(requireFieldType(getMetric4(), *this, "metric operand", metricTy)) ||
+      failed(requireFieldType(getAlpha(), *this, "alpha result", alphaTy)) ||
+      failed(requireFieldType(getBeta(), *this, "beta result", betaTy)) ||
+      failed(requireFieldType(getGamma(), *this, "gamma result", gammaTy)) ||
+      failed(requireFieldType(getGammaU(), *this, "gammaU result", gammaUTy)))
+    return failure();
+
+  if (metricTy.getUp() != 0 || metricTy.getDown() != 2)
+    return emitOpError("metric operand must be covariant rank-2");
+  if (alphaTy.getRank() != 0)
+    return emitOpError("alpha result must be scalar");
+  if (betaTy.getUp() != 0 || betaTy.getDown() != 1)
+    return emitOpError("beta result must be covector rank-1");
+  if (gammaTy.getUp() != 0 || gammaTy.getDown() != 2)
+    return emitOpError("gamma result must be covariant rank-2");
+  if (gammaUTy.getUp() != 2 || gammaUTy.getDown() != 0)
+    return emitOpError("gammaU result must be contravariant rank-2");
+
+  return success();
+}
+
 LogicalResult tensorium::mlir::Init3P1Op::verify() {
   FieldType alphaTy, betaTy, gammaTy, gammaUTy;
   FieldType alphaInTy, betaInTy, gammaInTy, gammaUInTy;

@@ -29,6 +29,7 @@ def Tensorium_IndexOp : Tensorium_Op<"index"> {
 }
 
 def Tensorium_ConstOp : Tensorium_Op<"const"> {
+  let traits = [Pure];
   let arguments = (ins F64Attr:$value);
   let results = (outs Tensorium_FieldType:$result);
   let hasVerifier = 1;
@@ -48,12 +49,14 @@ def Tensorium_RefOp : Tensorium_Op<"ref"> {
 }
 
 def Tensorium_ParamOp : Tensorium_Op<"param"> {
+  let traits = [Pure];
   let arguments = (ins StrAttr:$name);
   let results = (outs Tensorium_FieldType:$result);
   let hasVerifier = 1;
 }
 
 def Tensorium_CoordOp : Tensorium_Op<"coord"> {
+  let traits = [Pure];
   let arguments = (ins StrAttr:$name);
   let results = (outs Tensorium_FieldType:$result);
   let hasVerifier = 1;
@@ -146,6 +149,16 @@ def Tensorium_Metric4Op : Tensorium_Op<"metric4"> {
                    ArrayAttr:$indices,
                    BoolAttr:$enforce_symmetry);
   let results = (outs Tensorium_FieldType:$metric);
+  let hasVerifier = 1;
+}
+
+def Tensorium_Decompose3P1FromMetricOp : Tensorium_Op<"decompose3p1_from_metric"> {
+  let summary = "Decompose 4D metric into alpha, beta, gamma, gammaU";
+  let arguments = (ins Tensorium_FieldType:$metric4);
+  let results = (outs Tensorium_FieldType:$alpha,
+                      Tensorium_FieldType:$beta,
+                      Tensorium_FieldType:$gamma,
+                      Tensorium_FieldType:$gammaU);
   let hasVerifier = 1;
 }
 

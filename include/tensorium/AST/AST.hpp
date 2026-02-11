@@ -171,6 +171,7 @@ struct DecomposedMetricInitDecl {
   std::unique_ptr<Expr> alpha;
   std::vector<std::unique_ptr<Expr>> beta;
   std::vector<std::vector<std::unique_ptr<Expr>>> gamma;
+  std::vector<std::vector<std::unique_ptr<Expr>>> gammaU;
 };
 
 struct Split3P1BindingDecl {

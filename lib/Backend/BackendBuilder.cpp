@@ -489,6 +489,10 @@ ModuleIR BackendBuilder::build(const Program &prog,
         for (const auto &entry : row)
           init.decomposed.gammaExpr.push_back(lowerInitExpr(entry.get()));
       }
+      for (const auto &row : prog.initialData->decomposed.gammaU) {
+        for (const auto &entry : row)
+          init.decomposed.gammaUExpr.push_back(lowerInitExpr(entry.get()));
+      }
     }
 
     init.split3p1.enabled = prog.initialData->split3p1.enabled;
