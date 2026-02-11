@@ -375,3 +375,18 @@ Planned commit sequence (one intention per commit):
   - `cmake --build build -j` passes,
   - `bash run_test.sh` passes,
   - `bash tools/dev/check_layering.sh` passes.
+
+### Phase 3 continued (MLIR layered targets)
+- Split monolithic MLIR backend target into explicit layers in `lib/CMakeLists.txt`:
+  - `tensoriumMlirIR` (dialect/types/ops),
+  - `tensoriumMlirSemantic` (Einstein semantic helpers),
+  - `tensoriumMlirTransforms` (all Tensorium transform passes),
+  - `tensoriumMlirCodegen` (MLIRGen + registry + pipeline).
+- Kept compatibility facade:
+  - `tensorium_mlir_backend` remains available as an interface target for compatibility.
+- Driver linkage now uses explicit codegen target:
+  - `tools/driver/CMakeLists.txt` links `tensoriumMlirCodegen` directly.
+- Validation:
+  - `cmake --build build -j` passes after each commit,
+  - `bash run_test.sh` passes after the commit block,
+  - `bash tools/dev/check_layering.sh` passes.
