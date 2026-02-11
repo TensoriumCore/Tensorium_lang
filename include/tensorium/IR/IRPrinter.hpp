@@ -189,6 +189,23 @@ inline void printModuleIR(const ModuleIR &m) {
     std::cout << "    dt  = " << m.simulation->time.dt << "\n";
   }
 
+  if (m.initialData) {
+    std::cout << "  InitialData:\n";
+    if (m.initialData->hasMetric4) {
+      std::cout << "    metric4 " << m.initialData->metric4.name << " [";
+      for (size_t i = 0; i < m.initialData->metric4.indices.size(); ++i) {
+        std::cout << m.initialData->metric4.indices[i];
+        if (i + 1 < m.initialData->metric4.indices.size())
+          std::cout << ",";
+      }
+      std::cout << "]\n";
+    }
+    if (m.initialData->hasDecomposed) {
+      std::cout << "    alpha = " << m.initialData->decomposed.alphaExpr
+                << "\n";
+    }
+  }
+
   std::cout << "  Fields:\n";
   for (const auto &f : m.fields) {
     std::cout << "    " << f.name << " (up=" << f.tensorType.up

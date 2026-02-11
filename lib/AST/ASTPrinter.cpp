@@ -188,6 +188,30 @@ void printProgram(const Program &prog) {
     std::cout << "  spatial:\n";
     std::cout << "    order = " << sim.spatial.order << "\n";
   }
+
+  if (prog.initialData) {
+    std::cout << "\nInitialData:\n";
+    std::cout << "  enforce_symmetry = "
+              << (prog.initialData->enforceSymmetry ? "true" : "false")
+              << "\n";
+    if (prog.initialData->hasMetric4) {
+      std::cout << "  metric4 " << prog.initialData->metric4.name << "[";
+      for (size_t i = 0; i < prog.initialData->metric4.indices.size(); ++i) {
+        std::cout << prog.initialData->metric4.indices[i];
+        if (i + 1 < prog.initialData->metric4.indices.size())
+          std::cout << ",";
+      }
+      std::cout << "] = <4x4 matrix>\n";
+    }
+    if (prog.initialData->hasDecomposed) {
+      std::cout << "  alpha = ";
+      printExpr(prog.initialData->decomposed.alpha.get());
+      std::cout << "\n";
+      std::cout << "  beta = <3 entries>\n";
+      std::cout << "  gamma = <3x3 matrix>\n";
+    }
+  }
+
   for (const auto &evo : prog.evolutions) {
     std::cout << "Evolution " << evo.name << " {\n";
     for (const auto &eq : evo.equations) {

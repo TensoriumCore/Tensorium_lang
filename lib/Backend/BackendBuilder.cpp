@@ -3,10 +3,55 @@
 #include "tensorium/Core/IndexSet.h"
 
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace tensorium::backend {
+
+static std::string renderExpr(const tensorium::Expr *expr) {
+  using namespace tensorium;
+  if (!expr)
+    return "<null>";
+
+  if (auto n = dynamic_cast<const NumberExpr *>(expr)) {
+    std::ostringstream os;
+    os << n->value;
+    return os.str();
+  }
+  if (auto v = dynamic_cast<const VarExpr *>(expr))
+    return v->name;
+  if (auto idx = dynamic_cast<const IndexedVarExpr *>(expr)) {
+    std::string out = idx->base + "[";
+    for (size_t i = 0; i < idx->indices.size(); ++i) {
+      out += idx->indices[i];
+      if (i + 1 < idx->indices.size())
+        out += ",";
+    }
+    out += "]";
+    return out;
+  }
+  if (auto p = dynamic_cast<const ParenExpr *>(expr))
+    return "(" + renderExpr(p->inner.get()) + ")";
+  if (auto b = dynamic_cast<const BinaryExpr *>(expr)) {
+    auto *lhsNum = dynamic_cast<const NumberExpr *>(b->lhs.get());
+    if (b->op == '-' && lhsNum && lhsNum->value == 0.0)
+      return "-(" + renderExpr(b->rhs.get()) + ")";
+    return "(" + renderExpr(b->lhs.get()) + std::string(1, b->op) +
+           renderExpr(b->rhs.get()) + ")";
+  }
+  if (auto c = dynamic_cast<const CallExpr *>(expr)) {
+    std::string out = c->callee + "(";
+    for (size_t i = 0; i < c->args.size(); ++i) {
+      out += renderExpr(c->args[i].get());
+      if (i + 1 < c->args.size())
+        out += ",";
+    }
+    out += ")";
+    return out;
+  }
+  return "<expr>";
+}
 
 static tensorium::ir::TensorType lowerTensorType(const tensorium::TensorTypeDesc &d) {
   tensorium::ir::TensorType out;
@@ -413,6 +458,50 @@ ModuleIR BackendBuilder::build(const Program &prog,
 
   if (prog.simulation)
     mod.simulation = lowerSimulation(*prog.simulation);
+
+  if (prog.initialData) {
+    InitialDataIR init;
+    init.hasMetric4 = prog.initialData->hasMetric4;
+    init.hasDecomposed = prog.initialData->hasDecomposed;
+
+    if (prog.initialData->hasMetric4) {
+      init.metric4.name = prog.initialData->metric4.name;
+      init.metric4.indices = prog.initialData->metric4.indices;
+      init.metric4.enforceSymmetry = prog.initialData->enforceSymmetry;
+
+      if (prog.simulation) {
+        switch (prog.simulation->coordinates) {
+        case tensorium::CoordinateSystem::Cartesian:
+          init.metric4.coordSystem = "cartesian";
+          break;
+        case tensorium::CoordinateSystem::Spherical:
+          init.metric4.coordSystem = "spherical";
+          break;
+        case tensorium::CoordinateSystem::Cylindrical:
+          init.metric4.coordSystem = "cylindrical";
+          break;
+        }
+      }
+
+      for (const auto &row : prog.initialData->metric4.components) {
+        for (const auto &entry : row)
+          init.metric4.components.push_back(renderExpr(entry.get()));
+      }
+    }
+
+    if (prog.initialData->hasDecomposed) {
+      init.decomposed.alphaExpr =
+          renderExpr(prog.initialData->decomposed.alpha.get());
+      for (const auto &entry : prog.initialData->decomposed.beta)
+        init.decomposed.betaExpr.push_back(renderExpr(entry.get()));
+      for (const auto &row : prog.initialData->decomposed.gamma) {
+        for (const auto &entry : row)
+          init.decomposed.gammaExpr.push_back(renderExpr(entry.get()));
+      }
+    }
+
+    mod.initialData = std::move(init);
+  }
 
   mod.fields.reserve(prog.fields.size());
   for (const auto &f : prog.fields) {

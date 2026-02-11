@@ -132,8 +132,30 @@ struct EvolutionIR {
   std::vector<TempAssignIR> temporaries;
 };
 
+struct Metric4InitIR {
+  std::string name;
+  std::vector<std::string> indices;
+  std::vector<std::string> components;
+  bool enforceSymmetry = false;
+  std::string coordSystem;
+};
+
+struct DecomposedInitIR {
+  std::string alphaExpr;
+  std::vector<std::string> betaExpr;
+  std::vector<std::string> gammaExpr;
+};
+
+struct InitialDataIR {
+  bool hasMetric4 = false;
+  bool hasDecomposed = false;
+  Metric4InitIR metric4;
+  DecomposedInitIR decomposed;
+};
+
 struct ModuleIR {
   std::optional<SimulationIR> simulation;
+  std::optional<InitialDataIR> initialData;
   std::vector<FieldIR> fields;
   std::vector<EvolutionIR> evolutions;
 };

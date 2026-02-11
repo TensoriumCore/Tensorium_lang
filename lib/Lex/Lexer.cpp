@@ -120,6 +120,10 @@ Token Lexer::next() {
       return {TokenType::KwConTensor4, t, line, col};
     if (t == "simulation")
       return {TokenType::KwSimulation, t, line, col};
+    if (t == "initial_data")
+      return {TokenType::KwInitialData, t, line, col};
+    if (t == "metric4")
+      return {TokenType::KwMetric4, t, line, col};
     if (t == "time")
       return {TokenType::KwTime, t, line, col};
     if (t == "spatial")

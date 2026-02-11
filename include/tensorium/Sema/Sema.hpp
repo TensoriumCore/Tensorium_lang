@@ -29,6 +29,8 @@ class SemanticAnalyzer {
   int resolveIndex(const std::string &name);
   std::unique_ptr<IndexedExpr> transformExpr(const Expr *e);
   void validateSimulation(const SimulationConfig &sim);
+  void validateInitialData(const InitialDataDecl &init);
+  void validateInitialDataExpr(const Expr *expr, const std::string &context);
   void enforceMetricFieldRules(const FieldDecl &field);
   bool containsExplicitMetricAntisymmetry(const IndexedExpr *expr) const;
   bool isSimpleIndexSwap(const IndexedExpr *lhs, const IndexedExpr *rhs) const;
