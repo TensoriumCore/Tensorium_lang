@@ -100,7 +100,8 @@ static void printIndexedExpr(const IndexedExpr *e) {
 int main(int argc, char **argv) {
   bool dumpAST = false;
   bool dumpIndexed = false;
-  bool dumpBackend, dumpBackendExpr = false;
+  bool dumpBackend = false;
+  bool dumpBackendExpr = false;
   bool runCpu = false;
   size_t steps = 10;
   double initScalar = 1.0;
