@@ -9,6 +9,7 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
+#include "tensorium_mlir/Target/MLIRGen/RhsEvaluator.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
@@ -210,193 +211,6 @@ struct EvalPoint3 {
   double theta = 0.0;
   double phi = 0.0;
 };
-
-static double schwarzschildFactor(double M, double r) {
-  return 1.0 - 2.0 * M / r;
-}
-
-static double schwarzschildGammaComponent(int a, int b, double M, double r,
-                                          double theta) {
-  const double f = schwarzschildFactor(M, r);
-  const double sinTheta = std::sin(theta);
-  const double sin2 = sinTheta * sinTheta;
-
-  if (a == 0 && b == 0)
-    return 1.0 / f;
-  if (a == 1 && b == 1)
-    return r * r;
-  if (a == 2 && b == 2)
-    return r * r * sin2;
-  return 0.0;
-}
-
-static double schwarzschildGammaUComponent(int a, int b, double M, double r,
-                                           double theta) {
-  const double f = schwarzschildFactor(M, r);
-  const double sinTheta = std::sin(theta);
-  const double sin2 = sinTheta * sinTheta;
-
-  if (a == 0 && b == 0)
-    return f;
-  if (a == 1 && b == 1)
-    return 1.0 / (r * r);
-  if (a == 2 && b == 2)
-    return 1.0 / (r * r * sin2);
-  return 0.0;
-}
-
-static double schwarzschildGammaDerivative(int derivAxis, int a, int b,
-                                           double M, double r, double theta) {
-  const double f = schwarzschildFactor(M, r);
-  const double sinTheta = std::sin(theta);
-  const double cosTheta = std::cos(theta);
-  const double sin2 = sinTheta * sinTheta;
-  const double twoMOverR2 = 2.0 * M / (r * r);
-
-  if (a == 0 && b == 0) {
-    if (derivAxis == 0)
-      return -twoMOverR2 / (f * f);
-    return 0.0;
-  }
-
-  if (a == 1 && b == 1) {
-    if (derivAxis == 0)
-      return 2.0 * r;
-    return 0.0;
-  }
-
-  if (a == 2 && b == 2) {
-    if (derivAxis == 0)
-      return 2.0 * r * sin2;
-    if (derivAxis == 1)
-      return 2.0 * r * r * sinTheta * cosTheta;
-    return 0.0;
-  }
-
-  return 0.0;
-}
-
-static bool lookupIndexValue(const std::unordered_map<std::string, int> &indexValues,
-                             const std::string &name, int &out) {
-  auto it = indexValues.find(name);
-  if (it == indexValues.end())
-    return false;
-  out = it->second;
-  return true;
-}
-
-static double evalSchwarzschildChristoffelLoweredScalar(
-    const backend::ExprIR *expr, std::unordered_map<std::string, int> &indexValues,
-    double M, const EvalPoint3 &point) {
-  using namespace backend;
-  if (!expr)
-    throw std::runtime_error("null expression in Christoffel evaluator");
-
-  switch (expr->kind) {
-  case ExprIR::Kind::Number: {
-    auto *n = static_cast<const NumberIR *>(expr);
-    return n->value;
-  }
-  case ExprIR::Kind::Var: {
-    auto *v = static_cast<const VarIR *>(expr);
-    if (v->tensorIndexNames.size() != 2)
-      throw std::runtime_error("Christoffel evaluator expects rank-2 var refs");
-    int a = -1;
-    int b = -1;
-    if (!lookupIndexValue(indexValues, v->tensorIndexNames[0], a) ||
-        !lookupIndexValue(indexValues, v->tensorIndexNames[1], b)) {
-      throw std::runtime_error("missing index binding for var reference");
-    }
-    if (v->name == "gamma")
-      return schwarzschildGammaComponent(a, b, M, point.r, point.theta);
-    if (v->name == "gammaU")
-      return schwarzschildGammaUComponent(a, b, M, point.r, point.theta);
-    throw std::runtime_error("unsupported field '" + v->name +
-                             "' in Christoffel evaluator");
-  }
-  case ExprIR::Kind::Binary: {
-    auto *b = static_cast<const BinaryIR *>(expr);
-    const double lhs = evalSchwarzschildChristoffelLoweredScalar(
-        b->lhs.get(), indexValues, M, point);
-    const double rhs = evalSchwarzschildChristoffelLoweredScalar(
-        b->rhs.get(), indexValues, M, point);
-    if (b->op == "+")
-      return lhs + rhs;
-    if (b->op == "-")
-      return lhs - rhs;
-    if (b->op == "*")
-      return lhs * rhs;
-    if (b->op == "/")
-      return lhs / rhs;
-    throw std::runtime_error("unsupported binary op in Christoffel evaluator");
-  }
-  case ExprIR::Kind::TensorProduct: {
-    auto *p = static_cast<const TensorProductIR *>(expr);
-    const double lhs = evalSchwarzschildChristoffelLoweredScalar(
-        p->lhs.get(), indexValues, M, point);
-    const double rhs = evalSchwarzschildChristoffelLoweredScalar(
-        p->rhs.get(), indexValues, M, point);
-    return lhs * rhs;
-  }
-  case ExprIR::Kind::Contraction: {
-    auto *c = static_cast<const ContractionIR *>(expr);
-    std::function<double(size_t)> evalLoop = [&](size_t pos) -> double {
-      if (pos >= c->summedIndices.size()) {
-        return evalSchwarzschildChristoffelLoweredScalar(c->in.get(), indexValues,
-                                                         M, point);
-      }
-      const std::string &idxName = c->summedIndices[pos];
-      auto prev = indexValues.find(idxName);
-      const bool hadPrev = prev != indexValues.end();
-      const int prevValue = hadPrev ? prev->second : 0;
-
-      double accum = 0.0;
-      for (int axis = 0; axis < 3; ++axis) {
-        indexValues[idxName] = axis;
-        accum += evalLoop(pos + 1);
-      }
-
-      if (hadPrev)
-        indexValues[idxName] = prevValue;
-      else
-        indexValues.erase(idxName);
-      return accum;
-    };
-    return evalLoop(0);
-  }
-  case ExprIR::Kind::PartialDerivative: {
-    auto *d = static_cast<const PartialDerivativeIR *>(expr);
-    auto *innerVar = dynamic_cast<const VarIR *>(d->in.get());
-    if (!innerVar || innerVar->name != "gamma" ||
-        innerVar->tensorIndexNames.size() != 2) {
-      throw std::runtime_error(
-          "Christoffel evaluator expects derivative over gamma component");
-    }
-
-    int derivAxis = -1;
-    int a = -1;
-    int b = -1;
-    if (!lookupIndexValue(indexValues, d->coordIndex, derivAxis) ||
-        !lookupIndexValue(indexValues, innerVar->tensorIndexNames[0], a) ||
-        !lookupIndexValue(indexValues, innerVar->tensorIndexNames[1], b)) {
-      throw std::runtime_error("missing index binding for derivative");
-    }
-    return schwarzschildGammaDerivative(derivAxis, a, b, M, point.r,
-                                        point.theta);
-  }
-  case ExprIR::Kind::Call:
-  case ExprIR::Kind::IndexRename:
-  case ExprIR::Kind::IndexPermute:
-  case ExprIR::Kind::Trace:
-  case ExprIR::Kind::Gradient:
-  case ExprIR::Kind::CovariantDerivative:
-  case ExprIR::Kind::Divergence:
-    throw std::runtime_error(
-        "unsupported expression kind in Christoffel evaluator");
-  }
-
-  throw std::runtime_error("unexpected expression kind in Christoffel evaluator");
-}
 
 static bool valueDependsOnImpl(
     ::mlir::Value root,
@@ -2121,66 +1935,148 @@ static bool testKerrLikeHasNonZeroBetaPhi() {
 }
 
 static bool testSchwarzschildChristoffelNumericPoint() {
-  const auto module = buildModuleFromFile(
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  auto module = buildMLIRModuleFromFileWithOpts(
       "tests/fixtures/gr/schwarzschild_christoffel_3d.tn",
-      CompilationMode::Executable);
+      CompilationMode::Executable, ctx, opts);
 
-  if (module.evolutions.empty() || module.evolutions[0].equations.empty()) {
-    std::cerr << "FAIL: Christoffel fixture did not produce evolution equations\n";
+  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhsFunc) {
+    std::cerr << "FAIL: missing @tensorium_rhs for Christoffel numeric test\n";
+    return false;
+  }
+  if (rhsFunc.getNumArguments() != 3) {
+    std::cerr << "FAIL: expected @tensorium_rhs(gamma,gammaU,dtGamma) signature\n";
     return false;
   }
 
-  const backend::EquationIR *eq = nullptr;
-  for (const auto &candidate : module.evolutions[0].equations) {
-    if (candidate.fieldName == "Christoffel") {
-      eq = &candidate;
-      break;
-    }
-  }
-  if (!eq || !eq->rhs) {
-    std::cerr << "FAIL: missing Christoffel equation in backend IR\n";
-    return false;
-  }
+  constexpr std::size_t nr = 9;
+  constexpr std::size_t nt = 9;
+  constexpr std::size_t np = 9;
+  constexpr std::size_t nPoints = nr * nt * np;
+  constexpr std::size_t center = 4;
 
-  const double M = 1.0;
-  EvalPoint3 point;
-  point.r = 10.0;
-  point.theta = std::acos(-1.0) * 0.5;
-  point.phi = 0.0;
-
-  auto evalGamma = [&](int i, int j, int k) {
-    std::unordered_map<std::string, int> idx = {
-        {"i", i}, {"j", j}, {"k", k}};
-    return evalSchwarzschildChristoffelLoweredScalar(eq->rhs.get(), idx, M,
-                                                     point);
+  const auto linearIndex = [](std::size_t ir, std::size_t it, std::size_t ip) {
+    return (ir * nt + it) * np + ip;
   };
 
-  const double gamma_r_rr = evalGamma(0, 0, 0);
-  const double gamma_r_thth = evalGamma(0, 1, 1);
-  const double gamma_r_phph = evalGamma(0, 2, 2);
-  const double gamma_th_rth = evalGamma(1, 0, 1);
-  const double gamma_ph_rph = evalGamma(2, 0, 2);
-  const double gamma_ph_thph = evalGamma(2, 1, 2);
+  const double M = 1.0;
+  const double r0 = 10.0;
+  const double theta0 = 1.0;
+  const double dr = 1.0e-4;
+  const double dtheta = 1.0e-4;
+  const double dphi = 1.0e-4;
+
+  std::array<std::vector<double>, 9> gamma;
+  std::array<std::vector<double>, 9> gammaU;
+  std::array<std::vector<double>, 27> dtGamma;
+  std::array<double *, 9> gammaPtrs{};
+  std::array<double *, 9> gammaUPtrs{};
+  std::array<double *, 27> dtGammaPtrs{};
+  for (unsigned c = 0; c < 9; ++c) {
+    gamma[c].assign(nPoints, 0.0);
+    gammaU[c].assign(nPoints, 0.0);
+    gammaPtrs[c] = gamma[c].data();
+    gammaUPtrs[c] = gammaU[c].data();
+  }
+  for (unsigned c = 0; c < 27; ++c) {
+    dtGamma[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    dtGammaPtrs[c] = dtGamma[c].data();
+  }
+
+  for (std::size_t ir = 0; ir < nr; ++ir) {
+    const double r = r0 + (static_cast<double>(ir) - static_cast<double>(center)) * dr;
+    for (std::size_t it = 0; it < nt; ++it) {
+      const double theta =
+          theta0 + (static_cast<double>(it) - static_cast<double>(center)) * dtheta;
+      const double sinTheta = std::sin(theta);
+      const double sin2 = sinTheta * sinTheta;
+      const double f = 1.0 - 2.0 * M / r;
+      for (std::size_t ip = 0; ip < np; ++ip) {
+        (void)ip;
+        const std::size_t p = linearIndex(ir, it, ip);
+        gamma[0][p] = 1.0 / f;
+        gamma[4][p] = r * r;
+        gamma[8][p] = r * r * sin2;
+        gammaU[0][p] = f;
+        gammaU[4][p] = 1.0 / (r * r);
+        gammaU[8][p] = 1.0 / (r * r * sin2);
+      }
+    }
+  }
+
+  tensorium_mlir::RhsEvalDescriptor desc;
+  desc.grid.spatialDim = 3;
+  desc.grid.extents = {nr, nt, np};
+  desc.grid.spacing = {dr, dtheta, dphi};
+  desc.point = {center, center, center};
+  desc.args.resize(3);
+  desc.args[0].components.assign(gammaPtrs.begin(), gammaPtrs.end());
+  desc.args[1].components.assign(gammaUPtrs.begin(), gammaUPtrs.end());
+  desc.args[2].components.assign(dtGammaPtrs.begin(), dtGammaPtrs.end());
+
+  auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
+  if (!evalRes.ok) {
+    std::cerr << "FAIL: rhs evaluator failed for Christoffel test: "
+              << evalRes.message << "\n";
+    return false;
+  }
+
+  const std::size_t p0 = linearIndex(center, center, center);
+  const auto comp3 = [](unsigned i, unsigned j, unsigned k) {
+    return i * 9 + j * 3 + k;
+  };
+
+  const double r = r0;
+  const double theta = theta0;
+  const double f = 1.0 - 2.0 * M / r;
+  const double sinTheta = std::sin(theta);
+  const double sin2 = sinTheta * sinTheta;
+
+  const double gamma_r_rr = dtGamma[comp3(0, 0, 0)][p0];
+  const double gamma_r_thth = dtGamma[comp3(0, 1, 1)][p0];
+  const double gamma_r_phph = dtGamma[comp3(0, 2, 2)][p0];
+  const double gamma_th_rth = dtGamma[comp3(1, 0, 1)][p0];
+  const double gamma_ph_rph = dtGamma[comp3(2, 0, 2)][p0];
+  const double gamma_ph_thph = dtGamma[comp3(2, 1, 2)][p0];
+
+  const double expected_r_rr = -M / (r * (r - 2.0 * M));
+  const double expected_r_thth = -r * f;
+  const double expected_r_phph = -r * f * sin2;
+  const double expected_th_rth = 1.0 / r;
+  const double expected_ph_rph = 1.0 / r;
+  const double expected_ph_thph = std::cos(theta) / sinTheta;
+
+  const auto finite = [](double v) { return std::isfinite(v); };
+  const auto closeFD = [](double got, double expected) {
+    return almostEqual(got, expected, 1e-8, 1e-8);
+  };
 
   std::cout << std::setprecision(17)
-            << "[numeric] Schwarzschild Christoffel point M=1 r=10 theta=pi/2\n"
+            << "[numeric] Schwarzschild Christoffel point M=1 r=10 theta=1\n"
             << "  Gamma^r_rr      got=" << gamma_r_rr
-            << " expected=-0.0125\n"
+            << " expected=" << expected_r_rr << "\n"
             << "  Gamma^r_thetatheta got=" << gamma_r_thth
-            << " expected=-8\n"
+            << " expected=" << expected_r_thth << "\n"
             << "  Gamma^r_phiphi  got=" << gamma_r_phph
-            << " expected=-8\n"
+            << " expected=" << expected_r_phph << "\n"
             << "  Gamma^theta_rtheta got=" << gamma_th_rth
-            << " expected=0.1\n"
+            << " expected=" << expected_th_rth << "\n"
             << "  Gamma^phi_rphi  got=" << gamma_ph_rph
-            << " expected=0.1\n"
+            << " expected=" << expected_ph_rph << "\n"
             << "  Gamma^phi_thetaphi got=" << gamma_ph_thph
-            << " expected=0\n";
+            << " expected=" << expected_ph_thph << "\n";
 
-  if (!almostEqual(gamma_r_rr, -0.0125) || !almostEqual(gamma_r_thth, -8.0) ||
-      !almostEqual(gamma_r_phph, -8.0) || !almostEqual(gamma_th_rth, 0.1) ||
-      !almostEqual(gamma_ph_rph, 0.1) ||
-      !almostEqual(gamma_ph_thph, 0.0)) {
+  if (!finite(gamma_r_rr) || !finite(gamma_r_thth) || !finite(gamma_r_phph) ||
+      !finite(gamma_th_rth) || !finite(gamma_ph_rph) ||
+      !finite(gamma_ph_thph) || !closeFD(gamma_r_rr, expected_r_rr) ||
+      !closeFD(gamma_r_thth, expected_r_thth) ||
+      !closeFD(gamma_r_phph, expected_r_phph) ||
+      !closeFD(gamma_th_rth, expected_th_rth) ||
+      !closeFD(gamma_ph_rph, expected_ph_rph) ||
+      !closeFD(gamma_ph_thph, expected_ph_thph)) {
     std::cerr << "FAIL: Schwarzschild Christoffel numeric mismatch\n";
     return false;
   }
