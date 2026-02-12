@@ -518,19 +518,11 @@ static InitEvalResult executeInitPoint(
           }
         }
       }
-      for (unsigned i = 1; i < 4; ++i) {
-        if (!isNearZero(metric.data[i]) || !isNearZero(metric.data[i * 4])) {
-          return InitEvalResult::failure(
-              "decompose3p1_from_metric requires g_ti = 0 (beta unsupported)");
-        }
-      }
-
-      RuntimeValue alpha = makeScalar(std::sqrt(-metric.data[0]));
 
       RuntimeValue beta = makeCovector3();
-      beta.data[0] = 0.0;
-      beta.data[1] = 0.0;
-      beta.data[2] = 0.0;
+      beta.data[0] = metric.data[1];
+      beta.data[1] = metric.data[2];
+      beta.data[2] = metric.data[3];
 
       RuntimeValue gamma = makeTensor3x3();
       gamma.data[0] = metric.data[5];
@@ -547,6 +539,21 @@ static InitEvalResult executeInitPoint(
       auto invRes = inverse3x3Symmetric(gamma, gammaU);
       if (!invRes.ok)
         return invRes;
+
+      double betaDot = 0.0;
+      for (unsigned i = 0; i < 3; ++i) {
+        double betaUpperI = 0.0;
+        for (unsigned j = 0; j < 3; ++j)
+          betaUpperI += gammaU.data[i * 3 + j] * beta.data[j];
+        betaDot += beta.data[i] * betaUpperI;
+      }
+
+      const double alphaSq = betaDot - metric.data[0];
+      if (alphaSq < 0.0 && !isNearZero(alphaSq)) {
+        return InitEvalResult::failure(
+            "decompose3p1_from_metric produced negative alpha^2");
+      }
+      RuntimeValue alpha = makeScalar(std::sqrt(std::max(0.0, alphaSq)));
 
       values[decomp.getAlpha()] = alpha;
       values[decomp.getBeta()] = beta;

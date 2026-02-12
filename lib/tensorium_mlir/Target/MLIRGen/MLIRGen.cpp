@@ -145,31 +145,6 @@ static bool metric4HasSymmetricComponents(
   return true;
 }
 
-static bool initExprIsZero(const tensorium::backend::InitExprIR *expr) {
-  using namespace tensorium::backend;
-  if (!expr || expr->kind != InitExprIR::Kind::Number)
-    return false;
-  auto *num = static_cast<const InitNumberIR *>(expr);
-  return num->value == 0.0;
-}
-
-static bool metric4HasZeroTimeSpaceTerms(
-    const tensorium::backend::InitialDataIR &init) {
-  if (!init.hasMetric4 || init.metric4.components.size() != 16)
-    return false;
-
-  // 4D index order is assumed as (t, x1, x2, x3): require g_ti == g_it == 0
-  // for beta=0-only decomposition support in decompose3p1_from_metric.
-  constexpr int kPairs[6][2] = {
-      {0, 1}, {1, 0}, {0, 2}, {2, 0}, {0, 3}, {3, 0}};
-  for (const auto &pair : kPairs) {
-    const size_t flat = static_cast<size_t>(pair[0] * 4 + pair[1]);
-    if (!initExprIsZero(init.metric4.components[flat].get()))
-      return false;
-  }
-  return true;
-}
-
 static void collectExprFieldNames(const tensorium::backend::ExprIR *expr,
                                   llvm::StringSet<> &out) {
   using namespace tensorium::backend;
@@ -577,10 +552,6 @@ static void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
     if (!metric4HasSymmetricComponents(init)) {
       emitUnsupportedExprError(
           loc, "decompose3p1_from_metric requires symmetric metric components");
-    }
-    if (!metric4HasZeroTimeSpaceTerms(init)) {
-      emitUnsupportedExprError(
-          loc, "decompose3p1_from_metric requires g_ti = 0 (beta unsupported)");
     }
 
     llvm::SmallVector<mlir::Value, 16> metricComps;

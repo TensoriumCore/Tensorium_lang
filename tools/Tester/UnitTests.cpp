@@ -163,6 +163,14 @@ static void setupSinglePointInitContext(InitEvalContext &ctx, double M, double r
   ctx.desc.outputs.gammaU = ctx.buffers.gammaUPtrs;
 }
 
+static std::string formatMatrix3x3(const std::array<std::array<double, 1>, 9> &m) {
+  std::ostringstream os;
+  os << "[[" << m[0][0] << ", " << m[1][0] << ", " << m[2][0] << "], "
+     << "[" << m[3][0] << ", " << m[4][0] << ", " << m[5][0] << "], "
+     << "[" << m[6][0] << ", " << m[7][0] << ", " << m[8][0] << "]]";
+  return os.str();
+}
+
 static bool valueDependsOnImpl(
     ::mlir::Value root,
     const std::function<bool(::mlir::Operation *)> &predicate,
@@ -1473,14 +1481,12 @@ static bool testSchwarzschildInitNumericPoint() {
             << " M=" << M << " r=" << r << " theta=" << theta << "\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=" << alphaExpected << "\n"
-            << "  gamma diag  got=(" << evalCtx.buffers.gamma[0][0] << ", "
-            << evalCtx.buffers.gamma[4][0] << ", " << evalCtx.buffers.gamma[8][0]
-            << ") expected=(" << (1.0 / f) << ", " << (r * r) << ", " << (r * r)
-            << ")\n"
-            << "  gammaU diag got=(" << evalCtx.buffers.gammaU[0][0] << ", "
-            << evalCtx.buffers.gammaU[4][0] << ", "
-            << evalCtx.buffers.gammaU[8][0] << ") expected=(" << f << ", "
-            << (1.0 / (r * r)) << ", " << (1.0 / (r * r)) << ")\n";
+            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << " expected=[[" << (1.0 / f) << ", 0, 0], [0, " << (r * r)
+            << ", 0], [0, 0, " << (r * r) << "]]\n"
+            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << " expected=[[" << f << ", 0, 0], [0, " << (1.0 / (r * r))
+            << ", 0], [0, 0, " << (1.0 / (r * r)) << "]]\n";
 
   if (!almostEqual(evalCtx.buffers.alpha[0], alphaExpected)) {
     std::cerr << "FAIL: alpha mismatch at reference point, got "
@@ -1531,7 +1537,11 @@ static bool testSchwarzschildInitThetaZeroNoNaN() {
   }
   std::cout << std::setprecision(17)
             << "[numeric] Schwarzschild theta=0 edge case"
-            << " gamma_phiphi=" << evalCtx.buffers.gamma[8][0] << "\n";
+            << " gamma_phiphi=" << evalCtx.buffers.gamma[8][0] << "\n"
+            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "\n"
+            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << "\n";
   return true;
 }
 
@@ -1566,7 +1576,11 @@ static bool testSchwarzschildInitHorizonIEEE() {
             << "[numeric] Schwarzschild horizon edge case (r=2M)"
             << " alpha=" << evalCtx.buffers.alpha[0]
             << " gamma_rr=" << evalCtx.buffers.gamma[0][0]
-            << " gammaU_rr=" << evalCtx.buffers.gammaU[0][0] << "\n";
+            << " gammaU_rr=" << evalCtx.buffers.gammaU[0][0] << "\n"
+            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "\n"
+            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << "\n";
   return true;
 }
 
@@ -1597,14 +1611,12 @@ static bool testReissnerNordstromInitNumericPoint() {
             << " theta=" << theta << "\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=" << std::sqrt(f) << "\n"
-            << "  gamma diag  got=(" << evalCtx.buffers.gamma[0][0] << ", "
-            << evalCtx.buffers.gamma[4][0] << ", " << evalCtx.buffers.gamma[8][0]
-            << ") expected=(" << (1.0 / f) << ", " << (r * r) << ", " << (r * r)
-            << ")\n"
-            << "  gammaU diag got=(" << evalCtx.buffers.gammaU[0][0] << ", "
-            << evalCtx.buffers.gammaU[4][0] << ", "
-            << evalCtx.buffers.gammaU[8][0] << ") expected=(" << f << ", "
-            << (1.0 / (r * r)) << ", " << (1.0 / (r * r)) << ")\n";
+            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << " expected=[[" << (1.0 / f) << ", 0, 0], [0, " << (r * r)
+            << ", 0], [0, 0, " << (r * r) << "]]\n"
+            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << " expected=[[" << f << ", 0, 0], [0, " << (1.0 / (r * r))
+            << ", 0], [0, 0, " << (1.0 / (r * r)) << "]]\n";
 
   if (!almostEqual(evalCtx.buffers.alpha[0], std::sqrt(f)) ||
       !almostEqual(evalCtx.buffers.gamma[0][0], 1.0 / f) ||
@@ -1647,10 +1659,10 @@ static bool testSpatialOffdiagInitNumericPoint() {
             << "[numeric] Spatial offdiag reference point\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=1\n"
-            << "  gamma(0,1)  got=" << evalCtx.buffers.gamma[1][0]
-            << " expected=1\n"
-            << "  gammaU(0,1) got=" << evalCtx.buffers.gammaU[1][0]
-            << " expected=-0.2\n";
+            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << " expected=[[2, 1, 0], [1, 3, 0], [0, 0, 4]]\n"
+            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << " expected=[[0.6, -0.2, 0], [-0.2, 0.4, 0], [0, 0, 0.25]]\n";
 
   if (!almostEqual(evalCtx.buffers.alpha[0], 1.0)) {
     std::cerr << "FAIL: spatial offdiag alpha mismatch\n";
@@ -1671,27 +1683,58 @@ static bool testSpatialOffdiagInitNumericPoint() {
   return true;
 }
 
-static bool testKerrLikeMetricUnsupported() {
+static bool testKerrLikeInitNumericPoint() {
   ::mlir::MLIRContext ctx;
-  try {
-    auto module = buildMLIRModuleFromFile(
-        "tests/fixtures/gr/kerr_like_3d_unsupported.tn",
-        CompilationMode::Executable, ctx);
-    (void)module;
-  } catch (const std::exception &e) {
-    const std::string msg = e.what();
-    if (msg.find("g_ti = 0 (beta unsupported)") == std::string::npos) {
-      std::cerr << "FAIL: Kerr-like unsupported diagnostic mismatch: " << msg
-                << "\n";
-      return false;
-    }
-    std::cout << "[numeric] Kerr-like unsupported case rejected as expected: "
-              << msg << "\n";
-    return true;
+  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/kerr_like_3d.tn",
+                                        CompilationMode::Executable, ctx);
+
+  InitEvalContext evalCtx;
+  const double M = 1.0;
+  const double a = 0.3;
+  const double r = 10.0;
+  const double theta = std::acos(-1.0) * 0.5;
+  setupSinglePointInitContext(evalCtx, M, r, theta, 0.0);
+  evalCtx.desc.params["a"] = a;
+
+  auto result = tensorium_mlir::evaluateTensoriumInit(*module, evalCtx.desc);
+  if (!result.ok) {
+    std::cerr << "FAIL: Kerr-like init evaluator failed: " << result.message
+              << "\n";
+    return false;
   }
 
-  std::cerr << "FAIL: Kerr-like metric should be rejected in current scope\n";
-  return false;
+  const double sin2 = std::sin(theta) * std::sin(theta);
+  const double f = 1.0 - 2.0 * M / r;
+  const double betaPhi = -(2.0 * a * M / r) * sin2;
+  const double gammaUPhPhi = 1.0 / (r * r * sin2);
+  const double betaDot = betaPhi * (gammaUPhPhi * betaPhi);
+  const double alphaExpected = std::sqrt(f + betaDot);
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Kerr-like reference point"
+            << " M=" << M << " a=" << a << " r=" << r
+            << " theta=" << theta << "\n"
+            << "  alpha       got=" << evalCtx.buffers.alpha[0]
+            << " expected=" << alphaExpected << "\n"
+            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << " expected=[[" << (1.0 / f) << ", 0, 0], [0, " << (r * r)
+            << ", 0], [0, 0, " << (r * r * sin2) << "]]\n"
+            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << " expected=[[" << f << ", 0, 0], [0, " << (1.0 / (r * r))
+            << ", 0], [0, 0, " << gammaUPhPhi << "]]\n";
+
+  if (!almostEqual(evalCtx.buffers.alpha[0], alphaExpected) ||
+      !almostEqual(evalCtx.buffers.gamma[0][0], 1.0 / f) ||
+      !almostEqual(evalCtx.buffers.gamma[4][0], r * r) ||
+      !almostEqual(evalCtx.buffers.gamma[8][0], r * r * sin2) ||
+      !almostEqual(evalCtx.buffers.gammaU[0][0], f) ||
+      !almostEqual(evalCtx.buffers.gammaU[4][0], 1.0 / (r * r)) ||
+      !almostEqual(evalCtx.buffers.gammaU[8][0], gammaUPhPhi)) {
+    std::cerr << "FAIL: Kerr-like numeric init mismatch\n";
+    return false;
+  }
+
+  return true;
 }
 
 static bool testInitRhsInvariantRejectsMetricInRhs() {
@@ -1757,7 +1800,7 @@ int main() {
       {"testReissnerNordstromInitNumericPoint",
        &testReissnerNordstromInitNumericPoint},
       {"testSpatialOffdiagInitNumericPoint", &testSpatialOffdiagInitNumericPoint},
-      {"testKerrLikeMetricUnsupported", &testKerrLikeMetricUnsupported},
+      {"testKerrLikeInitNumericPoint", &testKerrLikeInitNumericPoint},
       {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
   };
 
