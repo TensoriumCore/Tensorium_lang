@@ -71,6 +71,16 @@ can proceed with IEEE values:
 
 Only explicit unsupported semantic forms should raise errors.
 
+## Numeric Coverage Matrix (current)
+- Supported numeric init tests:
+  - Schwarzschild reference point (`M=1, r=10, theta=pi/2`),
+  - Schwarzschild edge cases (`theta=0`, `r=2M`),
+  - Reissner-Nordstrom-like diagonal metric (`M,Q` parameters),
+  - Symmetric spatial off-diagonal metric (3x3 inverse fallback path).
+- Explicit unsupported test:
+  - Kerr-like metric with non-zero `g_tphi` is rejected with
+    `decompose3p1_from_metric requires g_ti = 0 (beta unsupported)`.
+
 ## Sema/MLIRGen Builtin Contract (initial_data call expressions)
 Executable-mode call builtins in `initial_data` are constrained to:
 - `sin`, `sqrt`
@@ -91,4 +101,3 @@ The executable front API should expose descriptors equivalent to:
   - writable spans for `gammaU` 3x3 components
 
 The descriptor shape is part of this ABI contract and is covered by unit tests.
-
