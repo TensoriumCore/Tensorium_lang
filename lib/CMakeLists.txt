@@ -110,6 +110,7 @@ set(TENSORIUM_MLIR_COMMON_LINK_LIBS
   MLIRTransforms
   MLIRFuncDialect
   MLIRArithDialect
+  MLIRAffineDialect
   MLIRSCFDialect
   MLIRMemRefDialect
   MLIRMathDialect
@@ -169,6 +170,7 @@ add_library(tensoriumMlirTransforms
   tensorium_mlir/Dialect/Tensorium/Transforms/MetricLoweringPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/InitToStdPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/InitGridScfPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/InitGridAffinePass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/StencilLoweringPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/DissipationPass.cpp
 )

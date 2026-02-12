@@ -10,6 +10,7 @@
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 #include "tensorium_mlir/Target/MLIRGen/RhsEvaluator.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -1768,6 +1769,85 @@ static bool testSchwarzschildInitGridScfLowering() {
   return true;
 }
 
+static bool testSchwarzschildInitGridAffineLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto initGrid =
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_grid_affine");
+  if (!initGrid) {
+    std::cerr << "FAIL: missing tensorium_init_grid_affine after affine init lowering\n";
+    return false;
+  }
+  if (initGrid.getNumArguments() != 7) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must have 7 arguments, got "
+              << initGrid.getNumArguments() << "\n";
+    return false;
+  }
+
+  if (!initGrid.getArgument(0).getType().isF64()) {
+    std::cerr << "FAIL: tensorium_init_grid_affine arg 0 must be f64 (M)\n";
+    return false;
+  }
+
+  auto checkDynMemRef = [&](unsigned argIndex) {
+    auto memTy = llvm::dyn_cast<::mlir::MemRefType>(
+        initGrid.getArgument(argIndex).getType());
+    if (!memTy || memTy.getRank() != 1 ||
+        memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
+        !memTy.getElementType().isF64()) {
+      std::cerr << "FAIL: tensorium_init_grid_affine arg " << argIndex
+                << " must be memref<?xf64>\n";
+      return false;
+    }
+    return true;
+  };
+  for (unsigned arg = 1; arg < 7; ++arg) {
+    if (!checkDynMemRef(arg))
+      return false;
+  }
+
+  bool hasAffineFor = false;
+  bool callsInitPoint = false;
+  bool hasTensoriumOp = false;
+  std::string tensoriumOpName;
+  initGrid.walk([&](::mlir::Operation *op) {
+    if (llvm::isa<::mlir::affine::AffineForOp>(op))
+      hasAffineFor = true;
+    if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(op)) {
+      if (call.getCallee() == "tensorium_init_point")
+        callsInitPoint = true;
+    }
+    if (op != initGrid.getOperation() &&
+        op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+      tensoriumOpName = op->getName().getStringRef().str();
+    }
+  });
+  if (hasTensoriumOp) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must not keep tensorium ops, found "
+              << tensoriumOpName << "\n";
+    return false;
+  }
+  if (!hasAffineFor) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must contain affine.for\n";
+    return false;
+  }
+  if (!callsInitPoint) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must call tensorium_init_point\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSchwarzschildInitThetaZeroNoNaN() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -2502,6 +2582,8 @@ int main() {
        &testSchwarzschildInitPointStdLowering},
       {"testSchwarzschildInitGridScfLowering",
        &testSchwarzschildInitGridScfLowering},
+      {"testSchwarzschildInitGridAffineLowering",
+       &testSchwarzschildInitGridAffineLowering},
       {"testSchwarzschildInitThetaZeroNoNaN",
        &testSchwarzschildInitThetaZeroNoNaN},
       {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},
