@@ -21,6 +21,7 @@ struct MLIRGenOptions {
   bool enableEinsteinCanonicalizePass = false;
   bool enableEinsteinAnalyzeEinsumPass = false;
   bool enableMetricLoweringPass = false;
+  bool enableInitStdLoweringPass = false;
   bool enableStencilLoweringPass = false;
   double dx = 0.1;
   int order = 2;

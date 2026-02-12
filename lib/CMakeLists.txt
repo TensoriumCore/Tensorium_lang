@@ -167,6 +167,7 @@ add_library(tensoriumMlirTransforms
   tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinCanonicalizePass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinAnalyzeEinsumPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/MetricLoweringPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/InitToStdPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/StencilLoweringPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/DissipationPass.cpp
 )
