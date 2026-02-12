@@ -629,3 +629,22 @@ Planned commit sequence (one intention per commit):
 - Front-end guard:
   - Non-`dt` writes to declared fields inside `evolution` are rejected
     semantically (`Cannot redeclare field ... as local`).
+
+## 15) MLIR normalization passes
+
+- Normalization is applied **after MLIRGen module construction** in
+  `tensorium_mlir::buildMLIRModule(...)` (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp`).
+- Post-MLIRGen normalization pipeline is now explicit and configurable through
+  `MLIRGenOptions`:
+  - `enableMLIRCanonicalizePass` (default: `true`)
+  - `enableMLIRCSEPass` (default: `true`)
+  - `enableMLIRInlinePass` (default: `false`, optional)
+- Test policy:
+  - Unit/integration tests run with canonicalize + CSE enabled by default
+    (stable compact MLIR dumps),
+  - inline remains optional and off unless explicitly requested.
+- Structural regression test coverage:
+  - a dedicated UnitTests case compares Schwarzschild MLIR with/without
+    normalization and asserts compaction (`2*M/r` and `sin(theta)` duplicates
+    are reduced to single producers),
+  - init/rhs invariants remain validated on normalized MLIR.
