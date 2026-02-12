@@ -1557,6 +1557,74 @@ static bool testSchwarzschildInitNumericPoint() {
   return true;
 }
 
+static bool testSchwarzschildInitMetricLoweringPass() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto initFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
+  if (!initFunc) {
+    std::cerr << "FAIL: missing tensorium_init after metric lowering\n";
+    return false;
+  }
+
+  int metricOps = 0;
+  int decomposeOps = 0;
+  int init3p1Ops = 0;
+  int buildGammaOps = 0;
+  int buildGammaUOps = 0;
+  for (::mlir::Operation &op : initFunc.getBody().front()) {
+    metricOps += llvm::isa<tensorium::mlir::Metric4Op>(&op) ? 1 : 0;
+    decomposeOps +=
+        llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op) ? 1 : 0;
+    init3p1Ops += llvm::isa<tensorium::mlir::Init3P1Op>(&op) ? 1 : 0;
+    buildGammaOps += llvm::isa<tensorium::mlir::BuildCovTensor2Op>(&op) ? 1 : 0;
+    buildGammaUOps += llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op) ? 1 : 0;
+  }
+
+  if (metricOps != 0 || decomposeOps != 0 || init3p1Ops != 0) {
+    std::cerr << "FAIL: metric lowering pass must remove metric4/decompose/init3p1 "
+                 "from tensorium_init\n";
+    return false;
+  }
+  if (buildGammaOps == 0 || buildGammaUOps == 0) {
+    std::cerr << "FAIL: metric lowering pass must materialize gamma/gammaU builders\n";
+    return false;
+  }
+
+  InitEvalContext evalCtx;
+  const double M = 1.0;
+  const double r = 10.0;
+  const double theta = std::acos(-1.0) * 0.5;
+  setupSinglePointInitContext(evalCtx, M, r, theta, 0.0);
+
+  auto result = tensorium_mlir::evaluateTensoriumInit(*module, evalCtx.desc);
+  if (!result.ok) {
+    std::cerr << "FAIL: init evaluator failed after metric lowering: "
+              << result.message << "\n";
+    return false;
+  }
+
+  const double f = 1.0 - 2.0 * M / r;
+  if (!almostEqual(evalCtx.buffers.alpha[0], std::sqrt(f)) ||
+      !almostEqual(evalCtx.buffers.gamma[0][0], 1.0 / f) ||
+      !almostEqual(evalCtx.buffers.gamma[4][0], r * r) ||
+      !almostEqual(evalCtx.buffers.gamma[8][0], r * r) ||
+      !almostEqual(evalCtx.buffers.gammaU[0][0], f) ||
+      !almostEqual(evalCtx.buffers.gammaU[4][0], 1.0 / (r * r)) ||
+      !almostEqual(evalCtx.buffers.gammaU[8][0], 1.0 / (r * r))) {
+    std::cerr << "FAIL: metric lowering changed Schwarzschild init numerics\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildInitThetaZeroNoNaN() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -2274,6 +2342,8 @@ int main() {
       {"testSchwarzschildMLIRVerification", &testSchwarzschildMLIRVerification},
       {"testMLIRNormalizationPasses", &testMLIRNormalizationPasses},
       {"testSchwarzschildInitNumericPoint", &testSchwarzschildInitNumericPoint},
+      {"testSchwarzschildInitMetricLoweringPass",
+       &testSchwarzschildInitMetricLoweringPass},
       {"testSchwarzschildInitThetaZeroNoNaN",
        &testSchwarzschildInitThetaZeroNoNaN},
       {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},
