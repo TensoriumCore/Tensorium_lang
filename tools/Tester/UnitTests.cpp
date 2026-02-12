@@ -17,6 +17,7 @@
 #include <cmath>
 #include <functional>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1467,6 +1468,20 @@ static bool testSchwarzschildInitNumericPoint() {
 
   const double f = 1.0 - 2.0 * M / r;
   const double alphaExpected = std::sqrt(f);
+  std::cout << std::setprecision(17)
+            << "[numeric] Schwarzschild reference point"
+            << " M=" << M << " r=" << r << " theta=" << theta << "\n"
+            << "  alpha       got=" << evalCtx.buffers.alpha[0]
+            << " expected=" << alphaExpected << "\n"
+            << "  gamma diag  got=(" << evalCtx.buffers.gamma[0][0] << ", "
+            << evalCtx.buffers.gamma[4][0] << ", " << evalCtx.buffers.gamma[8][0]
+            << ") expected=(" << (1.0 / f) << ", " << (r * r) << ", " << (r * r)
+            << ")\n"
+            << "  gammaU diag got=(" << evalCtx.buffers.gammaU[0][0] << ", "
+            << evalCtx.buffers.gammaU[4][0] << ", "
+            << evalCtx.buffers.gammaU[8][0] << ") expected=(" << f << ", "
+            << (1.0 / (r * r)) << ", " << (1.0 / (r * r)) << ")\n";
+
   if (!almostEqual(evalCtx.buffers.alpha[0], alphaExpected)) {
     std::cerr << "FAIL: alpha mismatch at reference point, got "
               << evalCtx.buffers.alpha[0] << " expected " << alphaExpected
@@ -1514,6 +1529,9 @@ static bool testSchwarzschildInitThetaZeroNoNaN() {
               << evalCtx.buffers.gamma[8][0] << "\n";
     return false;
   }
+  std::cout << std::setprecision(17)
+            << "[numeric] Schwarzschild theta=0 edge case"
+            << " gamma_phiphi=" << evalCtx.buffers.gamma[8][0] << "\n";
   return true;
 }
 
@@ -1544,6 +1562,11 @@ static bool testSchwarzschildInitHorizonIEEE() {
     std::cerr << "FAIL: gammaU_rr expected to be finite zero at r=2M\n";
     return false;
   }
+  std::cout << std::setprecision(17)
+            << "[numeric] Schwarzschild horizon edge case (r=2M)"
+            << " alpha=" << evalCtx.buffers.alpha[0]
+            << " gamma_rr=" << evalCtx.buffers.gamma[0][0]
+            << " gammaU_rr=" << evalCtx.buffers.gammaU[0][0] << "\n";
   return true;
 }
 
