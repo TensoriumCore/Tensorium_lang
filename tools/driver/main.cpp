@@ -117,6 +117,7 @@ int main(int argc, char **argv) {
   bool enableIndexAnalyzePass = false;
   bool enableEinsteinCanonicalizePass = false;
   bool enableEinsteinAnalyzeEinsumPass = false;
+  bool enableMetricLoweringPass = false;
   bool enableStencilLoweringPass = false;
   bool enableDissipationPass = false;
   bool mlirDisableThreading = false;
@@ -159,6 +160,8 @@ int main(int argc, char **argv) {
       enableEinsteinCanonicalizePass = true;
     } else if (arg == "--tensorium-einstein-analyze-einsum") {
       enableEinsteinAnalyzeEinsumPass = true;
+    } else if (arg == "--tensorium-metric-lower") {
+      enableMetricLoweringPass = true;
     } else if (arg == "--tensorium-stencil-lower") {
       enableStencilLoweringPass = true;
     } else if (arg == "--tensorium-dissipation") {
@@ -319,6 +322,7 @@ int main(int argc, char **argv) {
         opts.enableIndexAnalyzePass = enableIndexAnalyzePass;
         opts.enableEinsteinCanonicalizePass = enableEinsteinCanonicalizePass;
         opts.enableEinsteinAnalyzeEinsumPass = enableEinsteinAnalyzeEinsumPass;
+        opts.enableMetricLoweringPass = enableMetricLoweringPass;
         opts.enableStencilLoweringPass = enableStencilLoweringPass;
         opts.enableDissipationPass = enableDissipationPass;
         opts.mlirDisableThreading = mlirDisableThreading;

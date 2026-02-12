@@ -887,6 +887,10 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
 static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
                                     const MLIRGenOptions &opts) {
 
+  if (opts.enableMetricLoweringPass) {
+    pm.addPass(tensorium::mlir::createTensoriumMetricLoweringPass());
+  }
+
   if (opts.enableEinsteinLoweringPass) {
     pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());
   }
