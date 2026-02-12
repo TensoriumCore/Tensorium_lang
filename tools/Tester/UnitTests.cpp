@@ -205,6 +205,199 @@ static std::string formatVector3(const std::array<std::array<double, 1>, 3> &v) 
   return os.str();
 }
 
+struct EvalPoint3 {
+  double r = 0.0;
+  double theta = 0.0;
+  double phi = 0.0;
+};
+
+static double schwarzschildFactor(double M, double r) {
+  return 1.0 - 2.0 * M / r;
+}
+
+static double schwarzschildGammaComponent(int a, int b, double M, double r,
+                                          double theta) {
+  const double f = schwarzschildFactor(M, r);
+  const double sinTheta = std::sin(theta);
+  const double sin2 = sinTheta * sinTheta;
+
+  if (a == 0 && b == 0)
+    return 1.0 / f;
+  if (a == 1 && b == 1)
+    return r * r;
+  if (a == 2 && b == 2)
+    return r * r * sin2;
+  return 0.0;
+}
+
+static double schwarzschildGammaUComponent(int a, int b, double M, double r,
+                                           double theta) {
+  const double f = schwarzschildFactor(M, r);
+  const double sinTheta = std::sin(theta);
+  const double sin2 = sinTheta * sinTheta;
+
+  if (a == 0 && b == 0)
+    return f;
+  if (a == 1 && b == 1)
+    return 1.0 / (r * r);
+  if (a == 2 && b == 2)
+    return 1.0 / (r * r * sin2);
+  return 0.0;
+}
+
+static double schwarzschildGammaDerivative(int derivAxis, int a, int b,
+                                           double M, double r, double theta) {
+  const double f = schwarzschildFactor(M, r);
+  const double sinTheta = std::sin(theta);
+  const double cosTheta = std::cos(theta);
+  const double sin2 = sinTheta * sinTheta;
+  const double twoMOverR2 = 2.0 * M / (r * r);
+
+  if (a == 0 && b == 0) {
+    if (derivAxis == 0)
+      return -twoMOverR2 / (f * f);
+    return 0.0;
+  }
+
+  if (a == 1 && b == 1) {
+    if (derivAxis == 0)
+      return 2.0 * r;
+    return 0.0;
+  }
+
+  if (a == 2 && b == 2) {
+    if (derivAxis == 0)
+      return 2.0 * r * sin2;
+    if (derivAxis == 1)
+      return 2.0 * r * r * sinTheta * cosTheta;
+    return 0.0;
+  }
+
+  return 0.0;
+}
+
+static bool lookupIndexValue(const std::unordered_map<std::string, int> &indexValues,
+                             const std::string &name, int &out) {
+  auto it = indexValues.find(name);
+  if (it == indexValues.end())
+    return false;
+  out = it->second;
+  return true;
+}
+
+static double evalSchwarzschildChristoffelLoweredScalar(
+    const backend::ExprIR *expr, std::unordered_map<std::string, int> &indexValues,
+    double M, const EvalPoint3 &point) {
+  using namespace backend;
+  if (!expr)
+    throw std::runtime_error("null expression in Christoffel evaluator");
+
+  switch (expr->kind) {
+  case ExprIR::Kind::Number: {
+    auto *n = static_cast<const NumberIR *>(expr);
+    return n->value;
+  }
+  case ExprIR::Kind::Var: {
+    auto *v = static_cast<const VarIR *>(expr);
+    if (v->tensorIndexNames.size() != 2)
+      throw std::runtime_error("Christoffel evaluator expects rank-2 var refs");
+    int a = -1;
+    int b = -1;
+    if (!lookupIndexValue(indexValues, v->tensorIndexNames[0], a) ||
+        !lookupIndexValue(indexValues, v->tensorIndexNames[1], b)) {
+      throw std::runtime_error("missing index binding for var reference");
+    }
+    if (v->name == "gamma")
+      return schwarzschildGammaComponent(a, b, M, point.r, point.theta);
+    if (v->name == "gammaU")
+      return schwarzschildGammaUComponent(a, b, M, point.r, point.theta);
+    throw std::runtime_error("unsupported field '" + v->name +
+                             "' in Christoffel evaluator");
+  }
+  case ExprIR::Kind::Binary: {
+    auto *b = static_cast<const BinaryIR *>(expr);
+    const double lhs = evalSchwarzschildChristoffelLoweredScalar(
+        b->lhs.get(), indexValues, M, point);
+    const double rhs = evalSchwarzschildChristoffelLoweredScalar(
+        b->rhs.get(), indexValues, M, point);
+    if (b->op == "+")
+      return lhs + rhs;
+    if (b->op == "-")
+      return lhs - rhs;
+    if (b->op == "*")
+      return lhs * rhs;
+    if (b->op == "/")
+      return lhs / rhs;
+    throw std::runtime_error("unsupported binary op in Christoffel evaluator");
+  }
+  case ExprIR::Kind::TensorProduct: {
+    auto *p = static_cast<const TensorProductIR *>(expr);
+    const double lhs = evalSchwarzschildChristoffelLoweredScalar(
+        p->lhs.get(), indexValues, M, point);
+    const double rhs = evalSchwarzschildChristoffelLoweredScalar(
+        p->rhs.get(), indexValues, M, point);
+    return lhs * rhs;
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *c = static_cast<const ContractionIR *>(expr);
+    std::function<double(size_t)> evalLoop = [&](size_t pos) -> double {
+      if (pos >= c->summedIndices.size()) {
+        return evalSchwarzschildChristoffelLoweredScalar(c->in.get(), indexValues,
+                                                         M, point);
+      }
+      const std::string &idxName = c->summedIndices[pos];
+      auto prev = indexValues.find(idxName);
+      const bool hadPrev = prev != indexValues.end();
+      const int prevValue = hadPrev ? prev->second : 0;
+
+      double accum = 0.0;
+      for (int axis = 0; axis < 3; ++axis) {
+        indexValues[idxName] = axis;
+        accum += evalLoop(pos + 1);
+      }
+
+      if (hadPrev)
+        indexValues[idxName] = prevValue;
+      else
+        indexValues.erase(idxName);
+      return accum;
+    };
+    return evalLoop(0);
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *d = static_cast<const PartialDerivativeIR *>(expr);
+    auto *innerVar = dynamic_cast<const VarIR *>(d->in.get());
+    if (!innerVar || innerVar->name != "gamma" ||
+        innerVar->tensorIndexNames.size() != 2) {
+      throw std::runtime_error(
+          "Christoffel evaluator expects derivative over gamma component");
+    }
+
+    int derivAxis = -1;
+    int a = -1;
+    int b = -1;
+    if (!lookupIndexValue(indexValues, d->coordIndex, derivAxis) ||
+        !lookupIndexValue(indexValues, innerVar->tensorIndexNames[0], a) ||
+        !lookupIndexValue(indexValues, innerVar->tensorIndexNames[1], b)) {
+      throw std::runtime_error("missing index binding for derivative");
+    }
+    return schwarzschildGammaDerivative(derivAxis, a, b, M, point.r,
+                                        point.theta);
+  }
+  case ExprIR::Kind::Call:
+  case ExprIR::Kind::IndexRename:
+  case ExprIR::Kind::IndexPermute:
+  case ExprIR::Kind::Trace:
+  case ExprIR::Kind::Gradient:
+  case ExprIR::Kind::CovariantDerivative:
+  case ExprIR::Kind::Divergence:
+    throw std::runtime_error(
+        "unsupported expression kind in Christoffel evaluator");
+  }
+
+  throw std::runtime_error("unexpected expression kind in Christoffel evaluator");
+}
+
 static bool valueDependsOnImpl(
     ::mlir::Value root,
     const std::function<bool(::mlir::Operation *)> &predicate,
@@ -1927,6 +2120,207 @@ static bool testKerrLikeHasNonZeroBetaPhi() {
   return true;
 }
 
+static bool testSchwarzschildChristoffelNumericPoint() {
+  const auto module = buildModuleFromFile(
+      "tests/fixtures/gr/schwarzschild_christoffel_3d.tn",
+      CompilationMode::Executable);
+
+  if (module.evolutions.empty() || module.evolutions[0].equations.empty()) {
+    std::cerr << "FAIL: Christoffel fixture did not produce evolution equations\n";
+    return false;
+  }
+
+  const backend::EquationIR *eq = nullptr;
+  for (const auto &candidate : module.evolutions[0].equations) {
+    if (candidate.fieldName == "Christoffel") {
+      eq = &candidate;
+      break;
+    }
+  }
+  if (!eq || !eq->rhs) {
+    std::cerr << "FAIL: missing Christoffel equation in backend IR\n";
+    return false;
+  }
+
+  const double M = 1.0;
+  EvalPoint3 point;
+  point.r = 10.0;
+  point.theta = std::acos(-1.0) * 0.5;
+  point.phi = 0.0;
+
+  auto evalGamma = [&](int i, int j, int k) {
+    std::unordered_map<std::string, int> idx = {
+        {"i", i}, {"j", j}, {"k", k}};
+    return evalSchwarzschildChristoffelLoweredScalar(eq->rhs.get(), idx, M,
+                                                     point);
+  };
+
+  const double gamma_r_rr = evalGamma(0, 0, 0);
+  const double gamma_r_thth = evalGamma(0, 1, 1);
+  const double gamma_r_phph = evalGamma(0, 2, 2);
+  const double gamma_th_rth = evalGamma(1, 0, 1);
+  const double gamma_ph_rph = evalGamma(2, 0, 2);
+  const double gamma_ph_thph = evalGamma(2, 1, 2);
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Schwarzschild Christoffel point M=1 r=10 theta=pi/2\n"
+            << "  Gamma^r_rr      got=" << gamma_r_rr
+            << " expected=-0.0125\n"
+            << "  Gamma^r_thetatheta got=" << gamma_r_thth
+            << " expected=-8\n"
+            << "  Gamma^r_phiphi  got=" << gamma_r_phph
+            << " expected=-8\n"
+            << "  Gamma^theta_rtheta got=" << gamma_th_rth
+            << " expected=0.1\n"
+            << "  Gamma^phi_rphi  got=" << gamma_ph_rph
+            << " expected=0.1\n"
+            << "  Gamma^phi_thetaphi got=" << gamma_ph_thph
+            << " expected=0\n";
+
+  if (!almostEqual(gamma_r_rr, -0.0125) || !almostEqual(gamma_r_thth, -8.0) ||
+      !almostEqual(gamma_r_phph, -8.0) || !almostEqual(gamma_th_rth, 0.1) ||
+      !almostEqual(gamma_ph_rph, 0.1) ||
+      !almostEqual(gamma_ph_thph, 0.0)) {
+    std::cerr << "FAIL: Schwarzschild Christoffel numeric mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSchwarzschildChristoffelMLIRStructure() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile(
+      "tests/fixtures/gr/schwarzschild_christoffel_3d.tn",
+      CompilationMode::Executable, ctx);
+
+  InitRhsLayout layout;
+  std::string layoutError;
+  if (!verifyInitRhsLayout(*module, layout, layoutError)) {
+    std::cerr << "FAIL: " << layoutError << "\n";
+    return false;
+  }
+
+  tensorium::mlir::Init3P1Op init3p1Op;
+  std::vector<::mlir::Value> initAssignedEntryValues;
+  auto pushUniqueValue = [](std::vector<::mlir::Value> &vals, ::mlir::Value v) {
+    if (llvm::find(vals, v) == vals.end())
+      vals.push_back(v);
+  };
+
+  for (::mlir::Operation &op : layout.initFunc.getBody().front()) {
+    if (auto init = llvm::dyn_cast<tensorium::mlir::Init3P1Op>(&op))
+      init3p1Op = init;
+    if (auto assign = llvm::dyn_cast<tensorium::mlir::AssignOp>(&op)) {
+      if (!init3p1Op)
+        continue;
+      if (assign.getRhs() == init3p1Op.getAlpha() ||
+          assign.getRhs() == init3p1Op.getGamma() ||
+          assign.getRhs() == init3p1Op.getGammaU()) {
+        auto arg = llvm::dyn_cast<::mlir::BlockArgument>(assign.getField());
+        if (!arg || arg.getArgNumber() >= layout.initCall.getNumOperands()) {
+          std::cerr << "FAIL: init assign target mapping is invalid\n";
+          return false;
+        }
+        pushUniqueValue(initAssignedEntryValues,
+                        layout.initCall.getOperand(arg.getArgNumber()));
+      }
+    }
+  }
+
+  auto valueFeedsContract = [](::mlir::Value v) {
+    for (::mlir::Operation *user : v.getUsers()) {
+      auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(user);
+      if (!mul)
+        continue;
+      for (::mlir::Operation *mulUser : mul.getRes().getUsers()) {
+        if (llvm::isa<tensorium::mlir::ContractOp>(mulUser))
+          return true;
+      }
+    }
+    return false;
+  };
+
+  int derivCount = 0;
+  int addCount = 0;
+  int subCount = 0;
+  int mulCount = 0;
+  int contractCount = 0;
+  int dtAssignCount = 0;
+  bool hasChristoffelMagicOp = false;
+  bool rhsBuildsLocalGammaU = false;
+  bool gammaUFromInitAssignedFeedsContract = false;
+  bool gammaUContractUsesNonInitSource = false;
+
+  for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
+    derivCount += llvm::isa<tensorium::mlir::DerivOp>(&op) ? 1 : 0;
+    addCount += llvm::isa<tensorium::mlir::AddOp>(&op) ? 1 : 0;
+    subCount += llvm::isa<tensorium::mlir::SubOp>(&op) ? 1 : 0;
+    mulCount += llvm::isa<tensorium::mlir::MulOp>(&op) ? 1 : 0;
+    contractCount += llvm::isa<tensorium::mlir::ContractOp>(&op) ? 1 : 0;
+    rhsBuildsLocalGammaU |= llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op);
+    hasChristoffelMagicOp |= (op.getName().getStringRef() == "tensorium.christoffel");
+
+    if (auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op)) {
+      ++dtAssignCount;
+      auto idx = dt.getIndices();
+      if (idx.size() != 3) {
+        std::cerr << "FAIL: Christoffel dt_assign must carry 3 indices\n";
+        return false;
+      }
+    }
+
+    auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op);
+    if (!ref)
+      continue;
+    auto srcTy =
+        llvm::dyn_cast<tensorium::mlir::FieldType>(ref.getSource().getType());
+    if (!srcTy || srcTy.getUp() != 2 || srcTy.getDown() != 0)
+      continue;
+    auto idx = ref.getIndices();
+    if (!idx || idx->size() != 2)
+      continue;
+    if (!valueFeedsContract(ref.getResult()))
+      continue;
+
+    bool fromInitAssignedField = false;
+    if (auto arg = llvm::dyn_cast<::mlir::BlockArgument>(ref.getSource())) {
+      if (arg.getArgNumber() < layout.rhsCall.getNumOperands()) {
+        ::mlir::Value entryOperand =
+            layout.rhsCall.getOperand(arg.getArgNumber());
+        fromInitAssignedField =
+            llvm::find(initAssignedEntryValues, entryOperand) !=
+            initAssignedEntryValues.end();
+      }
+    }
+
+    if (fromInitAssignedField)
+      gammaUFromInitAssignedFeedsContract = true;
+    else
+      gammaUContractUsesNonInitSource = true;
+  }
+
+  if (hasChristoffelMagicOp) {
+    std::cerr << "FAIL: Christoffel lowering emitted forbidden magic op\n";
+    return false;
+  }
+  if (rhsBuildsLocalGammaU) {
+    std::cerr << "FAIL: tensorium_rhs must not construct local gammaU values\n";
+    return false;
+  }
+  if (!gammaUFromInitAssignedFeedsContract || gammaUContractUsesNonInitSource) {
+    std::cerr << "FAIL: Christoffel contract must consume init-assigned gammaU field\n";
+    return false;
+  }
+  if (derivCount < 3 || addCount < 1 || subCount < 1 || mulCount < 2 ||
+      contractCount < 1 || dtAssignCount != 1) {
+    std::cerr << "FAIL: Christoffel MLIR structure is incomplete\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testInitRhsInvariantRejectsMetricInRhs() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -1994,6 +2388,10 @@ int main() {
       {"testKerrLikeReconstructMetricPoint",
        &testKerrLikeReconstructMetricPoint},
       {"testKerrLikeHasNonZeroBetaPhi", &testKerrLikeHasNonZeroBetaPhi},
+      {"testSchwarzschildChristoffelNumericPoint",
+       &testSchwarzschildChristoffelNumericPoint},
+      {"testSchwarzschildChristoffelMLIRStructure",
+       &testSchwarzschildChristoffelMLIRStructure},
       {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
   };
 

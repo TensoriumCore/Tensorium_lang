@@ -1,0 +1,43 @@
+# Schwarzschild 3D fixture with Christoffel construction from gamma/gammaU
+field metric g[mu,nu]
+field inverse_metric gU[mu,nu]
+field scalar alpha
+field cov_tensor2 gamma[i,j]
+field con_tensor2 gammaU[i,j]
+field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
+
+simulation {
+  coordinates = spherical
+  dimension = 3
+  resolution = [32,32,32]
+
+  time {
+    dt = 0.001
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+initial_data {
+  enforce_symmetry = true
+  metric4 g[mu,nu] = [
+    [-(1 - 2*M/r), 0, 0, 0],
+    [0, 1/(1 - 2*M/r), 0, 0],
+    [0, 0, r*r, 0],
+    [0, 0, 0, r*r*sin(theta)*sin(theta)]
+  ]
+  split_3p1 {
+    alpha -> alpha;
+    gamma -> gamma[i,j];
+    gammaU -> gammaU[i,j];
+  }
+}
+
+evolution SchwarzschildChristoffel {
+  dt Christoffel[i,j,k] = christoffel(gamma, gammaU)
+}

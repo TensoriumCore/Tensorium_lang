@@ -6,6 +6,8 @@ namespace tensorium {
 bool isExecutableBuiltin(std::string_view name) {
   if (name == "contract")
     return true;
+  if (name == "christoffel")
+    return true;
   if (name == "gradient" || name == "grad")
     return true;
   if (name == "divergence" || name == "div")

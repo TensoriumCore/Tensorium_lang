@@ -123,6 +123,7 @@ INITIAL_DATA_VALID_TESTS=(
 GR_FIXTURES=(
   tests/fixtures/gr/schwarzschild_2d.tn
   tests/fixtures/gr/schwarzschild_3d.tn
+  tests/fixtures/gr/schwarzschild_christoffel_3d.tn
   tests/fixtures/gr/reissner_nordstrom_3d.tn
   tests/fixtures/gr/spatial_offdiag_3d.tn
   tests/fixtures/gr/kerr_like_3d.tn

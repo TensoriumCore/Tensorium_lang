@@ -296,8 +296,49 @@ FieldDecl Parser::parseFieldDecl() {
 
   TensorKind k;
   int u = 0, d = 0;
+  bool consumedType = false;
 
-  if (cur.type == TokenType::KwScalar) {
+  if (cur.type == TokenType::Identifier && cur.text == "mixed_tensor") {
+    k = TensorKind::MixedTensor;
+    advance();
+    expect(TokenType::LParen);
+    bool haveUp = false;
+    bool haveDown = false;
+    while (cur.type != TokenType::RParen) {
+      if (cur.type != TokenType::Identifier)
+        syntaxError("expected mixed_tensor attribute");
+      const std::string attr = cur.text;
+      advance();
+      expect(TokenType::Equals);
+      if (cur.type != TokenType::Number)
+        syntaxError("mixed_tensor attribute expects integer");
+      int value = std::stoi(cur.text);
+      if (attr == "up") {
+        if (haveUp)
+          syntaxError("duplicate up attribute in mixed_tensor");
+        u = value;
+        haveUp = true;
+      } else if (attr == "down") {
+        if (haveDown)
+          syntaxError("duplicate down attribute in mixed_tensor");
+        d = value;
+        haveDown = true;
+      } else {
+        syntaxError("unknown mixed_tensor attribute");
+      }
+      advance();
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      if (cur.type != TokenType::RParen)
+        syntaxError("expected ',' or ')' in mixed_tensor");
+    }
+    expect(TokenType::RParen);
+    if (!haveUp && !haveDown)
+      syntaxError("mixed_tensor requires up or down attribute");
+    consumedType = true;
+  } else if (cur.type == TokenType::KwScalar) {
     k = TensorKind::Scalar;
   } else if (cur.type == TokenType::KwVector) {
     k = TensorKind::Vector;
@@ -333,7 +374,8 @@ FieldDecl Parser::parseFieldDecl() {
     syntaxError("Unknown field type '" + cur.text + "'");
   }
 
-  advance();
+  if (!consumedType)
+    advance();
 
   if (cur.type != TokenType::Identifier)
     syntaxError("Expected field name");
