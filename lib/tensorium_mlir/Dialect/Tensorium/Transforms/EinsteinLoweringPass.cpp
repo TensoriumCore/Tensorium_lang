@@ -21,6 +21,39 @@ static ArrayAttr getIndicesAttr(::mlir::Operation *op) {
   return op->getAttrOfType<ArrayAttr>("indices");
 }
 
+static bool getSymbolicIndices(::mlir::Operation *op,
+                               llvm::SmallVector<llvm::StringRef, 4> &out) {
+  out.clear();
+  if (!op)
+    return false;
+
+  if (auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(op)) {
+    auto idx = getIndicesAttr(ref.getOperation());
+    if (!idx)
+      return false;
+    for (auto a : idx)
+      out.push_back(cast<StringAttr>(a).getValue());
+    return true;
+  }
+
+  if (auto deriv = llvm::dyn_cast<tensorium::mlir::DerivOp>(op)) {
+    auto baseRef = deriv.getIn().getDefiningOp<tensorium::mlir::RefOp>();
+    auto derivIdxAttr = deriv->getAttrOfType<StringAttr>("index");
+    if (!baseRef || !derivIdxAttr)
+      return false;
+
+    auto baseIdx = getIndicesAttr(baseRef.getOperation());
+    if (!baseIdx)
+      return false;
+    for (auto a : baseIdx)
+      out.push_back(cast<StringAttr>(a).getValue());
+    out.push_back(derivIdxAttr.getValue());
+    return true;
+  }
+
+  return false;
+}
+
 static bool
 collectTensorRefsAndScalars(mlir::Value v,
                             llvm::SmallVector<mlir::Operation *, 8> &tensorRefs,
@@ -46,6 +79,11 @@ collectTensorRefsAndScalars(mlir::Value v,
 
   if (auto ctr = v.getDefiningOp<tensorium::mlir::ContractOp>()) {
     return collectTensorRefsAndScalars(ctr.getIn(), tensorRefs, scalars);
+  }
+
+  if (auto deriv = v.getDefiningOp<tensorium::mlir::DerivOp>()) {
+    tensorRefs.push_back(deriv.getOperation());
+    return true;
   }
 
   if (auto mul = v.getDefiningOp<tensorium::mlir::MulOp>()) {
@@ -114,8 +152,8 @@ struct LowerContractToEinsum final
       llvm::SmallVector<llvm::SmallVector<llvm::StringRef, 4>, 8> ins;
       for (auto *r : tensorRefs) {
         llvm::SmallVector<llvm::StringRef, 4> v;
-        for (auto a : getIndicesAttr(r))
-          v.push_back(cast<StringAttr>(a).getValue());
+        if (!getSymbolicIndices(r, v))
+          return failure();
         ins.push_back(v);
       }
 
@@ -208,14 +246,11 @@ struct LowerContractOp final : OpRewritePattern<tensorium::mlir::ContractOp> {
     ins.reserve(tensorRefs.size());
 
     for (auto *r : tensorRefs) {
-      auto idxAttr = getIndicesAttr(r);
-      if (!idxAttr)
+      llvm::SmallVector<llvm::StringRef, 4> v;
+      if (!getSymbolicIndices(r, v))
         return false;
 
-      llvm::SmallVector<llvm::StringRef, 4> v;
-      for (auto a : idxAttr) {
-        auto s = cast<StringAttr>(a).getValue();
-        v.push_back(s);
+      for (auto s : v) {
         counts[s] += 1;
       }
       ins.push_back(std::move(v));
@@ -242,6 +277,70 @@ struct LowerContractOp final : OpRewritePattern<tensorium::mlir::ContractOp> {
 
   LogicalResult matchAndRewrite(tensorium::mlir::ContractOp op,
                                 PatternRewriter &rewriter) const override {
+    auto createContractLike = [&](Value in) -> Value {
+      auto c = tensorium::mlir::ContractOp::create(rewriter, op.getLoc(),
+                                                   op.getType(), in);
+      if (auto sum = op->getAttr("sum_indices"))
+        c->setAttr("sum_indices", sum);
+      return c.getResult();
+    };
+
+    if (auto add = op.getIn().getDefiningOp<tensorium::mlir::AddOp>()) {
+      Value c0 = createContractLike(add.getLhs());
+      Value c1 = createContractLike(add.getRhs());
+      rewriter.replaceOpWithNewOp<tensorium::mlir::AddOp>(op, op.getType(), c0, c1);
+      return success();
+    }
+    if (auto sub = op.getIn().getDefiningOp<tensorium::mlir::SubOp>()) {
+      Value c0 = createContractLike(sub.getLhs());
+      Value c1 = createContractLike(sub.getRhs());
+      rewriter.replaceOpWithNewOp<tensorium::mlir::SubOp>(op, op.getType(), c0, c1);
+      return success();
+    }
+
+    if (auto mul = op.getIn().getDefiningOp<tensorium::mlir::MulOp>()) {
+      if (auto add = mul.getLhs().getDefiningOp<tensorium::mlir::AddOp>()) {
+        auto t0 = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), mul.getType(),
+                                                 add.getLhs(), mul.getRhs());
+        auto t1 = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), mul.getType(),
+                                                 add.getRhs(), mul.getRhs());
+        Value c0 = createContractLike(t0.getRes());
+        Value c1 = createContractLike(t1.getRes());
+        rewriter.replaceOpWithNewOp<tensorium::mlir::AddOp>(op, op.getType(), c0, c1);
+        return success();
+      }
+      if (auto sub = mul.getLhs().getDefiningOp<tensorium::mlir::SubOp>()) {
+        auto t0 = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), mul.getType(),
+                                                 sub.getLhs(), mul.getRhs());
+        auto t1 = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), mul.getType(),
+                                                 sub.getRhs(), mul.getRhs());
+        Value c0 = createContractLike(t0.getRes());
+        Value c1 = createContractLike(t1.getRes());
+        rewriter.replaceOpWithNewOp<tensorium::mlir::SubOp>(op, op.getType(), c0, c1);
+        return success();
+      }
+      if (auto add = mul.getRhs().getDefiningOp<tensorium::mlir::AddOp>()) {
+        auto t0 = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), mul.getType(),
+                                                 mul.getLhs(), add.getLhs());
+        auto t1 = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), mul.getType(),
+                                                 mul.getLhs(), add.getRhs());
+        Value c0 = createContractLike(t0.getRes());
+        Value c1 = createContractLike(t1.getRes());
+        rewriter.replaceOpWithNewOp<tensorium::mlir::AddOp>(op, op.getType(), c0, c1);
+        return success();
+      }
+      if (auto sub = mul.getRhs().getDefiningOp<tensorium::mlir::SubOp>()) {
+        auto t0 = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), mul.getType(),
+                                                 mul.getLhs(), sub.getLhs());
+        auto t1 = tensorium::mlir::MulOp::create(rewriter, op.getLoc(), mul.getType(),
+                                                 mul.getLhs(), sub.getRhs());
+        Value c0 = createContractLike(t0.getRes());
+        Value c1 = createContractLike(t1.getRes());
+        rewriter.replaceOpWithNewOp<tensorium::mlir::SubOp>(op, op.getType(), c0, c1);
+        return success();
+      }
+    }
+
     llvm::SmallVector<Operation *, 8> tensorRefs;
     llvm::SmallVector<Value, 8> scalars;
 
