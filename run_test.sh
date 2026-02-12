@@ -84,6 +84,8 @@ ERROR_TESTS=(
 SEMANTIC_EINSTEIN_VALID_TESTS=(
   tests/semantic/einstein/01_valid_contraction.tn
   tests/semantic/einstein/04_valid_two_sums.tn
+  tests/semantic/einstein/canon/01_contract_ij.tn
+  tests/semantic/einstein/canon/02_contract_mn.tn
 )
 
 SEMANTIC_EINSTEIN_ERROR_TESTS=(

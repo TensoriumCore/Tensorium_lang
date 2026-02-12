@@ -17,6 +17,14 @@ static void sortAndUnique(std::vector<std::string> &indices) {
   indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
 }
 
+static void filterTensorIndexNames(std::vector<std::string> &indices) {
+  indices.erase(std::remove_if(indices.begin(), indices.end(),
+                               [](const std::string &idx) {
+                                 return !core::isTensorIndexName(idx);
+                               }),
+                indices.end());
+}
+
 static void collectIndexUses(const backend::ExprIR *expr,
                              std::map<std::string, int> &counts) {
   using backend::ExprIR;
@@ -114,8 +122,8 @@ collectRepeatedIndices(const backend::ExprIR *expr) {
   return repeated;
 }
 
-static void collectUsedIndexNames(const backend::ExprIR *expr,
-                                  std::set<std::string> &used) {
+static void collectFreeIndices(const backend::ExprIR *expr,
+                               std::set<std::string> &free) {
   using backend::ExprIR;
   if (!expr)
     return;
@@ -127,100 +135,224 @@ static void collectUsedIndexNames(const backend::ExprIR *expr,
     auto *var = static_cast<const backend::VarIR *>(expr);
     for (const auto &name : var->tensorIndexNames) {
       if (core::isTensorIndexName(name))
-        used.insert(name);
+        free.insert(name);
     }
     return;
   }
   case ExprIR::Kind::Binary: {
     auto *bin = static_cast<const backend::BinaryIR *>(expr);
-    collectUsedIndexNames(bin->lhs.get(), used);
-    collectUsedIndexNames(bin->rhs.get(), used);
+    collectFreeIndices(bin->lhs.get(), free);
+    collectFreeIndices(bin->rhs.get(), free);
     return;
   }
   case ExprIR::Kind::Call: {
     auto *call = static_cast<const backend::CallIR *>(expr);
     for (const auto &arg : call->args)
-      collectUsedIndexNames(arg.get(), used);
+      collectFreeIndices(arg.get(), free);
     return;
   }
   case ExprIR::Kind::TensorProduct: {
     auto *prod = static_cast<const backend::TensorProductIR *>(expr);
-    collectUsedIndexNames(prod->lhs.get(), used);
-    collectUsedIndexNames(prod->rhs.get(), used);
+    collectFreeIndices(prod->lhs.get(), free);
+    collectFreeIndices(prod->rhs.get(), free);
     return;
   }
   case ExprIR::Kind::Contraction: {
     auto *ctr = static_cast<const backend::ContractionIR *>(expr);
-    collectUsedIndexNames(ctr->in.get(), used);
+    collectFreeIndices(ctr->in.get(), free);
     for (const auto &name : ctr->summedIndices) {
       if (core::isTensorIndexName(name))
-        used.insert(name);
+        free.erase(name);
     }
     return;
   }
   case ExprIR::Kind::IndexRename: {
     auto *rename = static_cast<const backend::IndexRenameIR *>(expr);
-    collectUsedIndexNames(rename->in.get(), used);
-    if (core::isTensorIndexName(rename->from))
-      used.insert(rename->from);
-    if (core::isTensorIndexName(rename->to))
-      used.insert(rename->to);
+    collectFreeIndices(rename->in.get(), free);
+    if (core::isTensorIndexName(rename->from) &&
+        core::isTensorIndexName(rename->to)) {
+      auto it = free.find(rename->from);
+      if (it != free.end()) {
+        free.erase(it);
+        free.insert(rename->to);
+      }
+    }
     return;
   }
   case ExprIR::Kind::IndexPermute: {
     auto *perm = static_cast<const backend::IndexPermuteIR *>(expr);
-    collectUsedIndexNames(perm->in.get(), used);
-    for (const auto &name : perm->order) {
-      if (core::isTensorIndexName(name))
-        used.insert(name);
-    }
+    collectFreeIndices(perm->in.get(), free);
     return;
   }
   case ExprIR::Kind::Trace: {
     auto *trace = static_cast<const backend::TraceIR *>(expr);
-    collectUsedIndexNames(trace->in.get(), used);
+    collectFreeIndices(trace->in.get(), free);
     for (const auto &name : trace->tracedIndices) {
       if (core::isTensorIndexName(name))
-        used.insert(name);
+        free.erase(name);
     }
     return;
   }
   case ExprIR::Kind::PartialDerivative: {
     auto *diff = static_cast<const backend::PartialDerivativeIR *>(expr);
-    collectUsedIndexNames(diff->in.get(), used);
+    collectFreeIndices(diff->in.get(), free);
     if (core::isTensorIndexName(diff->coordIndex))
-      used.insert(diff->coordIndex);
+      free.insert(diff->coordIndex);
     return;
   }
   case ExprIR::Kind::Gradient: {
     auto *grad = static_cast<const backend::GradientIR *>(expr);
-    collectUsedIndexNames(grad->in.get(), used);
+    collectFreeIndices(grad->in.get(), free);
     return;
   }
   case ExprIR::Kind::CovariantDerivative: {
     auto *diff = static_cast<const backend::CovariantDerivativeIR *>(expr);
-    collectUsedIndexNames(diff->in.get(), used);
+    collectFreeIndices(diff->in.get(), free);
     if (core::isTensorIndexName(diff->derivIndex))
-      used.insert(diff->derivIndex);
+      free.insert(diff->derivIndex);
     return;
   }
   case ExprIR::Kind::Divergence: {
     auto *div = static_cast<const backend::DivergenceIR *>(expr);
-    collectUsedIndexNames(div->in.get(), used);
+    collectFreeIndices(div->in.get(), free);
     if (core::isTensorIndexName(div->contractedIndex))
-      used.insert(div->contractedIndex);
+      free.erase(div->contractedIndex);
     return;
   }
   }
 }
 
-static std::string pickFreshIndex(const std::set<std::string> &used) {
+static std::vector<std::string> pickCanonicalDummyTargets(
+    const std::set<std::string> &free, size_t needed) {
+  std::vector<std::string> out;
+  out.reserve(needed);
+
   for (char c : core::kTensorIndices) {
+    if (out.size() >= needed)
+      break;
     std::string candidate(1, c);
-    if (used.find(candidate) == used.end())
-      return candidate;
+    if (free.find(candidate) == free.end())
+      out.push_back(std::move(candidate));
   }
-  return {};
+  return out;
+}
+
+static void remapIndexName(const std::map<std::string, std::string> &mapping,
+                           std::string &name) {
+  auto it = mapping.find(name);
+  if (it != mapping.end())
+    name = it->second;
+}
+
+static void remapIndexList(const std::map<std::string, std::string> &mapping,
+                           std::vector<std::string> &indices) {
+  for (auto &idx : indices)
+    remapIndexName(mapping, idx);
+}
+
+static void applyIndexMapping(backend::ExprIR *expr,
+                              const std::map<std::string, std::string> &mapping) {
+  using backend::ExprIR;
+  if (!expr || mapping.empty())
+    return;
+
+  switch (expr->kind) {
+  case ExprIR::Kind::Number:
+    return;
+  case ExprIR::Kind::Var: {
+    auto *var = static_cast<backend::VarIR *>(expr);
+    remapIndexList(mapping, var->tensorIndexNames);
+    return;
+  }
+  case ExprIR::Kind::Binary: {
+    auto *bin = static_cast<backend::BinaryIR *>(expr);
+    applyIndexMapping(bin->lhs.get(), mapping);
+    applyIndexMapping(bin->rhs.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::Call: {
+    auto *call = static_cast<backend::CallIR *>(expr);
+    for (auto &arg : call->args)
+      applyIndexMapping(arg.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::TensorProduct: {
+    auto *prod = static_cast<backend::TensorProductIR *>(expr);
+    applyIndexMapping(prod->lhs.get(), mapping);
+    applyIndexMapping(prod->rhs.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *ctr = static_cast<backend::ContractionIR *>(expr);
+    remapIndexList(mapping, ctr->summedIndices);
+    applyIndexMapping(ctr->in.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *rename = static_cast<backend::IndexRenameIR *>(expr);
+    remapIndexName(mapping, rename->from);
+    remapIndexName(mapping, rename->to);
+    applyIndexMapping(rename->in.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *perm = static_cast<backend::IndexPermuteIR *>(expr);
+    remapIndexList(mapping, perm->order);
+    applyIndexMapping(perm->in.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::Trace: {
+    auto *trace = static_cast<backend::TraceIR *>(expr);
+    remapIndexList(mapping, trace->tracedIndices);
+    applyIndexMapping(trace->in.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *diff = static_cast<backend::PartialDerivativeIR *>(expr);
+    remapIndexName(mapping, diff->coordIndex);
+    applyIndexMapping(diff->in.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *grad = static_cast<backend::GradientIR *>(expr);
+    applyIndexMapping(grad->in.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    auto *diff = static_cast<backend::CovariantDerivativeIR *>(expr);
+    remapIndexName(mapping, diff->derivIndex);
+    applyIndexMapping(diff->in.get(), mapping);
+    return;
+  }
+  case ExprIR::Kind::Divergence: {
+    auto *div = static_cast<backend::DivergenceIR *>(expr);
+    remapIndexName(mapping, div->contractedIndex);
+    applyIndexMapping(div->in.get(), mapping);
+    return;
+  }
+  }
+}
+
+static std::map<std::string, std::string>
+buildDummyAlphaRenamingMap(const backend::ContractionIR &ctr) {
+  std::set<std::string> free;
+  collectFreeIndices(ctr.in.get(), free);
+  for (const auto &idx : ctr.summedIndices)
+    free.erase(idx);
+
+  std::vector<std::string> targets =
+      pickCanonicalDummyTargets(free, ctr.summedIndices.size());
+
+  std::map<std::string, std::string> mapping;
+  for (size_t i = 0; i < ctr.summedIndices.size(); ++i) {
+    if (i >= targets.size())
+      break;
+    const std::string &from = ctr.summedIndices[i];
+    const std::string &to = targets[i];
+    if (from != to)
+      mapping[from] = to;
+  }
+  return mapping;
 }
 
 static void canonicalizeExpr(std::unique_ptr<backend::ExprIR> &expr) {
@@ -253,6 +385,15 @@ static void canonicalizeExpr(std::unique_ptr<backend::ExprIR> &expr) {
   case ExprIR::Kind::Contraction: {
     auto *ctr = static_cast<backend::ContractionIR *>(expr.get());
     canonicalizeExpr(ctr->in);
+
+    if (ctr->in && ctr->in->kind == ExprIR::Kind::Contraction) {
+      auto inner = static_cast<backend::ContractionIR *>(ctr->in.get());
+      for (const auto &idx : inner->summedIndices)
+        ctr->summedIndices.push_back(idx);
+      ctr->in = std::move(inner->in);
+    }
+
+    filterTensorIndexNames(ctr->summedIndices);
     sortAndUnique(ctr->summedIndices);
 
     if (ctr->summedIndices.empty()) {
@@ -260,51 +401,39 @@ static void canonicalizeExpr(std::unique_ptr<backend::ExprIR> &expr) {
       return;
     }
 
-    std::map<std::string, int> counts;
-    collectIndexUses(ctr->in.get(), counts);
-
-    std::set<std::string> used;
-    collectUsedIndexNames(ctr->in.get(), used);
-    for (const auto &name : ctr->summedIndices)
-      used.insert(name);
-
-    for (auto &name : ctr->summedIndices) {
-      auto it = counts.find(name);
-      if (it == counts.end() || it->second <= 2)
-        continue;
-
-      std::string fresh = pickFreshIndex(used);
-      if (fresh.empty() || fresh == name)
-        continue;
-
-      auto rename =
-          std::make_unique<backend::IndexRenameIR>(std::move(ctr->in), name, fresh);
-      rename->exprType = rename->in ? rename->in->exprType : ctr->exprType;
-      ctr->in = std::move(rename);
-      name = fresh;
-      used.insert(fresh);
-    }
-
+    auto renameMap = buildDummyAlphaRenamingMap(*ctr);
+    applyIndexMapping(ctr->in.get(), renameMap);
+    remapIndexList(renameMap, ctr->summedIndices);
     sortAndUnique(ctr->summedIndices);
-
-    if (ctr->in && ctr->in->kind == ExprIR::Kind::Var) {
-      auto trace = std::make_unique<backend::TraceIR>(std::move(ctr->in));
-      trace->tracedIndices = ctr->summedIndices;
-      trace->exprType = ctr->exprType;
-      expr = std::move(trace);
-    }
     return;
   }
   case ExprIR::Kind::IndexRename: {
     auto *rename = static_cast<backend::IndexRenameIR *>(expr.get());
     canonicalizeExpr(rename->in);
-    if (rename->from.empty() || rename->to.empty() || rename->from == rename->to)
+    if (!core::isTensorIndexName(rename->from) ||
+        !core::isTensorIndexName(rename->to) || rename->from == rename->to) {
       expr = std::move(rename->in);
+      return;
+    }
+
+    std::map<std::string, std::string> mapping;
+    mapping.emplace(rename->from, rename->to);
+    applyIndexMapping(rename->in.get(), mapping);
+    expr = std::move(rename->in);
     return;
   }
   case ExprIR::Kind::IndexPermute: {
     auto *perm = static_cast<backend::IndexPermuteIR *>(expr.get());
     canonicalizeExpr(perm->in);
+    if (perm->in && perm->in->kind == ExprIR::Kind::IndexPermute) {
+      auto *inner = static_cast<backend::IndexPermuteIR *>(perm->in.get());
+      if (inner->order == perm->order) {
+        expr = std::move(perm->in);
+        return;
+      }
+    }
+    if (perm->order.empty())
+      expr = std::move(perm->in);
     return;
   }
   case ExprIR::Kind::Trace: {
@@ -320,12 +449,11 @@ static void canonicalizeExpr(std::unique_ptr<backend::ExprIR> &expr) {
       return;
     }
 
-    if (trace->in && trace->in->kind == ExprIR::Kind::TensorProduct) {
-      auto ctr = std::make_unique<backend::ContractionIR>(std::move(trace->in));
-      ctr->summedIndices = trace->tracedIndices;
-      ctr->exprType = trace->exprType;
-      expr = std::move(ctr);
-    }
+    auto ctr = std::make_unique<backend::ContractionIR>(std::move(trace->in));
+    ctr->summedIndices = trace->tracedIndices;
+    ctr->exprType = trace->exprType;
+    expr = std::move(ctr);
+    canonicalizeExpr(expr);
     return;
   }
   case ExprIR::Kind::PartialDerivative: {

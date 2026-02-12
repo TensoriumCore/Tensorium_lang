@@ -136,6 +136,162 @@ static bool valueDependsOn(
   return valueDependsOnImpl(root, predicate, visited);
 }
 
+static std::string joinStringArrayAttr(::mlir::ArrayAttr arr) {
+  if (!arr)
+    return "-";
+  std::string out;
+  bool first = true;
+  for (::mlir::Attribute attr : arr) {
+    auto s = llvm::dyn_cast<::mlir::StringAttr>(attr);
+    if (!s)
+      continue;
+    if (!first)
+      out += ",";
+    out += s.getValue().str();
+    first = false;
+  }
+  return out;
+}
+
+static std::string typeShapeKey(::mlir::Type ty) {
+  auto fieldTy = llvm::dyn_cast<tensorium::mlir::FieldType>(ty);
+  if (!fieldTy)
+    return "?";
+  return std::to_string(fieldTy.getUp()) + "/" +
+         std::to_string(fieldTy.getDown());
+}
+
+static std::vector<std::string>
+collectRhsTensoriumSignature(::mlir::ModuleOp module) {
+  std::vector<std::string> sig;
+  auto rhs = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhs)
+    return sig;
+
+  for (::mlir::Operation &op : rhs.getBody().front()) {
+    std::string key = op.getName().getStringRef().str();
+
+    if (auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op)) {
+      key += "|idx=" +
+             (ref.getIndices() ? joinStringArrayAttr(*ref.getIndices()) : "-");
+      key += "|src=" + typeShapeKey(ref.getSource().getType());
+    } else if (auto ctr = llvm::dyn_cast<tensorium::mlir::ContractOp>(&op)) {
+      key += "|sum=" +
+             joinStringArrayAttr(ctr->getAttrOfType<::mlir::ArrayAttr>(
+                 "sum_indices"));
+    } else if (auto deriv = llvm::dyn_cast<tensorium::mlir::DerivOp>(&op)) {
+      key += "|idx=" + deriv->getAttrOfType<::mlir::StringAttr>("index")
+                          .getValue()
+                          .str();
+    } else if (auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op)) {
+      key += "|lhs=" + joinStringArrayAttr(dt.getIndices());
+      key += "|rhs=" + typeShapeKey(dt.getRhs().getType());
+    }
+
+    sig.push_back(std::move(key));
+  }
+
+  return sig;
+}
+
+static std::string exprCanonicalKey(const backend::ExprIR *expr) {
+  using backend::ExprIR;
+  if (!expr)
+    return "null";
+
+  switch (expr->kind) {
+  case ExprIR::Kind::Number:
+    return "num";
+  case ExprIR::Kind::Var: {
+    auto *var = static_cast<const backend::VarIR *>(expr);
+    std::string out = "var(" + var->name + ";";
+    for (size_t i = 0; i < var->tensorIndexNames.size(); ++i) {
+      if (i)
+        out += ",";
+      out += var->tensorIndexNames[i];
+    }
+    out += ")";
+    return out;
+  }
+  case ExprIR::Kind::Binary: {
+    auto *bin = static_cast<const backend::BinaryIR *>(expr);
+    return "bin(" + bin->op + "," + exprCanonicalKey(bin->lhs.get()) + "," +
+           exprCanonicalKey(bin->rhs.get()) + ")";
+  }
+  case ExprIR::Kind::Call: {
+    auto *call = static_cast<const backend::CallIR *>(expr);
+    std::string out = "call(" + call->callee;
+    for (const auto &arg : call->args)
+      out += "," + exprCanonicalKey(arg.get());
+    out += ")";
+    return out;
+  }
+  case ExprIR::Kind::TensorProduct: {
+    auto *prod = static_cast<const backend::TensorProductIR *>(expr);
+    return "prod(" + exprCanonicalKey(prod->lhs.get()) + "," +
+           exprCanonicalKey(prod->rhs.get()) + ")";
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *ctr = static_cast<const backend::ContractionIR *>(expr);
+    std::string out = "ctr(";
+    for (size_t i = 0; i < ctr->summedIndices.size(); ++i) {
+      if (i)
+        out += ",";
+      out += ctr->summedIndices[i];
+    }
+    out += ";" + exprCanonicalKey(ctr->in.get()) + ")";
+    return out;
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *rename = static_cast<const backend::IndexRenameIR *>(expr);
+    return "rename(" + rename->from + "->" + rename->to + ";" +
+           exprCanonicalKey(rename->in.get()) + ")";
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *perm = static_cast<const backend::IndexPermuteIR *>(expr);
+    std::string out = "perm(";
+    for (size_t i = 0; i < perm->order.size(); ++i) {
+      if (i)
+        out += ",";
+      out += perm->order[i];
+    }
+    out += ";" + exprCanonicalKey(perm->in.get()) + ")";
+    return out;
+  }
+  case ExprIR::Kind::Trace: {
+    auto *trace = static_cast<const backend::TraceIR *>(expr);
+    std::string out = "trace(";
+    for (size_t i = 0; i < trace->tracedIndices.size(); ++i) {
+      if (i)
+        out += ",";
+      out += trace->tracedIndices[i];
+    }
+    out += ";" + exprCanonicalKey(trace->in.get()) + ")";
+    return out;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *diff = static_cast<const backend::PartialDerivativeIR *>(expr);
+    return "pd(" + diff->coordIndex + ";" + exprCanonicalKey(diff->in.get()) +
+           ")";
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *grad = static_cast<const backend::GradientIR *>(expr);
+    return "grad(" + exprCanonicalKey(grad->in.get()) + ")";
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    auto *diff = static_cast<const backend::CovariantDerivativeIR *>(expr);
+    return "cd(" + diff->derivIndex + ";" + exprCanonicalKey(diff->in.get()) +
+           ")";
+  }
+  case ExprIR::Kind::Divergence: {
+    auto *div = static_cast<const backend::DivergenceIR *>(expr);
+    return "div(" + div->contractedIndex + ";" + exprCanonicalKey(div->in.get()) +
+           ")";
+  }
+  }
+  return "?";
+}
+
 struct IRStats {
   int contractions = 0;
   int partials = 0;
@@ -144,6 +300,78 @@ struct IRStats {
   int covariant = 0;
   int renames = 0;
 };
+
+static void collectExprKinds(const backend::ExprIR *expr,
+                             std::vector<backend::ExprIR::Kind> &kinds) {
+  using backend::ExprIR;
+  if (!expr)
+    return;
+  kinds.push_back(expr->kind);
+
+  switch (expr->kind) {
+  case ExprIR::Kind::Number:
+  case ExprIR::Kind::Var:
+    return;
+  case ExprIR::Kind::Binary: {
+    auto *bin = static_cast<const backend::BinaryIR *>(expr);
+    collectExprKinds(bin->lhs.get(), kinds);
+    collectExprKinds(bin->rhs.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::Call: {
+    auto *call = static_cast<const backend::CallIR *>(expr);
+    for (const auto &arg : call->args)
+      collectExprKinds(arg.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::TensorProduct: {
+    auto *prod = static_cast<const backend::TensorProductIR *>(expr);
+    collectExprKinds(prod->lhs.get(), kinds);
+    collectExprKinds(prod->rhs.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *ctr = static_cast<const backend::ContractionIR *>(expr);
+    collectExprKinds(ctr->in.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *rename = static_cast<const backend::IndexRenameIR *>(expr);
+    collectExprKinds(rename->in.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *perm = static_cast<const backend::IndexPermuteIR *>(expr);
+    collectExprKinds(perm->in.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::Trace: {
+    auto *trace = static_cast<const backend::TraceIR *>(expr);
+    collectExprKinds(trace->in.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *diff = static_cast<const backend::PartialDerivativeIR *>(expr);
+    collectExprKinds(diff->in.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *grad = static_cast<const backend::GradientIR *>(expr);
+    collectExprKinds(grad->in.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    auto *diff = static_cast<const backend::CovariantDerivativeIR *>(expr);
+    collectExprKinds(diff->in.get(), kinds);
+    return;
+  }
+  case ExprIR::Kind::Divergence: {
+    auto *div = static_cast<const backend::DivergenceIR *>(expr);
+    collectExprKinds(div->in.get(), kinds);
+    return;
+  }
+  }
+}
 
 static void collectExprStats(const backend::ExprIR *expr, IRStats &stats) {
   using backend::ExprIR;
@@ -417,14 +645,15 @@ static bool testIRCanonicalTraceFromFixture() {
     return false;
 
   const auto *rhs = mod.evolutions[0].equations[0].rhs.get();
-  if (!rhs || rhs->kind != backend::ExprIR::Kind::Trace) {
-    std::cerr << "FAIL: expected contract(A[i,i]) to canonicalize to trace(A)\n";
+  if (!rhs || rhs->kind != backend::ExprIR::Kind::Contraction) {
+    std::cerr
+        << "FAIL: expected trace/contract forms to canonicalize to contraction\n";
     return false;
   }
 
-  auto *trace = static_cast<const backend::TraceIR *>(rhs);
-  if (trace->tracedIndices.empty()) {
-    std::cerr << "FAIL: canonical trace must contain traced indices\n";
+  auto *ctr = static_cast<const backend::ContractionIR *>(rhs);
+  if (ctr->summedIndices.empty()) {
+    std::cerr << "FAIL: canonical contraction must contain summed indices\n";
     return false;
   }
   return true;
@@ -463,8 +692,16 @@ static bool testIRCanonicalEinsteinRenameInsert() {
   }
 
   auto *ctr = static_cast<const backend::ContractionIR *>(rhs);
-  if (!ctr->in || ctr->in->kind != backend::ExprIR::Kind::IndexRename) {
-    std::cerr << "FAIL: expected alpha-rename insertion for risky index capture\n";
+  if (ctr->summedIndices.size() != 1 || ctr->summedIndices[0] != "i") {
+    std::cerr << "FAIL: expected canonical dummy index alpha-renamed to 'i'\n";
+    return false;
+  }
+
+  std::vector<backend::ExprIR::Kind> kinds;
+  collectExprKinds(rhs, kinds);
+  if (llvm::find(kinds, backend::ExprIR::Kind::IndexRename) != kinds.end()) {
+    std::cerr
+        << "FAIL: canonical Einstein form should eliminate residual index_rename nodes\n";
     return false;
   }
   return true;
@@ -537,6 +774,63 @@ static bool testSchwarzschildCanonicalPatterns() {
       std::cerr << "FAIL(" << fixture
                 << "): expected canonical IR to eliminate gradient/divergence "
                    "sugar\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool testEinsteinCanonicalEquivalence() {
+  const std::vector<std::pair<std::string, std::string>> pairs = {
+      {"tests/semantic/einstein/canon/01_contract_ij.tn",
+       "tests/semantic/einstein/canon/02_contract_mn.tn"},
+      {"tests/semantic/einstein/canon/03_trace_form.tn",
+       "tests/semantic/einstein/canon/04_contract_form.tn"},
+  };
+
+  tensorium_mlir::MLIRGenOptions opts;
+  opts.enableMLIRCanonicalizePass = true;
+  opts.enableMLIRCSEPass = true;
+
+  for (const auto &pair : pairs) {
+    backend::ModuleIR modA =
+        buildModuleFromFile(pair.first, CompilationMode::Symbolic);
+    validation::canonicalizeDifferentialIR(modA);
+    validation::canonicalizeEinsteinIR(modA);
+    if (!verifyCanonicalIR(modA, pair.first))
+      return false;
+
+    std::string keyBefore =
+        exprCanonicalKey(modA.evolutions[0].equations[0].rhs.get());
+    validation::canonicalizeEinsteinIR(modA);
+    std::string keyAfter =
+        exprCanonicalKey(modA.evolutions[0].equations[0].rhs.get());
+    if (keyBefore != keyAfter) {
+      std::cerr << "FAIL(" << pair.first
+                << "): Einstein canonicalization is not idempotent\n";
+      return false;
+    }
+
+    ::mlir::MLIRContext ctxA;
+    auto mlirA = buildMLIRModuleFromFileWithOpts(pair.first,
+                                                 CompilationMode::Symbolic,
+                                                 ctxA, opts);
+    ::mlir::MLIRContext ctxB;
+    auto mlirB = buildMLIRModuleFromFileWithOpts(pair.second,
+                                                 CompilationMode::Symbolic,
+                                                 ctxB, opts);
+
+    auto sigA = collectRhsTensoriumSignature(*mlirA);
+    auto sigB = collectRhsTensoriumSignature(*mlirB);
+    if (sigA.empty() || sigB.empty()) {
+      std::cerr << "FAIL(" << pair.first << "," << pair.second
+                << "): missing tensorium_rhs signature for canonical comparison\n";
+      return false;
+    }
+    if (sigA != sigB) {
+      std::cerr << "FAIL(" << pair.first << "," << pair.second
+                << "): equivalent Einstein forms produced different normalized MLIR\n";
       return false;
     }
   }
@@ -1151,6 +1445,7 @@ int main() {
   ok &= testIRCanonicalEinsteinRenameInsert();
   ok &= testIRVerifierRejectsUncanonicalizedGradient();
   ok &= testSchwarzschildCanonicalPatterns();
+  ok &= testEinsteinCanonicalEquivalence();
   ok &= testSchwarzschildMLIRVerification();
   ok &= testMLIRNormalizationPasses();
   ok &= testInitRhsInvariantRejectsMetricInRhs();
