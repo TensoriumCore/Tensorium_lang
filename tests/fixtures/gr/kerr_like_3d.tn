@@ -1,3 +1,4 @@
+# Kerr-like fixture with non-zero g_tphi (supported in current front init scope)
 field metric g[mu,nu]
 field inverse_metric gU[mu,nu]
 field scalar alpha
@@ -5,6 +6,7 @@ field scalar phi
 field scalar H
 field cov_tensor2 gamma[i,j]
 field con_tensor2 gammaU[i,j]
+field cov_tensor2 K[i,j]
 
 simulation {
   coordinates = spherical
@@ -24,11 +26,12 @@ simulation {
 }
 
 initial_data {
+  enforce_symmetry = true
   metric4 g[mu,nu] = [
-    [-(1 - 2*M/r), 0, 0, 0],
-    [0, 1/(1 - 2*M/r), 0.1, 0],
-    [0, 0.1, r*r, 0],
-    [0, 0, 0, r*r*sin(theta)*sin(theta)]
+    [-(1 - 2*M/r), 0, 0, 0 - (2*a*M/r*sin(theta)*sin(theta))],
+    [0, 1/(1 - 2*M/r), 0, 0],
+    [0, 0, r*r, 0],
+    [0 - (2*a*M/r*sin(theta)*sin(theta)), 0, 0, r*r*sin(theta)*sin(theta)]
   ]
   split_3p1 {
     alpha -> alpha;
@@ -37,6 +40,6 @@ initial_data {
   }
 }
 
-evolution NonDiagMetric {
+evolution KerrLike {
   dt H = contract(gammaU[i,j] * d_i(d_j(phi)))
 }

@@ -151,6 +151,86 @@ collectRepeatedIndices(const tensorium::IndexedExpr *e) {
   return repeated;
 }
 
+static tensorium::ir::TensorType makeTensorType(int up, int down) {
+  tensorium::ir::TensorType out;
+  out.up = up;
+  out.down = down;
+  return out;
+}
+
+static std::unique_ptr<VarIR>
+makeIndexedFieldRef(const std::string &fieldName,
+                    const std::vector<std::string> &indexNames, int up,
+                    int down) {
+  auto out = std::make_unique<VarIR>(fieldName, VarKind::Field);
+  out->tensorIndexNames = indexNames;
+  out->exprType = makeTensorType(up, down);
+  return out;
+}
+
+static const tensorium::IndexedVar *
+asFieldVar(const tensorium::IndexedExpr *e) {
+  auto *v = dynamic_cast<const tensorium::IndexedVar *>(e);
+  if (!v || v->kind != tensorium::IndexedVarKind::Field)
+    return nullptr;
+  return v;
+}
+
+static std::unique_ptr<ExprIR>
+lowerChristoffelBuiltin(const tensorium::IndexedCall *call) {
+  if (!call || call->args.size() != 2)
+    return std::make_unique<CallIR>("<invalid_christoffel>");
+
+  auto *gammaArg = asFieldVar(call->args[0].get());
+  auto *gammaUArg = asFieldVar(call->args[1].get());
+  if (!gammaArg || !gammaUArg)
+    return std::make_unique<CallIR>("<invalid_christoffel>");
+
+  const std::string gammaName = gammaArg->name;
+  const std::string gammaUName = gammaUArg->name;
+
+  auto gamma_lk = makeIndexedFieldRef(gammaName, {"l", "k"}, 0, 2);
+  auto gamma_lj = makeIndexedFieldRef(gammaName, {"l", "j"}, 0, 2);
+  auto gamma_jk = makeIndexedFieldRef(gammaName, {"j", "k"}, 0, 2);
+  auto gammaU_il = makeIndexedFieldRef(gammaUName, {"i", "l"}, 2, 0);
+
+  auto dj_gamma_lk =
+      std::make_unique<PartialDerivativeIR>(std::move(gamma_lk), "j");
+  dj_gamma_lk->exprType = makeTensorType(0, 3);
+
+  auto dk_gamma_lj =
+      std::make_unique<PartialDerivativeIR>(std::move(gamma_lj), "k");
+  dk_gamma_lj->exprType = makeTensorType(0, 3);
+
+  auto dl_gamma_jk =
+      std::make_unique<PartialDerivativeIR>(std::move(gamma_jk), "l");
+  dl_gamma_jk->exprType = makeTensorType(0, 3);
+
+  auto add = std::make_unique<BinaryIR>("+", std::move(dj_gamma_lk),
+                                        std::move(dk_gamma_lj));
+  add->exprType = makeTensorType(0, 3);
+
+  auto sum = std::make_unique<BinaryIR>("-", std::move(add),
+                                        std::move(dl_gamma_jk));
+  sum->exprType = makeTensorType(0, 3);
+
+  auto product =
+      std::make_unique<TensorProductIR>(std::move(gammaU_il), std::move(sum));
+  product->exprType = makeTensorType(2, 3);
+
+  auto contraction = std::make_unique<ContractionIR>(std::move(product));
+  contraction->summedIndices = {"l"};
+  contraction->exprType = makeTensorType(1, 2);
+
+  auto half = std::make_unique<NumberIR>(0.5);
+  half->exprType = makeTensorType(0, 0);
+
+  auto out =
+      std::make_unique<BinaryIR>("*", std::move(half), std::move(contraction));
+  out->exprType = lowerTensorType(call->inferredType);
+  return out;
+}
+
 static std::unique_ptr<ExprIR>
 lowerIndexedExpr(const tensorium::IndexedExpr *e,
                 bool materializeImplicitContraction,
@@ -343,6 +423,10 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       contraction->summedIndices = collectRepeatedIndices(c->args[0].get());
       contraction->exprType = lowerTensorType(c->inferredType);
       return contraction;
+    }
+
+    if (c->callee == "christoffel") {
+      return lowerChristoffelBuiltin(c);
     }
 
     auto out = std::make_unique<CallIR>(c->callee);

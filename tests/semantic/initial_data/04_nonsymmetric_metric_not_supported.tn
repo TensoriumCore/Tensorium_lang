@@ -25,9 +25,9 @@ simulation {
 
 initial_data {
   metric4 g[mu,nu] = [
-    [-(1 - 2*M/r), 0, 0, 0],
-    [0, 1/(1 - 2*M/r), 0.1, 0],
-    [0, 0.1, r*r, 0],
+    [-(1 - 2*M/r), 0.3, 0, 0],
+    [0.1, 1/(1 - 2*M/r), 0, 0],
+    [0, 0, r*r, 0],
     [0, 0, 0, r*r*sin(theta)*sin(theta)]
   ]
   split_3p1 {
@@ -37,6 +37,6 @@ initial_data {
   }
 }
 
-evolution NonDiagMetric {
+evolution NonSymmetricMetric {
   dt H = contract(gammaU[i,j] * d_i(d_j(phi)))
 }

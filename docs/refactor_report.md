@@ -546,24 +546,36 @@ Planned commit sequence (one intention per commit):
   - or decomposed initial data.
 
 ### 12.C Supported decomposition scope
-- Implemented scope is intentionally minimal and explicit:
-  - diagonal metric + zero shift (`beta = 0`) only.
-- If metric is non-diagonal or has non-zero shift terms, lowering fails with:
-  - `"decompose3p1_from_metric: not implemented for non-diagonal or beta!=0"`.
+- `decompose3p1_from_metric` accepts symmetric metrics with optional
+  spatial cross terms (`g_ij`) and time-space cross terms (`g_ti`).
+- Current explicit guardrails:
+  - non-symmetric metric components are rejected with
+    `"decompose3p1_from_metric requires symmetric metric components"`.
+- Current numeric semantics in front init evaluator:
+  - `gamma_ij = g_ij`,
+  - `beta_i = g_{0i}`,
+  - `gammaU = inverse(gamma)` (diag fast path + 3x3 inverse fallback),
+  - `alpha = sqrt(beta_i beta^i - g_tt)`.
 
 ## 13) Schwarzschild MLIR verification
 
 ### 13.A Structural proof (robust, SSA-level)
-- Added in-memory MLIR structural test (`tools/Tester/UnitTests.cpp`):
-  - verifies chain `metric4 -> decompose3p1_from_metric -> init3p1`,
-  - verifies `init3p1` consumes decompose results (use-def equality),
-  - verifies `init3p1` outputs are bound to program fields via `tensorium.dt_assign`,
-  - verifies RHS consumes refs from those bound fields:
-    - `gammaU` feeds `mul` then `contract` in `dt H`,
-    - `alpha` and `gamma` feed the same `mul` in `dt K`.
-- Legacy checks:
-  - `tensorium.split3p1` must be absent,
-  - no legacy string attrs (`alpha_expr`, `gamma_diag`, `components`) in emitted ops.
+- Structural validation is now implemented in C++ unit tests (MLIR IR walk),
+  not via fragile shell text-grep.
+- Invariants locked by `tools/Tester/UnitTests.cpp`:
+  - `@tensorium_init` contains `metric4 + decompose3p1_from_metric + init3p1`
+    and uses `tensorium.assign` (no `tensorium.dt_assign`).
+  - `@tensorium_rhs` contains `tensorium.dt_assign` and excludes
+    `metric4/decompose3p1_from_metric/assign`.
+  - `@tensorium_entry` contains exactly 2 calls in order:
+    `@tensorium_init` then `@tensorium_rhs` (plus return).
+  - use-def bridge from init to rhs is checked through entry call operands:
+    fields assigned in init are required to be read in rhs.
+  - RHS checks remain structural:
+    `gammaU` must feed a `mul` used by `contract`,
+    and `alpha*gamma` must be used in the `dt K` path.
+- Added a negative invariant test:
+  - injects a `metric4` op into `@tensorium_rhs` and asserts invariant rejection.
 
 ### 13.B Optimization baseline (minimal CSE/const-fold)
 - Enabled CSE/canonicalization effectiveness by marking pure producers:
@@ -573,10 +585,111 @@ Planned commit sequence (one intention per commit):
   - `2*M/r` subexpression appears once after pipeline normalization.
 
 ### 13.C New regression/negative tests
-- Added MLIR-error fixture:
-  - `tests/semantic/initial_data/offdiag_metric.tn`
-  - expects explicit diagnostic for unsupported non-diagonal metric decomposition.
-- `run_test.sh` extended to check:
-  - presence of `decompose3p1_from_metric` + `init3p1`,
-  - op arities (`decompose=1`, `init3p1=4`),
-  - continued use-def sanity in emitted Schwarzschild MLIR.
+- Added initial-data fixtures:
+  - `tests/semantic/initial_data/offdiag_metric.tn` is expected to pass
+    (symmetric spatial cross term `g_ij`).
+  - `tests/semantic/initial_data/04_nonsymmetric_metric_not_supported.tn`
+    is expected to fail with the non-symmetric metric diagnostic.
+  - `tests/semantic/initial_data/05_shift_metric_not_supported.tn` is
+    expected to fail when `g_ti` is non-zero (`beta` unsupported in
+    `decompose3p1_from_metric`).
+- `run_test.sh` no longer performs fragile MLIR-grep for init/rhs architecture;
+  this is enforced by structural unit tests.
+
+## 14) Init/RHS Split Hardening
+
+### 14.A Signature minimization
+- Function signatures are now data-driven from actual field usage:
+  - `@tensorium_init` receives only fields needed for init writes/reads.
+  - `@tensorium_rhs` receives only fields referenced by RHS equations.
+  - `@tensorium_entry` keeps the full program-field signature and forwards the
+    minimal subsets to each callee.
+- Forwarding order is deterministic and stable:
+  - argument order follows `module.fields` declaration order,
+  - each callee receives an ordered subsequence of that list (no padding).
+- Schwarzschild 3D concrete result:
+  - before: init/rhs both took all 8 field arguments.
+  - after: `@tensorium_init` takes 3 args (`alpha`, `gamma`, `gammaU`);
+    `@tensorium_rhs` takes 6 args (`alpha`, `phi`, `H`, `gamma`, `gammaU`, `K`).
+
+### 14.B Rationale
+- Keeps init-time and rhs-time concerns separated in both op placement and API.
+- Reduces accidental coupling (unused args cannot be read/written by construction).
+- Preserves semantics: `init3p1` is retained (still explicit in init path),
+  while stores remain split between `assign` (init) and `dt_assign` (rhs).
+
+### 14.C IR invariants (init/rhs)
+- RHS write path guard:
+  - `@tensorium_rhs` must not contain init-only ops
+    (`metric4`, `decompose3p1_from_metric`, `init3p1`, `assign`),
+    and may write only via `dt_assign`.
+- GammaU provenance guard:
+  - In Schwarzschild structural verification, the `gammaU` value used by
+    `contract(...)` must come from a `tensorium.ref` sourcing a field that was
+    assigned by `@tensorium_init` through entry-call forwarding.
+  - `@tensorium_rhs` is rejected by test if it constructs local `gammaU`
+    tensors (e.g. `build_con_tensor2`) for the contraction path.
+- Front-end guard:
+  - Non-`dt` writes to declared fields inside `evolution` are rejected
+    semantically (`Cannot redeclare field ... as local`).
+
+## 15) MLIR normalization passes
+
+- Normalization is applied **after MLIRGen module construction** in
+  `tensorium_mlir::buildMLIRModule(...)` (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp`).
+- Post-MLIRGen normalization pipeline is now explicit and configurable through
+  `MLIRGenOptions`:
+  - `enableMLIRCanonicalizePass` (default: `true`)
+  - `enableMLIRCSEPass` (default: `true`)
+  - `enableMLIRInlinePass` (default: `false`, optional)
+- Test policy:
+  - Unit/integration tests run with canonicalize + CSE enabled by default
+    (stable compact MLIR dumps),
+  - inline remains optional and off unless explicitly requested.
+- Structural regression test coverage:
+  - a dedicated UnitTests case compares Schwarzschild MLIR with/without
+    normalization and asserts compaction (`2*M/r` and `sin(theta)` duplicates
+    are reduced to single producers),
+  - init/rhs invariants remain validated on normalized MLIR.
+
+## 16) Einstein canonical normal form
+
+- Canonical Einstein form is now enforced at backend IR level before MLIR
+  emission (`validation::canonicalizeEinsteinIR`):
+  - sorted/unique contraction summed indices,
+  - deterministic alpha-renaming of dummy indices to canonical names
+    (excluding currently free indices),
+  - redundant `index_rename` elimination by applying renaming directly into
+    the expression tree,
+  - redundant `index_permute` elimination (`index_permute(index_permute(x))`
+    with identical order, and empty order),
+  - `trace(...)` canonicalized into contraction form.
+- Canonicalization is idempotent by test:
+  - applying Einstein canonicalization twice preserves the same canonical
+    expression key/signature.
+- Equivalent Einstein DSL fixtures now checked for MLIR canonical equivalence:
+  - `tests/semantic/einstein/canon/01_contract_ij.tn`
+    vs `tests/semantic/einstein/canon/02_contract_mn.tn`.
+- Validation strategy is structural (UnitTests IR/MLIR walk), not textual grep.
+
+## 17) Christoffel Front Contract
+
+- Added executable builtin `christoffel(gamma, gammaU)` in front-end typing/lowering.
+- Typing contract:
+  - arg0 must be covariant rank-2 (`0,2`),
+  - arg1 must be contravariant rank-2 (`2,0`),
+  - result is mixed rank-3 (`1,2`), represented as `!tensorium.field<f64,1,2>`.
+- DSL field declarations now accept `mixed_tensor(up=...,down=...)` for mixed variance fields.
+- Lowering strategy (no magic MLIR op):
+  - builtin is expanded in backend IR into explicit Einstein-form expression
+    using only `PartialDerivative`, `Binary(+/-/*)`, `TensorProduct`, and
+    `Contraction`,
+  - MLIR emitted form uses only `tensorium.deriv`, `tensorium.add/sub/mul`,
+    and `tensorium.contract` (then existing canonicalize/CSE pipeline).
+- Numeric anti-false-green coverage:
+  - `tests/fixtures/gr/schwarzschild_christoffel_3d.tn` + UnitTests verify
+    Schwarzschild reference values at `M=1, r=10, theta=pi/2`:
+    `Gamma^r_rr`, `Gamma^r_thetatheta`, `Gamma^r_phiphi`,
+    `Gamma^theta_rtheta`, `Gamma^phi_rphi`, `Gamma^phi_thetaphi`,
+  - structural MLIR test asserts Christoffel path contains deriv/add/sub/mul/contract
+    and that `gammaU` feeding contraction comes from init-assigned field provenance.

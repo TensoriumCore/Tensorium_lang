@@ -115,6 +115,10 @@ class TensorTypeChecker {
     return name == "divergence" || name == "div";
   }
 
+  bool isChristoffelBuiltin(const std::string &name) const {
+    return name == "christoffel";
+  }
+
   bool isCovariantDerivativeBuiltin(const IndexedCall *call,
                                     bool &contravariant, char &index) const {
     if (!call)
@@ -187,6 +191,13 @@ class TensorTypeChecker {
 
     if (auto c = dynamic_cast<const IndexedCall *>(e)) {
       const std::string &cal = c->callee;
+
+      if (isChristoffelBuiltin(cal)) {
+        // christoffel(...) materializes tensor structure during IR lowering.
+        // Skip raw argument index counting here to avoid false free/bound
+        // collisions from helper arguments like gamma/gammaU.
+        return;
+      }
 
       if (cal == "contract") {
         if (c->args.size() != 1)
@@ -385,6 +396,25 @@ public:
 
     if (auto call = dynamic_cast<const IndexedCall *>(e)) {
       const std::string &cal = call->callee;
+
+      if (isChristoffelBuiltin(cal)) {
+        if (call->args.size() != 2)
+          throw std::runtime_error(
+              "christoffel(gamma, gammaU) expects exactly 2 arguments");
+        TensorType gammaT = inferImpl(call->args[0].get(), allowRepeated);
+        TensorType gammaUT = inferImpl(call->args[1].get(), allowRepeated);
+        if (!(gammaT.up == 0 && gammaT.down == 2)) {
+          throw std::runtime_error(
+              "christoffel() first argument must be covariant rank-2");
+        }
+        if (!(gammaUT.up == 2 && gammaUT.down == 0)) {
+          throw std::runtime_error(
+              "christoffel() second argument must be contravariant rank-2");
+        }
+        TensorType res{1, 2};
+        annotateType(e, res);
+        return res;
+      }
 
       if (cal == "contract") {
         if (call->args.size() != 1)

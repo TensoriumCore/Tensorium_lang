@@ -1,0 +1,14 @@
+field vector A[i]
+field covector B[i]
+field scalar s
+
+simulation {
+  dimension = 1
+  resolution = [8]
+  time { dt = 0.1 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution CanonTraceForm {
+  dt s = contract(index_rename(A[j], j, i) * B[i])
+}
