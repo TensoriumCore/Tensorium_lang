@@ -125,8 +125,10 @@ static bool almostEqual(double got, double expected, double relTol = 1e-12,
 
 struct InitEvalBuffers {
   double alpha[1] = {0.0};
+  std::array<std::array<double, 1>, 16> metric4{};
   std::array<std::array<double, 1>, 9> gamma{};
   std::array<std::array<double, 1>, 9> gammaU{};
+  std::array<double *, 16> metric4Ptrs{};
   std::array<double *, 9> gammaPtrs{};
   std::array<double *, 9> gammaUPtrs{};
 };
@@ -151,6 +153,10 @@ static void setupSinglePointInitContext(InitEvalContext &ctx, double M, double r
     ctx.buffers.gamma[c][0] = std::numeric_limits<double>::quiet_NaN();
     ctx.buffers.gammaU[c][0] = std::numeric_limits<double>::quiet_NaN();
   }
+  for (unsigned c = 0; c < 16; ++c) {
+    ctx.buffers.metric4Ptrs[c] = ctx.buffers.metric4[c].data();
+    ctx.buffers.metric4[c][0] = std::numeric_limits<double>::quiet_NaN();
+  }
   ctx.buffers.alpha[0] = std::numeric_limits<double>::quiet_NaN();
 
   ctx.desc.nPoints = 1;
@@ -159,6 +165,7 @@ static void setupSinglePointInitContext(InitEvalContext &ctx, double M, double r
   ctx.desc.coords.theta = ctx.theta.data();
   ctx.desc.coords.phi = ctx.phi.data();
   ctx.desc.outputs.alpha = ctx.buffers.alpha;
+  ctx.desc.outputs.metric4 = ctx.buffers.metric4Ptrs;
   ctx.desc.outputs.gamma = ctx.buffers.gammaPtrs;
   ctx.desc.outputs.gammaU = ctx.buffers.gammaUPtrs;
 }
@@ -168,6 +175,20 @@ static std::string formatMatrix3x3(const std::array<std::array<double, 1>, 9> &m
   os << "[[" << m[0][0] << ", " << m[1][0] << ", " << m[2][0] << "], "
      << "[" << m[3][0] << ", " << m[4][0] << ", " << m[5][0] << "], "
      << "[" << m[6][0] << ", " << m[7][0] << ", " << m[8][0] << "]]";
+  return os.str();
+}
+
+static std::string
+formatMatrix4x4(const std::array<std::array<double, 1>, 16> &m) {
+  std::ostringstream os;
+  os << "[[" << m[0][0] << ", " << m[1][0] << ", " << m[2][0] << ", "
+     << m[3][0] << "], "
+     << "[" << m[4][0] << ", " << m[5][0] << ", " << m[6][0] << ", "
+     << m[7][0] << "], "
+     << "[" << m[8][0] << ", " << m[9][0] << ", " << m[10][0] << ", "
+     << m[11][0] << "], "
+     << "[" << m[12][0] << ", " << m[13][0] << ", " << m[14][0] << ", "
+     << m[15][0] << "]]";
   return os.str();
 }
 
@@ -1479,12 +1500,16 @@ static bool testSchwarzschildInitNumericPoint() {
   std::cout << std::setprecision(17)
             << "[numeric] Schwarzschild reference point"
             << " M=" << M << " r=" << r << " theta=" << theta << "\n"
+            << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
+            << " expected=[[" << (-f) << ", 0, 0, 0], [0, " << (1.0 / f)
+            << ", 0, 0], [0, 0, " << (r * r) << ", 0], [0, 0, 0, "
+            << (r * r) << "]]\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=" << alphaExpected << "\n"
-            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
             << " expected=[[" << (1.0 / f) << ", 0, 0], [0, " << (r * r)
             << ", 0], [0, 0, " << (r * r) << "]]\n"
-            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << "  GammaU^ij   got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
             << " expected=[[" << f << ", 0, 0], [0, " << (1.0 / (r * r))
             << ", 0], [0, 0, " << (1.0 / (r * r)) << "]]\n";
 
@@ -1538,9 +1563,11 @@ static bool testSchwarzschildInitThetaZeroNoNaN() {
   std::cout << std::setprecision(17)
             << "[numeric] Schwarzschild theta=0 edge case"
             << " gamma_phiphi=" << evalCtx.buffers.gamma[8][0] << "\n"
-            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
             << "\n"
-            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "\n"
+            << "  GammaU^ij   got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
             << "\n";
   return true;
 }
@@ -1577,9 +1604,11 @@ static bool testSchwarzschildInitHorizonIEEE() {
             << " alpha=" << evalCtx.buffers.alpha[0]
             << " gamma_rr=" << evalCtx.buffers.gamma[0][0]
             << " gammaU_rr=" << evalCtx.buffers.gammaU[0][0] << "\n"
-            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
             << "\n"
-            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "\n"
+            << "  GammaU^ij   got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
             << "\n";
   return true;
 }
@@ -1609,12 +1638,16 @@ static bool testReissnerNordstromInitNumericPoint() {
             << "[numeric] Reissner-Nordstrom reference point"
             << " M=" << M << " Q=" << Q << " r=" << r
             << " theta=" << theta << "\n"
+            << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
+            << " expected=[[" << (-f) << ", 0, 0, 0], [0, " << (1.0 / f)
+            << ", 0, 0], [0, 0, " << (r * r) << ", 0], [0, 0, 0, "
+            << (r * r) << "]]\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=" << std::sqrt(f) << "\n"
-            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
             << " expected=[[" << (1.0 / f) << ", 0, 0], [0, " << (r * r)
             << ", 0], [0, 0, " << (r * r) << "]]\n"
-            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << "  GammaU^ij   got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
             << " expected=[[" << f << ", 0, 0], [0, " << (1.0 / (r * r))
             << ", 0], [0, 0, " << (1.0 / (r * r)) << "]]\n";
 
@@ -1657,11 +1690,13 @@ static bool testSpatialOffdiagInitNumericPoint() {
 
   std::cout << std::setprecision(17)
             << "[numeric] Spatial offdiag reference point\n"
+            << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
+            << " expected=[[-1, 0, 0, 0], [0, 2, 1, 0], [0, 1, 3, 0], [0, 0, 0, 4]]\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=1\n"
-            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
             << " expected=[[2, 1, 0], [1, 3, 0], [0, 0, 4]]\n"
-            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << "  GammaU^ij   got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
             << " expected=[[0.6, -0.2, 0], [-0.2, 0.4, 0], [0, 0, 0.25]]\n";
 
   if (!almostEqual(evalCtx.buffers.alpha[0], 1.0)) {
@@ -1714,12 +1749,17 @@ static bool testKerrLikeInitNumericPoint() {
             << "[numeric] Kerr-like reference point"
             << " M=" << M << " a=" << a << " r=" << r
             << " theta=" << theta << "\n"
+            << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
+            << " expected=[[" << (-f) << ", 0, 0, " << betaPhi
+            << "], [0, " << (1.0 / f) << ", 0, 0], [0, 0, " << (r * r)
+            << ", 0], [" << betaPhi << ", 0, 0, " << (r * r * sin2)
+            << "]]\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=" << alphaExpected << "\n"
-            << "  gamma       got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+            << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
             << " expected=[[" << (1.0 / f) << ", 0, 0], [0, " << (r * r)
             << ", 0], [0, 0, " << (r * r * sin2) << "]]\n"
-            << "  gammaU      got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+            << "  GammaU^ij   got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
             << " expected=[[" << f << ", 0, 0], [0, " << (1.0 / (r * r))
             << ", 0], [0, 0, " << gammaUPhPhi << "]]\n";
 

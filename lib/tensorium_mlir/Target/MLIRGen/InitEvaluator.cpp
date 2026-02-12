@@ -95,6 +95,19 @@ validateDescriptor(const InitEvalDescriptor &desc) {
                                      std::to_string(c));
     }
   }
+
+  // metric4 capture is optional, but must be fully specified if enabled.
+  bool anyMetric4 = false;
+  bool allMetric4 = true;
+  for (unsigned c = 0; c < 16; ++c) {
+    anyMetric4 = anyMetric4 || (desc.outputs.metric4[c] != nullptr);
+    allMetric4 = allMetric4 && (desc.outputs.metric4[c] != nullptr);
+  }
+  if (anyMetric4 && !allMetric4) {
+    return InitEvalResult::failure(
+        "init evaluator metric4 capture requires 16 component buffers");
+  }
+
   return InitEvalResult::success();
 }
 
@@ -496,6 +509,10 @@ static InitEvalResult executeInitPoint(
         out.data[i] = c.data[0];
       }
       values[metric.getMetric()] = out;
+      for (unsigned i = 0; i < 16; ++i) {
+        if (desc.outputs.metric4[i])
+          desc.outputs.metric4[i][point] = out.data[i];
+      }
       continue;
     }
 

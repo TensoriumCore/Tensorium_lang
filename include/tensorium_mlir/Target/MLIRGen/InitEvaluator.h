@@ -20,6 +20,8 @@ struct InitOutputsSoA {
   double *alpha = nullptr;
   std::array<double *, 9> gamma{};
   std::array<double *, 9> gammaU{};
+  // Optional debug/output capture for metric4 g_{mu,nu} components.
+  std::array<double *, 16> metric4{};
 };
 
 struct InitEvalDescriptor {
