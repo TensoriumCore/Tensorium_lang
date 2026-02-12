@@ -671,3 +671,25 @@ Planned commit sequence (one intention per commit):
   - `tests/semantic/einstein/canon/01_contract_ij.tn`
     vs `tests/semantic/einstein/canon/02_contract_mn.tn`.
 - Validation strategy is structural (UnitTests IR/MLIR walk), not textual grep.
+
+## 17) Christoffel Front Contract
+
+- Added executable builtin `christoffel(gamma, gammaU)` in front-end typing/lowering.
+- Typing contract:
+  - arg0 must be covariant rank-2 (`0,2`),
+  - arg1 must be contravariant rank-2 (`2,0`),
+  - result is mixed rank-3 (`1,2`), represented as `!tensorium.field<f64,1,2>`.
+- DSL field declarations now accept `mixed_tensor(up=...,down=...)` for mixed variance fields.
+- Lowering strategy (no magic MLIR op):
+  - builtin is expanded in backend IR into explicit Einstein-form expression
+    using only `PartialDerivative`, `Binary(+/-/*)`, `TensorProduct`, and
+    `Contraction`,
+  - MLIR emitted form uses only `tensorium.deriv`, `tensorium.add/sub/mul`,
+    and `tensorium.contract` (then existing canonicalize/CSE pipeline).
+- Numeric anti-false-green coverage:
+  - `tests/fixtures/gr/schwarzschild_christoffel_3d.tn` + UnitTests verify
+    Schwarzschild reference values at `M=1, r=10, theta=pi/2`:
+    `Gamma^r_rr`, `Gamma^r_thetatheta`, `Gamma^r_phiphi`,
+    `Gamma^theta_rtheta`, `Gamma^phi_rphi`, `Gamma^phi_thetaphi`,
+  - structural MLIR test asserts Christoffel path contains deriv/add/sub/mul/contract
+    and that `gammaU` feeding contraction comes from init-assigned field provenance.
