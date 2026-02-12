@@ -1625,6 +1625,69 @@ static bool testSchwarzschildInitMetricLoweringPass() {
   return true;
 }
 
+static bool testSchwarzschildInitPointStdLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto initPoint = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_point");
+  if (!initPoint) {
+    std::cerr << "FAIL: missing tensorium_init_point after init-to-std lowering\n";
+    return false;
+  }
+
+  if (initPoint.getNumArguments() != 7) {
+    std::cerr << "FAIL: tensorium_init_point must have 7 arguments, got "
+              << initPoint.getNumArguments() << "\n";
+    return false;
+  }
+
+  for (unsigned i = 0; i < 4; ++i) {
+    if (!initPoint.getArgument(i).getType().isF64()) {
+      std::cerr << "FAIL: tensorium_init_point arg " << i
+                << " must be f64\n";
+      return false;
+    }
+  }
+
+  auto checkMemRefArg = [&](unsigned argIndex, int64_t expectedSize) {
+    auto memTy = llvm::dyn_cast<::mlir::MemRefType>(
+        initPoint.getArgument(argIndex).getType());
+    if (!memTy || memTy.getRank() != 1 || memTy.getShape()[0] != expectedSize ||
+        !memTy.getElementType().isF64()) {
+      std::cerr << "FAIL: tensorium_init_point arg " << argIndex
+                << " must be memref<" << expectedSize << "xf64>\n";
+      return false;
+    }
+    return true;
+  };
+  if (!checkMemRefArg(4, 1) || !checkMemRefArg(5, 9) || !checkMemRefArg(6, 9))
+    return false;
+
+  bool hasMemrefStore = false;
+  for (::mlir::Operation &op : initPoint.getBody().front()) {
+    if (op.getName().getDialectNamespace() == "tensorium") {
+      std::cerr << "FAIL: tensorium_init_point must not keep tensorium ops, found "
+                << op.getName().getStringRef().str() << "\n";
+      return false;
+    }
+    if (op.getName().getStringRef() == "memref.store")
+      hasMemrefStore = true;
+  }
+  if (!hasMemrefStore) {
+    std::cerr << "FAIL: tensorium_init_point must contain memref.store writes\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildInitThetaZeroNoNaN() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -2344,6 +2407,8 @@ int main() {
       {"testSchwarzschildInitNumericPoint", &testSchwarzschildInitNumericPoint},
       {"testSchwarzschildInitMetricLoweringPass",
        &testSchwarzschildInitMetricLoweringPass},
+      {"testSchwarzschildInitPointStdLowering",
+       &testSchwarzschildInitPointStdLowering},
       {"testSchwarzschildInitThetaZeroNoNaN",
        &testSchwarzschildInitThetaZeroNoNaN},
       {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},

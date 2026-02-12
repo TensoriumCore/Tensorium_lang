@@ -47,6 +47,22 @@ Supported init op subset:
 
 Unsupported init ops should produce explicit diagnostics in the front evaluator.
 
+## Optional Lowered Point Kernel (Front-Only Bridge)
+When MLIR is emitted with:
+- `--tensorium-metric-lower`
+- `--tensorium-init-std-lower`
+
+the module also contains:
+- `func.func @tensorium_init_point(...)`
+
+with signature:
+- `(f64 M, f64 r, f64 theta, f64 phi, memref<1xf64> alpha, memref<9xf64> gamma, memref<9xf64> gammaU) -> ()`
+
+Contract:
+- this function is generated from `@tensorium_init` only;
+- it contains only `arith`/`math`/`memref`/`func` ops (no Tensorium custom ops);
+- it writes `alpha`, `gamma`, `gammaU` through `memref.store`.
+
 ## `decompose3p1_from_metric` Minimal Contract
 For this milestone:
 - metric must be symmetric;
