@@ -547,12 +547,15 @@ Planned commit sequence (one intention per commit):
 
 ### 12.C Supported decomposition scope
 - `decompose3p1_from_metric` accepts symmetric metrics with optional
-  **spatial-only** cross terms (`g_ij`, `i,j in {1,2,3}`).
+  spatial cross terms (`g_ij`) and time-space cross terms (`g_ti`).
 - Current explicit guardrails:
   - non-symmetric metric components are rejected with
-    `"decompose3p1_from_metric requires symmetric metric components"`,
-  - non-zero time-space terms (`g_ti`) are rejected with
-    `"decompose3p1_from_metric requires g_ti = 0 (beta unsupported)"`.
+    `"decompose3p1_from_metric requires symmetric metric components"`.
+- Current numeric semantics in front init evaluator:
+  - `gamma_ij = g_ij`,
+  - `beta_i = g_{0i}`,
+  - `gammaU = inverse(gamma)` (diag fast path + 3x3 inverse fallback),
+  - `alpha = sqrt(beta_i beta^i - g_tt)`.
 
 ## 13) Schwarzschild MLIR verification
 

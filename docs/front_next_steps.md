@@ -43,7 +43,7 @@
 3. Decomposition scope (`decompose3p1_from_metric`)
 - Minimum executable scope:
   - symmetric metric,
-  - `g_ti == 0` (beta unsupported),
+  - non-zero `g_ti` (shift/beta) supported,
   - diagonal spatial metric supported (with IEEE behavior on singular values),
   - symmetric spatial off-diagonal support allowed in evaluator via 3x3 inverse fallback.
 
@@ -92,4 +92,3 @@ Proposed correction:
 - Restrict Sema executable-mode accepted init call builtins to `sin` and `sqrt` (matching MLIRGen), keep `^` operator behavior unchanged.
 - Add a semantic regression test for a rejected unsupported init builtin call (e.g., `cos(...)`).
 - Document this contract in `docs/front_abi_init_only.md`.
-

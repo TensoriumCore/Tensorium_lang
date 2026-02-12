@@ -50,18 +50,18 @@ Unsupported init ops should produce explicit diagnostics in the front evaluator.
 ## `decompose3p1_from_metric` Minimal Contract
 For this milestone:
 - metric must be symmetric;
-- time-space terms must satisfy `g_ti = 0` (beta unsupported);
 - supported operational scope:
+  - non-zero time-space terms `g_ti` (shift/beta) are supported,
   - diagonal spatial metrics (primary path),
   - symmetric spatial off-diagonal terms (fallback inverse path).
 
 Computed outputs:
 - `gamma_ij = g_ij` (`i,j in {1,2,3}`)
-- `beta_i = 0` for supported `g_ti=0` scope
+- `beta_i = g_{0i}`
 - `gammaU = inverse(gamma)`:
   - diagonal fast path uses component-wise reciprocal (IEEE behavior preserved),
   - otherwise use 3x3 inverse for symmetric matrix
-- `alpha = sqrt(-g_tt)` for `g_ti=0` block-diagonal supported scope
+- `alpha = sqrt(beta_i beta^i - g_tt)` with `beta^i = gammaU^{ij} beta_j`
 
 ## IEEE Behavior Policy for Coordinate Singularities
 This front milestone **does not reject** singular coordinate points if arithmetic
@@ -76,10 +76,8 @@ Only explicit unsupported semantic forms should raise errors.
   - Schwarzschild reference point (`M=1, r=10, theta=pi/2`),
   - Schwarzschild edge cases (`theta=0`, `r=2M`),
   - Reissner-Nordstrom-like diagonal metric (`M,Q` parameters),
-  - Symmetric spatial off-diagonal metric (3x3 inverse fallback path).
-- Explicit unsupported test:
-  - Kerr-like metric with non-zero `g_tphi` is rejected with
-    `decompose3p1_from_metric requires g_ti = 0 (beta unsupported)`.
+  - Symmetric spatial off-diagonal metric (3x3 inverse fallback path),
+  - Kerr-like metric with non-zero `g_tphi` (shift-aware alpha path).
 
 ## Sema/MLIRGen Builtin Contract (initial_data call expressions)
 Executable-mode call builtins in `initial_data` are constrained to:
