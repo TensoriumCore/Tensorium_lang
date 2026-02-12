@@ -181,6 +181,7 @@ target_link_libraries(tensoriumMlirTransforms PUBLIC
 )
 
 add_library(tensoriumMlirCodegen
+  tensorium_mlir/Target/MLIRGen/InitEvaluator.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp
   tensorium_mlir/Init/Registry.cpp
   tensorium_mlir/Init/Passes.cpp

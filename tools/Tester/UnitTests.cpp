@@ -7,15 +7,18 @@
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
+#include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 
+#include <array>
 #include <cmath>
 #include <functional>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -109,6 +112,54 @@ static bool isParamNamedValue(::mlir::Value v, llvm::StringRef name) {
 static bool isCoordNamedValue(::mlir::Value v, llvm::StringRef name) {
   auto c = v.getDefiningOp<tensorium::mlir::CoordOp>();
   return c && c.getName() == name;
+}
+
+static bool almostEqual(double got, double expected, double relTol = 1e-12,
+                        double absTol = 1e-12) {
+  if (std::isnan(got) || std::isnan(expected))
+    return false;
+  const double scale = std::max(std::abs(expected), 1.0);
+  return std::abs(got - expected) <= std::max(absTol, relTol * scale);
+}
+
+struct InitEvalBuffers {
+  double alpha[1] = {0.0};
+  std::array<std::array<double, 1>, 9> gamma{};
+  std::array<std::array<double, 1>, 9> gammaU{};
+  std::array<double *, 9> gammaPtrs{};
+  std::array<double *, 9> gammaUPtrs{};
+};
+
+struct InitEvalContext {
+  InitEvalBuffers buffers;
+  std::array<double, 1> r{};
+  std::array<double, 1> theta{};
+  std::array<double, 1> phi{};
+  tensorium_mlir::InitEvalDescriptor desc;
+};
+
+static void setupSinglePointInitContext(InitEvalContext &ctx, double M, double r,
+                                        double theta, double phi) {
+  ctx.r[0] = r;
+  ctx.theta[0] = theta;
+  ctx.phi[0] = phi;
+
+  for (unsigned c = 0; c < 9; ++c) {
+    ctx.buffers.gammaPtrs[c] = ctx.buffers.gamma[c].data();
+    ctx.buffers.gammaUPtrs[c] = ctx.buffers.gammaU[c].data();
+    ctx.buffers.gamma[c][0] = std::numeric_limits<double>::quiet_NaN();
+    ctx.buffers.gammaU[c][0] = std::numeric_limits<double>::quiet_NaN();
+  }
+  ctx.buffers.alpha[0] = std::numeric_limits<double>::quiet_NaN();
+
+  ctx.desc.nPoints = 1;
+  ctx.desc.params["M"] = M;
+  ctx.desc.coords.r = ctx.r.data();
+  ctx.desc.coords.theta = ctx.theta.data();
+  ctx.desc.coords.phi = ctx.phi.data();
+  ctx.desc.outputs.alpha = ctx.buffers.alpha;
+  ctx.desc.outputs.gamma = ctx.buffers.gammaPtrs;
+  ctx.desc.outputs.gammaU = ctx.buffers.gammaUPtrs;
 }
 
 static bool valueDependsOnImpl(
@@ -1395,6 +1446,107 @@ static bool testMLIRNormalizationPasses() {
   return true;
 }
 
+static bool testSchwarzschildInitNumericPoint() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
+                                        CompilationMode::Executable, ctx);
+
+  InitEvalContext evalCtx;
+  const double M = 1.0;
+  const double r = 10.0;
+  const double theta = std::acos(-1.0) * 0.5;
+  const double phi = 0.0;
+  setupSinglePointInitContext(evalCtx, M, r, theta, phi);
+
+  auto result = tensorium_mlir::evaluateTensoriumInit(*module, evalCtx.desc);
+  if (!result.ok) {
+    std::cerr << "FAIL: init evaluator failed at reference point: "
+              << result.message << "\n";
+    return false;
+  }
+
+  const double f = 1.0 - 2.0 * M / r;
+  const double alphaExpected = std::sqrt(f);
+  if (!almostEqual(evalCtx.buffers.alpha[0], alphaExpected)) {
+    std::cerr << "FAIL: alpha mismatch at reference point, got "
+              << evalCtx.buffers.alpha[0] << " expected " << alphaExpected
+              << "\n";
+    return false;
+  }
+
+  if (!almostEqual(evalCtx.buffers.gamma[0][0], 1.0 / f) ||
+      !almostEqual(evalCtx.buffers.gamma[4][0], r * r) ||
+      !almostEqual(evalCtx.buffers.gamma[8][0], r * r)) {
+    std::cerr << "FAIL: gamma diagonal mismatch at reference point\n";
+    return false;
+  }
+
+  if (!almostEqual(evalCtx.buffers.gammaU[0][0], f) ||
+      !almostEqual(evalCtx.buffers.gammaU[4][0], 1.0 / (r * r)) ||
+      !almostEqual(evalCtx.buffers.gammaU[8][0], 1.0 / (r * r))) {
+    std::cerr << "FAIL: gammaU diagonal mismatch at reference point\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSchwarzschildInitThetaZeroNoNaN() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
+                                        CompilationMode::Executable, ctx);
+
+  InitEvalContext evalCtx;
+  setupSinglePointInitContext(evalCtx, 1.0, 10.0, 0.0, 0.0);
+  auto result = tensorium_mlir::evaluateTensoriumInit(*module, evalCtx.desc);
+  if (!result.ok) {
+    std::cerr << "FAIL: init evaluator failed at theta=0: "
+              << result.message << "\n";
+    return false;
+  }
+
+  if (std::isnan(evalCtx.buffers.gamma[8][0])) {
+    std::cerr << "FAIL: gamma_phiphi must not be NaN at theta=0\n";
+    return false;
+  }
+  if (!almostEqual(evalCtx.buffers.gamma[8][0], 0.0)) {
+    std::cerr << "FAIL: gamma_phiphi mismatch at theta=0, got "
+              << evalCtx.buffers.gamma[8][0] << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSchwarzschildInitHorizonIEEE() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
+                                        CompilationMode::Executable, ctx);
+
+  InitEvalContext evalCtx;
+  setupSinglePointInitContext(evalCtx, 1.0, 2.0, std::acos(-1.0) * 0.5, 0.0);
+  auto result = tensorium_mlir::evaluateTensoriumInit(*module, evalCtx.desc);
+  if (!result.ok) {
+    std::cerr << "FAIL: init evaluator unexpectedly rejected r=2M: "
+              << result.message << "\n";
+    return false;
+  }
+
+  if (!almostEqual(evalCtx.buffers.alpha[0], 0.0)) {
+    std::cerr << "FAIL: alpha must be zero at r=2M in current front contract\n";
+    return false;
+  }
+  if (!std::isinf(evalCtx.buffers.gamma[0][0])) {
+    std::cerr << "FAIL: gamma_rr expected to be inf at r=2M\n";
+    return false;
+  }
+  if (std::isnan(evalCtx.buffers.gammaU[0][0]) ||
+      !almostEqual(evalCtx.buffers.gammaU[0][0], 0.0)) {
+    std::cerr << "FAIL: gammaU_rr expected to be finite zero at r=2M\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testInitRhsInvariantRejectsMetricInRhs() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -1451,6 +1603,10 @@ int main() {
       {"testEinsteinCanonicalEquivalence", &testEinsteinCanonicalEquivalence},
       {"testSchwarzschildMLIRVerification", &testSchwarzschildMLIRVerification},
       {"testMLIRNormalizationPasses", &testMLIRNormalizationPasses},
+      {"testSchwarzschildInitNumericPoint", &testSchwarzschildInitNumericPoint},
+      {"testSchwarzschildInitThetaZeroNoNaN",
+       &testSchwarzschildInitThetaZeroNoNaN},
+      {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},
       {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
   };
 
