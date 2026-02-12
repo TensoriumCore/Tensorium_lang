@@ -1,29 +1,29 @@
 # Front Gaps Before Backend (Schwarzschild Init-Only Milestone)
 
 ## Scope
-- Branche auditée: `refactor/architecture-cleanup`.
-- Objectif: verrouiller ce qui manque côté front (`Tensorium_lang` + IR + MLIRGen) avant backend/JIT.
-- Périmètre: **init Schwarzschild uniquement** (`@tensorium_init`), sans lowering backend complet.
-- Source de vérité technique utilisée: code actuel + dump MLIR de `tests/fixtures/gr/schwarzschild_3d.tn` (`/tmp/schw3d_initrhs.mlir`).
+- Audited branch: `refactor/architecture-cleanup`.
+- Goal: lock down what is still missing in the front-end (`Tensorium_lang` + IR + MLIRGen) before backend/JIT work.
+- Scope: **Schwarzschild init only** (`@tensorium_init`), without full backend lowering.
+- Technical ground truth used: current code + MLIR dump of `tests/fixtures/gr/schwarzschild_3d.tn` (`/tmp/schw3d_initrhs.mlir`).
 
-## Definition Of Done (front-view) for JIT Milestone
-Le jalon "Schwarzschild numeric init-only" est considéré prêt côté front quand:
-- la fonction exécutable cible est `@tensorium_init` (pas `@tensorium_entry`),
-- les entrées runtime minimales sont explicites et stables:
-  - paramètres: `M`,
-  - coordonnées par point: `r`, `theta`, `phi` (phi optionnel selon dimension/config),
-  - description de grille: `N` points + mapping index->coordonnées,
-- les sorties sont explicites:
-  - minimum recommandé: `alpha`, `gamma_ij`, `gammaU^ij`,
-  - optionnel: `g_{mu,nu}` si on garde une sortie métrique brute,
-- un contrat mémoire est défini (format SoA recommandé, cf. section D),
-- les valeurs numériques attendues Schwarzschild sont vérifiées au moins sur un point de référence,
-- la sémantique MLIR des ops init est définie (pas seulement "op présente").
+## Definition Of Done (front-view) for the JIT milestone
+The "Schwarzschild numeric init-only" milestone is considered front-end ready when:
+- the executable target function is `@tensorium_init` (not `@tensorium_entry`),
+- minimal runtime inputs are explicit and stable:
+  - parameters: `M`,
+  - per-point coordinates: `r`, `theta`, `phi` (`phi` optional depending on dimension/config),
+  - grid description: `N` points + index-to-coordinate mapping,
+- outputs are explicit:
+  - recommended minimum: `alpha`, `gamma_ij`, `gammaU^ij`,
+  - optional: `g_{mu,nu}` if raw metric output is retained,
+- a memory contract is defined (SoA format recommended, see section D),
+- expected Schwarzschild numeric values are checked at least on one reference point,
+- MLIR semantics for init ops are defined (not only "op is present").
 
-## Minimal Schwarzschild Numeric Example
-Point de référence demandé: `M=1`, `r=10`, `theta=pi/2`.
+## Minimal Schwarzschild numeric example
+Requested reference point: `M=1`, `r=10`, `theta=pi/2`.
 
-Formules:
+Formulas:
 - `f = 1 - 2*M/r = 0.8`
 - `g_tt = -f = -0.8`
 - `g_rr = 1/f = 1.25`
@@ -33,35 +33,35 @@ Formules:
 - `gamma_ij = diag(1.25, 100, 100)`
 - `gammaU^ij = diag(0.8, 0.01, 0.01)`
 
-Ces valeurs doivent devenir des assertions de non-régression au jalon backend/JIT.
+These values should become non-regression assertions in the backend/JIT milestone.
 
 ## A) Gap audit: Semantics / AST / DSL
-- `initial_data`/`metric4`/`split_3p1` est bien supporté côté parse/AST:
+- `initial_data`/`metric4`/`split_3p1` is correctly supported at parse/AST level:
   - `lib/Parse/Parser.cpp:400`, `lib/Parse/Parser.cpp:511`, `include/tensorium/AST/AST.hpp:178`.
-- La validation Sema de structure est en place:
-  - dimensions/symétrie/coordonnées: `lib/Sema/Sema.cpp:378`, `lib/Sema/Sema.cpp:404`, `lib/Sema/Sema.cpp:333`.
-- Le paramètre `M` est implicite (pas de déclaration DSL dédiée):
-  - un `VarExpr` inconnu est transformé en `IndexedVarKind::Parameter` (`lib/Sema/Sema.cpp:225`).
-  - Conséquence: pas de contrat explicite "params requis", pas de typage nominal de paramètres.
-- Incohérence fonctionnelle front bloquante potentielle (S1):
-  - Sema accepte `sin/cos/tan/exp/log/sqrt/pow` (`lib/Sema/Sema.cpp:349`),
-  - MLIRGen init n’implémente que `sin` et `sqrt` (et `^` limité 0..4) (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp:522`),
-  - donc certains programmes passent Sema et cassent en MLIRGen.
-- Coordonnées:
-  - Sema vérifie cohérence nom coord vs `simulation.coordinates` (`lib/Sema/Sema.cpp:65`),
-  - mais `coord` MLIR porte juste un `name` string, sans liaison runtime explicite (cf. section C/D).
+- Structural Sema checks are already in place:
+  - dimensions/symmetry/coordinates: `lib/Sema/Sema.cpp:378`, `lib/Sema/Sema.cpp:404`, `lib/Sema/Sema.cpp:333`.
+- Parameter `M` is implicit (no dedicated DSL declaration):
+  - unknown `VarExpr` is turned into `IndexedVarKind::Parameter` (`lib/Sema/Sema.cpp:225`).
+  - Consequence: no explicit "required params" contract, no nominal parameter typing.
+- Potential front-end blocking inconsistency (S1):
+  - Sema accepts `sin/cos/tan/exp/log/sqrt/pow` (`lib/Sema/Sema.cpp:349`),
+  - MLIRGen init currently implements only `sin` and `sqrt` (and `^` limited to 0..4) (`lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp:522`),
+  - so some programs can pass Sema and then fail in MLIRGen.
+- Coordinates:
+  - Sema validates coordinate-name compatibility with `simulation.coordinates` (`lib/Sema/Sema.cpp:65`),
+  - but MLIR `coord` currently carries only a name string, without explicit runtime binding (see sections C/D).
 
 ## B) Gap audit: Tensorium IR / Domain IR
-- IR init existe (`InitExprIR`, `Metric4InitIR`, `InitialDataIR`) dans `include/tensorium/IR/IRBase.hpp:135`.
-- Gap principal:
-  - `InitSymbolIR` reste un symbole string (`include/tensorium/IR/IRBase.hpp:147`),
-  - la distinction forte `param vs coord vs field` n’est matérialisée qu’en MLIRGen (`emitInitExpr`).
-- `metric4` est aujourd’hui un "builder op" front, pas une représentation immédiatement exécutable point-wise indépendante.
-- Pas de modèle IR explicite de layout mémoire de field pour sortie numérique.
-- Pas d’étape IR front dédiée "evaluate init over grid points".
+- Init IR exists (`InitExprIR`, `Metric4InitIR`, `InitialDataIR`) in `include/tensorium/IR/IRBase.hpp:135`.
+- Main gap:
+  - `InitSymbolIR` is still a string symbol (`include/tensorium/IR/IRBase.hpp:147`),
+  - strict `param vs coord vs field` classification is currently materialized only in MLIRGen (`emitInitExpr`).
+- `metric4` is currently a front-end builder op, not a standalone point-wise executable representation.
+- No explicit IR model for field memory layout in numeric output mode.
+- No dedicated front IR stage for "evaluate init over grid points".
 
-## C) Gap audit: Tensorium MLIR Dialect (init path)
-Ops effectivement présentes dans `@tensorium_init` Schwarzschild:
+## C) Gap audit: Tensorium MLIR dialect (init path)
+Ops currently present in Schwarzschild `@tensorium_init`:
 - `tensorium.const`, `tensorium.param`, `tensorium.coord`,
 - `tensorium.add/sub/mul/div/sin`,
 - `tensorium.metric4`,
@@ -69,123 +69,122 @@ Ops effectivement présentes dans `@tensorium_init` Schwarzschild:
 - `tensorium.init3p1`,
 - `tensorium.assign`.
 
-État actuel par op:
-- Verifier: oui pour ces ops (`lib/tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.cpp:141`, `:150`, `:261`, `:271`, `:298`, `:321`).
-- Canonicalization/folding spécifique op: non (pas de patterns dédiés pour `metric4/decompose/init3p1/assign`).
-- Sémantique exécutable (au sens backend/JIT): incomplète pour `param/coord/metric4/decompose/init3p1/assign`.
+Current status by op:
+- Verifier: yes for these ops (`lib/tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.cpp:141`, `:150`, `:261`, `:271`, `:298`, `:321`).
+- Op-specific canonicalization/folding: no (no dedicated patterns for `metric4/decompose/init3p1/assign`).
+- Executable semantics (backend/JIT view): incomplete for `param/coord/metric4/decompose/init3p1/assign`.
 
-Constat important:
-- Les passes Tensorium actuelles réécrivent surtout autour de `dt_assign`/rhs (`lib/tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinLoweringPass.cpp:77`),
-- pas de passe opérationnelle dédiée au trio `metric4 -> decompose3p1_from_metric -> init3p1`.
+Important observation:
+- Current Tensorium passes mostly rewrite around `dt_assign`/RHS (`lib/tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinLoweringPass.cpp:77`),
+- there is no dedicated operational pass for `metric4 -> decompose3p1_from_metric -> init3p1`.
 
-## D) Runtime contract minimal (front ABI proposal)
-### ABI minimale proposée (C-like)
-Option SoA (recommandée):
-- entrées scalaires/globale:
+## D) Minimal runtime contract (front ABI proposal)
+### Proposed minimal ABI (C-like)
+SoA option (recommended):
+- scalar/global inputs:
   - `double M;`
   - `size_t n_points;`
-- coordonnées (longueur `n_points`):
+- coordinates (length `n_points`):
   - `const double *r;`
   - `const double *theta;`
-  - `const double *phi;` (nullable si non utilisé)
-- sorties:
-  - `double *alpha;` (1 composante),
-  - `double *gamma[9];` (cov 3x3 dense),
-  - `double *gammaU[9];` (con 3x3 dense),
-  - optionnel `double *g4[16];`.
+  - `const double *phi;` (nullable if unused)
+- outputs:
+  - `double *alpha;` (1 component),
+  - `double *gamma[9];` (dense covariant 3x3),
+  - `double *gammaU[9];` (dense contravariant 3x3),
+  - optional `double *g4[16];`.
 
-### Pourquoi SoA
-- simple pour vectorisation et loops backend,
-- composantes tensorielles clairement adressables,
-- s’aligne avec `tensorium.assign` field-oriented.
+### Why SoA
+- simple for vectorization and loops,
+- tensor components are directly addressable,
+- aligns with field-oriented `tensorium.assign`.
 
-### Gaps type-system pour rendre `!tensorium.field` lowerable
-`FieldType` actuel ne porte que `elementType/up/down` (`include/tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h:37`).
-Il manque:
+### Type-system gaps to make `!tensorium.field` lowerable
+Current `FieldType` only carries `elementType/up/down` (`include/tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h:37`).
+Missing information:
 - base pointer / ownership,
-- shape spatiale (`n_points` ou dims),
+- spatial shape (`n_points` or dims),
 - strides/layout,
-- éventuellement espace mémoire/alignment.
+- optionally memory space/alignment.
 
-Sans ces infos, impossible de définir un lowering mémoire stable pour `assign/ref`.
+Without this information, a stable memory lowering contract for `assign/ref` cannot be defined.
 
-## E) Tests front manquants avant backend
-### Numeric expectations (sans backend LLVM)
-- Ajouter une couche test "init evaluator" front (interprète `InitExprIR` + règle `decompose3p1_from_metric` minimale diag/beta=0),
-  ou un "MLIR interpreter shim" local limité aux ops init.
-- Cas minimal requis:
-  - Schwarzschild point test `(M=1,r=10,theta=pi/2)` avec assertions numériques ci-dessus.
+## E) Missing front-end tests before backend
+### Numeric expectations (without LLVM backend)
+- Add a front "init evaluator" test layer (interpreting `InitExprIR` + minimal diag/beta=0 `decompose3p1_from_metric` rule),
+  or a local "MLIR interpreter shim" limited to init ops.
+- Minimum required case:
+  - Schwarzschild point test `(M=1,r=10,theta=pi/2)` with numeric assertions listed above.
 
-### Tests négatifs/edge cases
+### Negative/edge-case tests
 - `r = 2M`:
-  - décider explicitement le contrat (recommandé: **autoriser** et accepter IEEE `inf/0`, pas reject front).
+  - decide and document explicit contract (recommended: **allow** and accept IEEE `inf/0`, not reject at front level).
 - `theta = 0`:
-  - vérifier `g_phiphi = 0` sans NaN parasite.
+  - verify `g_phiphi = 0` without accidental NaNs.
 - Dimension:
-  - cohérence 2D axisym vs 3D spherical sur composantes partagées.
+  - verify 2D axisymmetric vs 3D spherical consistency on shared components.
 
-### Ce qui est déjà bien couvert
-- invariants structuraux init/rhs et use-def sont déjà testés en C++:
+### What is already well covered
+- Structural init/rhs and use-def invariants are already tested in C++:
   - `tools/Tester/UnitTests.cpp:849`, `:914`, `:1075`, `:1252`.
-- garde-fous `initial_data`/diagnostics existent dans `run_test.sh`:
+- `initial_data` safety diagnostics already exist in `run_test.sh`:
   - `tests/semantic/initial_data/*` (`run_test.sh:108`, `:113`).
 
 ## MLIR op -> minimal executable semantics -> backend dependency
-| Op MLIR | Sémantique minimale exécutable (init-only) | Dépendance backend |
+| MLIR op | Minimal executable semantics (init-only) | Backend dependency |
 |---|---|---|
-| `tensorium.const` | produire un scalaire `f64` | arith de base |
-| `tensorium.param(name)` | lire un param runtime (ex: `M`) | table params/ABI |
-| `tensorium.coord(name)` | lire coordonnée du point courant (`r/theta/phi`) | grid/coord provider |
-| `tensorium.add/sub/mul/div` | arith scalaire `f64` point-wise | arith scalar lowering |
-| `tensorium.sin/sqrt` | fonctions math `f64` point-wise | libm/runtime math |
-| `tensorium.metric4(16 comps)` | construire `g_{mu,nu}` cov 4x4 au point | valeur structurée 4x4 |
-| `tensorium.decompose3p1_from_metric(g)` | calculer `alpha,beta,gamma,gammaU` (au moins diag + beta=0) | algo décomposition/inversion |
-| `tensorium.init3p1(a,b,g,gU)` | binding/no-op typé (ou normalisation) | convention de pipeline |
-| `tensorium.assign(field, rhs)` | store dans buffer field cible | ABI mémoire field |
-| `tensorium.ref(field,...)` | load depuis buffer field (utile pour vérif rhs) | ABI mémoire field |
+| `tensorium.const` | produce an `f64` scalar | basic arithmetic |
+| `tensorium.param(name)` | read a runtime parameter (e.g. `M`) | params table / ABI |
+| `tensorium.coord(name)` | read current-point coordinate (`r/theta/phi`) | grid / coord provider |
+| `tensorium.add/sub/mul/div` | point-wise `f64` arithmetic | scalar arithmetic lowering |
+| `tensorium.sin/sqrt` | point-wise `f64` math | math runtime / libm |
+| `tensorium.metric4(16 comps)` | build covariant 4x4 `g_{mu,nu}` at point | structured 4x4 value support |
+| `tensorium.decompose3p1_from_metric(g)` | compute `alpha,beta,gamma,gammaU` (at least diag + beta=0) | decomposition / inversion algorithm |
+| `tensorium.init3p1(a,b,g,gU)` | typed binding/no-op (or normalization hook) | pipeline convention |
+| `tensorium.assign(field, rhs)` | store into destination field buffer | field memory ABI |
+| `tensorium.ref(field,...)` | load from field buffer (useful for rhs verification) | field memory ABI |
 
-## Recommandation: plan d’attaque front -> backend (3 phases max)
-### Phase 1 — Contrat exécutable init-only (front contract first)
-- Objectif:
-  - figer ABI runtime minimale (`param + coord arrays + output buffers`),
-  - figer sémantique opérationnelle des ops init listées ci-dessus.
-- Fichiers attendus:
-  - docs contrat: `docs/front_gaps_before_backend.md` (ce document),
-  - types/ABI front: `include/tensorium_mlir/...` (nouveau contrat),
-  - éventuellement adapter `MLIRGen` pour matérialiser interfaces.
-- Risques:
-  - mauvais choix de layout mémoire bloquant plus tard.
-- Tests à verrouiller:
-  - tests structurels init/rhs existants + nouveaux tests contrat ABI.
+## Recommendation: front -> backend plan (max 3 phases)
+### Phase 1 — Executable init-only contract first
+- Goal:
+  - freeze minimal runtime ABI (`param + coord arrays + output buffers`),
+  - freeze operational semantics of the init ops listed above.
+- Files expected:
+  - contract docs: `docs/front_gaps_before_backend.md` (this file),
+  - front ABI/types: `include/tensorium_mlir/...` (new contract),
+  - optional MLIRGen adjustments to materialize interfaces.
+- Risks:
+  - wrong memory-layout choice can block later phases.
+- Tests to lock:
+  - existing init/rhs structural tests + new ABI contract tests.
 
-### Phase 2 — Rendre la chaîne init directement lowerable
-- Objectif:
-  - rendre `metric4/decompose/init3p1/assign` explicitement lowerables.
+### Phase 2 — Make init chain directly lowerable
+- Goal:
+  - make `metric4/decompose/init3p1/assign` explicitly lowerable.
 - Options:
-  - garder les ops et écrire leur lowering dédié,
-  - ou expliciter plus tôt en arith SSA (si nécessaire).
-- Fichiers attendus:
+  - keep ops and implement dedicated lowering,
+  - or expand earlier into arithmetic SSA (if needed).
+- Files expected:
   - `lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp`,
-  - passes/rewrites dédiées init.
-- Risques:
-  - dérive sémantique si decompose est partiellement réécrit sans invariants.
+  - dedicated init rewrites/passes.
+- Risks:
+  - semantic drift if decomposition is partially rewritten without clear invariants.
 - Tests:
-  - point checks numériques Schwarzschild, invariants init/rhs conservés.
+  - Schwarzschild pointwise numeric checks, while preserving init/rhs invariants.
 
-### Phase 3 — Backend/JIT seulement après contrat stabilisé
-- Objectif:
-  - brancher lowering LLVM/JIT sur un IR init déjà stable.
-- Risques:
-  - confondre bugs backend et ambiguïtés front si phase 1/2 incomplètes.
+### Phase 3 — Backend/JIT only after contract stabilization
+- Goal:
+  - connect LLVM/JIT lowering on top of a stable init IR contract.
+- Risks:
+  - backend bugs and front ambiguities become indistinguishable if phases 1/2 are incomplete.
 - Tests:
-  - réutiliser les mêmes fixtures + comparaison numérique sur points de référence.
+  - reuse same fixtures + numeric comparison at reference points.
 
-## Action checklist (cochable)
-- [ ] Spécifier ABI init-only officielle (params, coords, outputs, layout).
-- [ ] Ajouter test numérique pointwise Schwarzschild (`M=1,r=10,theta=pi/2`).
-- [ ] Décider et documenter le contrat horizon `r=2M` (allow IEEE vs reject).
-- [ ] Harmoniser whitelist Sema vs MLIRGen pour fonctions `initial_data`.
-- [ ] Définir sémantique exécutable de `decompose3p1_from_metric` (scope minimal exact).
-- [ ] Ajouter tests dimension 2D/3D sur composantes partagées.
-- [ ] Documenter la correspondance `!tensorium.field` -> buffers runtime (shape/strides).
-
+## Action checklist
+- [ ] Define the official init-only ABI (params, coords, outputs, layout).
+- [ ] Add Schwarzschild pointwise numeric test (`M=1,r=10,theta=pi/2`).
+- [ ] Decide and document horizon behavior at `r=2M` (IEEE-allow vs reject).
+- [ ] Align Sema vs MLIRGen whitelist for `initial_data` functions.
+- [ ] Define executable semantics scope for `decompose3p1_from_metric`.
+- [ ] Add 2D/3D consistency tests on shared metric components.
+- [ ] Document mapping from `!tensorium.field` to runtime buffers (shape/strides).
