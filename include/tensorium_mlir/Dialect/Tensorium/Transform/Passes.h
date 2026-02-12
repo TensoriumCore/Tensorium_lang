@@ -16,6 +16,7 @@ std::unique_ptr<::mlir::Pass> createTensoriumEinsteinValidityPass();
 std::unique_ptr<::mlir::Pass> createTensoriumEinsteinCanonicalizePass();
 std::unique_ptr<::mlir::Pass> createTensoriumMetricLoweringPass();
 std::unique_ptr<::mlir::Pass> createTensoriumInitToStdPass();
+std::unique_ptr<::mlir::Pass> createTensoriumInitGridScfPass();
 std::unique_ptr<::mlir::Pass>
 createTensoriumStencilLoweringPass(double dx = 0.1, int order = 2);
 std::unique_ptr<::mlir::Pass>
