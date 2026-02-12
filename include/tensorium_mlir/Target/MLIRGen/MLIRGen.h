@@ -25,6 +25,11 @@ struct MLIRGenOptions {
   int order = 2;
   bool enableDissipationPass = false;
   double dissipationStrength = 0.1;
+  // Post-MLIRGen module normalization (default on for stable test output).
+  bool enableMLIRCanonicalizePass = true;
+  bool enableMLIRCSEPass = true;
+  // Optional compaction across function boundaries.
+  bool enableMLIRInlinePass = false;
 };
 
 mlir::OwningOpRef<mlir::ModuleOp>

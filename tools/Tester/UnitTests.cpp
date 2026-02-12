@@ -70,8 +70,9 @@ static tensorium_mlir::MLIRGenOptions makeExecutablePipelineOpts() {
 }
 
 static ::mlir::OwningOpRef<::mlir::ModuleOp>
-buildMLIRModuleFromFile(const std::string &path, CompilationMode mode,
-                        ::mlir::MLIRContext &ctx) {
+buildMLIRModuleFromFileWithOpts(const std::string &path, CompilationMode mode,
+                                ::mlir::MLIRContext &ctx,
+                                const tensorium_mlir::MLIRGenOptions &opts) {
   backend::ModuleIR mod = buildModuleFromFile(path, mode);
   validation::canonicalizeDifferentialIR(mod);
   validation::canonicalizeEinsteinIR(mod);
@@ -83,7 +84,14 @@ buildMLIRModuleFromFile(const std::string &path, CompilationMode mode,
       oss << "\n  - " << diag.message;
     throw std::runtime_error(oss.str());
   }
-  return tensorium_mlir::buildMLIRModule(mod, ctx, makeExecutablePipelineOpts());
+  return tensorium_mlir::buildMLIRModule(mod, ctx, opts);
+}
+
+static ::mlir::OwningOpRef<::mlir::ModuleOp>
+buildMLIRModuleFromFile(const std::string &path, CompilationMode mode,
+                        ::mlir::MLIRContext &ctx) {
+  return buildMLIRModuleFromFileWithOpts(path, mode, ctx,
+                                         makeExecutablePipelineOpts());
 }
 
 static bool isConstValue(::mlir::Value v, double expected, double eps = 1e-12) {
@@ -91,6 +99,16 @@ static bool isConstValue(::mlir::Value v, double expected, double eps = 1e-12) {
   if (!c)
     return false;
   return std::abs(c.getValue().convertToDouble() - expected) <= eps;
+}
+
+static bool isParamNamedValue(::mlir::Value v, llvm::StringRef name) {
+  auto p = v.getDefiningOp<tensorium::mlir::ParamOp>();
+  return p && p.getName() == name;
+}
+
+static bool isCoordNamedValue(::mlir::Value v, llvm::StringRef name) {
+  auto c = v.getDefiningOp<tensorium::mlir::CoordOp>();
+  return c && c.getName() == name;
 }
 
 static bool valueDependsOnImpl(
@@ -809,15 +827,6 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
 
-  auto isParamMValue = [](::mlir::Value v) {
-    auto p = v.getDefiningOp<tensorium::mlir::ParamOp>();
-    return p && p.getName() == "M";
-  };
-  auto isCoordValue = [](::mlir::Value v, llvm::StringRef name) {
-    auto c = v.getDefiningOp<tensorium::mlir::CoordOp>();
-    return c && c.getName() == name;
-  };
-
   auto metricComps = metricOp.getComponents();
   if (metricComps.size() != 16) {
     std::cerr << "FAIL: metric4 must carry 16 SSA components\n";
@@ -839,7 +848,7 @@ static bool testSchwarzschildMLIRVerification() {
   }
 
   auto twoMrDiv = fSub.getRhs().getDefiningOp<tensorium::mlir::DivOp>();
-  if (!twoMrDiv || !isCoordValue(twoMrDiv.getRhs(), "r")) {
+  if (!twoMrDiv || !isCoordNamedValue(twoMrDiv.getRhs(), "r")) {
     std::cerr << "FAIL: expected 2*M/r denominator to be coordinate r\n";
     return false;
   }
@@ -850,8 +859,10 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
   const bool hasConst2ParamM =
-      (isConstValue(twoMMul.getLhs(), 2.0) && isParamMValue(twoMMul.getRhs())) ||
-      (isConstValue(twoMMul.getRhs(), 2.0) && isParamMValue(twoMMul.getLhs()));
+      (isConstValue(twoMMul.getLhs(), 2.0) &&
+       isParamNamedValue(twoMMul.getRhs(), "M")) ||
+      (isConstValue(twoMMul.getRhs(), 2.0) &&
+       isParamNamedValue(twoMMul.getLhs(), "M"));
   if (!hasConst2ParamM) {
     std::cerr << "FAIL: expected factor 2*M in Schwarzschild factor\n";
     return false;
@@ -859,14 +870,14 @@ static bool testSchwarzschildMLIRVerification() {
   int twoMrCount = 0;
   for (::mlir::Operation &op : layout.initFunc.getBody().front()) {
     auto div = llvm::dyn_cast<tensorium::mlir::DivOp>(&op);
-    if (!div || !isCoordValue(div.getRhs(), "r"))
+    if (!div || !isCoordNamedValue(div.getRhs(), "r"))
       continue;
     auto mul = div.getLhs().getDefiningOp<tensorium::mlir::MulOp>();
     if (!mul)
       continue;
     const bool match =
-        (isConstValue(mul.getLhs(), 2.0) && isParamMValue(mul.getRhs())) ||
-        (isConstValue(mul.getRhs(), 2.0) && isParamMValue(mul.getLhs()));
+        (isConstValue(mul.getLhs(), 2.0) && isParamNamedValue(mul.getRhs(), "M")) ||
+        (isConstValue(mul.getRhs(), 2.0) && isParamNamedValue(mul.getLhs(), "M"));
     if (match)
       ++twoMrCount;
   }
@@ -995,6 +1006,103 @@ static bool testSchwarzschildMLIRVerification() {
   return true;
 }
 
+struct InitNormCounts {
+  int twoMrDiv = 0;
+  int sinTheta = 0;
+};
+
+static InitNormCounts countInitNormalizationPatterns(::mlir::func::FuncOp initFunc) {
+  InitNormCounts counts;
+  for (::mlir::Operation &op : initFunc.getBody().front()) {
+    if (auto div = llvm::dyn_cast<tensorium::mlir::DivOp>(&op)) {
+      if (!isCoordNamedValue(div.getRhs(), "r"))
+        continue;
+      auto mul = div.getLhs().getDefiningOp<tensorium::mlir::MulOp>();
+      if (!mul)
+        continue;
+      const bool twoMr =
+          (isConstValue(mul.getLhs(), 2.0) &&
+           isParamNamedValue(mul.getRhs(), "M")) ||
+          (isConstValue(mul.getRhs(), 2.0) &&
+           isParamNamedValue(mul.getLhs(), "M"));
+      if (twoMr)
+        ++counts.twoMrDiv;
+    }
+
+    if (auto sin = llvm::dyn_cast<tensorium::mlir::SinOp>(&op)) {
+      if (isCoordNamedValue(sin.getIn(), "theta"))
+        ++counts.sinTheta;
+    }
+  }
+  return counts;
+}
+
+static bool testMLIRNormalizationPasses() {
+  tensorium_mlir::MLIRGenOptions optsNoNorm = makeExecutablePipelineOpts();
+  optsNoNorm.enableMLIRCanonicalizePass = false;
+  optsNoNorm.enableMLIRCSEPass = false;
+  optsNoNorm.enableMLIRInlinePass = false;
+
+  tensorium_mlir::MLIRGenOptions optsNorm = makeExecutablePipelineOpts();
+  optsNorm.enableMLIRCanonicalizePass = true;
+  optsNorm.enableMLIRCSEPass = true;
+  optsNorm.enableMLIRInlinePass = false;
+
+  ::mlir::MLIRContext ctxNoNorm;
+  auto rawModule = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable,
+      ctxNoNorm, optsNoNorm);
+
+  ::mlir::MLIRContext ctxNorm;
+  auto normModule = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable,
+      ctxNorm, optsNorm);
+
+  InitRhsLayout rawLayout;
+  std::string rawErr;
+  if (!verifyInitRhsLayout(*rawModule, rawLayout, rawErr)) {
+    std::cerr << "FAIL: raw MLIR layout invalid before normalization: " << rawErr
+              << "\n";
+    return false;
+  }
+
+  InitRhsLayout normLayout;
+  std::string normErr;
+  if (!verifyInitRhsLayout(*normModule, normLayout, normErr)) {
+    std::cerr << "FAIL: normalized MLIR layout invalid: " << normErr << "\n";
+    return false;
+  }
+
+  InitNormCounts rawCounts = countInitNormalizationPatterns(rawLayout.initFunc);
+  InitNormCounts normCounts = countInitNormalizationPatterns(normLayout.initFunc);
+
+  if (normCounts.twoMrDiv != 1) {
+    std::cerr << "FAIL: expected normalized init to keep one 2*M/r, got "
+              << normCounts.twoMrDiv << "\n";
+    return false;
+  }
+  if (normCounts.sinTheta != 1) {
+    std::cerr << "FAIL: expected normalized init to keep one sin(theta), got "
+              << normCounts.sinTheta << "\n";
+    return false;
+  }
+
+  if (rawCounts.twoMrDiv <= normCounts.twoMrDiv) {
+    std::cerr << "FAIL: normalization should reduce duplicated 2*M/r, raw="
+              << rawCounts.twoMrDiv << " normalized=" << normCounts.twoMrDiv
+              << "\n";
+    return false;
+  }
+  if (rawCounts.sinTheta <= normCounts.sinTheta) {
+    std::cerr << "FAIL: normalization should reduce duplicated sin(theta), raw="
+              << rawCounts.sinTheta << " normalized=" << normCounts.sinTheta
+              << "\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testInitRhsInvariantRejectsMetricInRhs() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -1044,6 +1152,7 @@ int main() {
   ok &= testIRVerifierRejectsUncanonicalizedGradient();
   ok &= testSchwarzschildCanonicalPatterns();
   ok &= testSchwarzschildMLIRVerification();
+  ok &= testMLIRNormalizationPasses();
   ok &= testInitRhsInvariantRejectsMetricInRhs();
 
   if (!ok)

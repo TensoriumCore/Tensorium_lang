@@ -951,6 +951,16 @@ static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
   }
 }
 
+static void addPostMLIRNormalizationPipeline(::mlir::PassManager &pm,
+                                             const MLIRGenOptions &opts) {
+  if (opts.enableMLIRInlinePass)
+    pm.addPass(mlir::createInlinerPass());
+  if (opts.enableMLIRCanonicalizePass)
+    pm.addPass(mlir::createCanonicalizerPass());
+  if (opts.enableMLIRCSEPass)
+    pm.addPass(mlir::createCSEPass());
+}
+
 mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
                 mlir::MLIRContext &ctx, const MLIRGenOptions &opts) {
@@ -1044,9 +1054,7 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 
   mlir::PassManager pm(&ctx);
   addEinsteinPipelineSafe(pm, pipelineOpts);
-
-  pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(mlir::createCSEPass());
+  addPostMLIRNormalizationPipeline(pm, pipelineOpts);
   if (mlir::failed(pm.run(*moduleOp))) {
     llvm::errs() << "Pipeline failed\n";
   }
