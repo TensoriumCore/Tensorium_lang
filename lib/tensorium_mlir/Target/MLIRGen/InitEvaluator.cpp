@@ -96,6 +96,18 @@ validateDescriptor(const InitEvalDescriptor &desc) {
     }
   }
 
+  // beta capture is optional, but must be fully specified if enabled.
+  bool anyBeta = false;
+  bool allBeta = true;
+  for (unsigned c = 0; c < 3; ++c) {
+    anyBeta = anyBeta || (desc.outputs.beta[c] != nullptr);
+    allBeta = allBeta && (desc.outputs.beta[c] != nullptr);
+  }
+  if (anyBeta && !allBeta) {
+    return InitEvalResult::failure(
+        "init evaluator beta capture requires 3 component buffers");
+  }
+
   // metric4 capture is optional, but must be fully specified if enabled.
   bool anyMetric4 = false;
   bool allMetric4 = true;
@@ -540,6 +552,10 @@ static InitEvalResult executeInitPoint(
       beta.data[0] = metric.data[1];
       beta.data[1] = metric.data[2];
       beta.data[2] = metric.data[3];
+      for (unsigned i = 0; i < 3; ++i) {
+        if (desc.outputs.beta[i])
+          desc.outputs.beta[i][point] = beta.data[i];
+      }
 
       RuntimeValue gamma = makeTensor3x3();
       gamma.data[0] = metric.data[5];

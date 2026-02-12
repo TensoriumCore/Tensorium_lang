@@ -18,6 +18,8 @@ struct InitCoordsSoA {
 
 struct InitOutputsSoA {
   double *alpha = nullptr;
+  // Optional debug/output capture for beta_i components from 3+1 decomposition.
+  std::array<double *, 3> beta{};
   std::array<double *, 9> gamma{};
   std::array<double *, 9> gammaU{};
   // Optional debug/output capture for metric4 g_{mu,nu} components.

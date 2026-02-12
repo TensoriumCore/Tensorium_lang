@@ -125,9 +125,11 @@ static bool almostEqual(double got, double expected, double relTol = 1e-12,
 
 struct InitEvalBuffers {
   double alpha[1] = {0.0};
+  std::array<std::array<double, 1>, 3> beta{};
   std::array<std::array<double, 1>, 16> metric4{};
   std::array<std::array<double, 1>, 9> gamma{};
   std::array<std::array<double, 1>, 9> gammaU{};
+  std::array<double *, 3> betaPtrs{};
   std::array<double *, 16> metric4Ptrs{};
   std::array<double *, 9> gammaPtrs{};
   std::array<double *, 9> gammaUPtrs{};
@@ -147,6 +149,10 @@ static void setupSinglePointInitContext(InitEvalContext &ctx, double M, double r
   ctx.theta[0] = theta;
   ctx.phi[0] = phi;
 
+  for (unsigned c = 0; c < 3; ++c) {
+    ctx.buffers.betaPtrs[c] = ctx.buffers.beta[c].data();
+    ctx.buffers.beta[c][0] = std::numeric_limits<double>::quiet_NaN();
+  }
   for (unsigned c = 0; c < 9; ++c) {
     ctx.buffers.gammaPtrs[c] = ctx.buffers.gamma[c].data();
     ctx.buffers.gammaUPtrs[c] = ctx.buffers.gammaU[c].data();
@@ -165,6 +171,7 @@ static void setupSinglePointInitContext(InitEvalContext &ctx, double M, double r
   ctx.desc.coords.theta = ctx.theta.data();
   ctx.desc.coords.phi = ctx.phi.data();
   ctx.desc.outputs.alpha = ctx.buffers.alpha;
+  ctx.desc.outputs.beta = ctx.buffers.betaPtrs;
   ctx.desc.outputs.metric4 = ctx.buffers.metric4Ptrs;
   ctx.desc.outputs.gamma = ctx.buffers.gammaPtrs;
   ctx.desc.outputs.gammaU = ctx.buffers.gammaUPtrs;
@@ -189,6 +196,12 @@ formatMatrix4x4(const std::array<std::array<double, 1>, 16> &m) {
      << m[11][0] << "], "
      << "[" << m[12][0] << ", " << m[13][0] << ", " << m[14][0] << ", "
      << m[15][0] << "]]";
+  return os.str();
+}
+
+static std::string formatVector3(const std::array<std::array<double, 1>, 3> &v) {
+  std::ostringstream os;
+  os << "[" << v[0][0] << ", " << v[1][0] << ", " << v[2][0] << "]";
   return os.str();
 }
 
@@ -1777,6 +1790,143 @@ static bool testKerrLikeInitNumericPoint() {
   return true;
 }
 
+static bool testKerrLikeReconstructMetricPoint() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/kerr_like_3d.tn",
+                                        CompilationMode::Executable, ctx);
+
+  InitEvalContext evalCtx;
+  const double M = 1.0;
+  const double a = 0.3;
+  const double r = 10.0;
+  const double theta = std::acos(-1.0) * 0.5;
+  setupSinglePointInitContext(evalCtx, M, r, theta, 0.0);
+  evalCtx.desc.params["a"] = a;
+
+  auto result = tensorium_mlir::evaluateTensoriumInit(*module, evalCtx.desc);
+  if (!result.ok) {
+    std::cerr << "FAIL: Kerr-like reconstruction evaluator failed: "
+              << result.message << "\n";
+    return false;
+  }
+
+  const double alpha = evalCtx.buffers.alpha[0];
+  const double beta[3] = {evalCtx.buffers.beta[0][0], evalCtx.buffers.beta[1][0],
+                          evalCtx.buffers.beta[2][0]};
+
+  double betaUpper[3] = {0.0, 0.0, 0.0};
+  for (unsigned i = 0; i < 3; ++i) {
+    for (unsigned j = 0; j < 3; ++j)
+      betaUpper[i] += evalCtx.buffers.gammaU[i * 3 + j][0] * beta[j];
+  }
+
+  const double betaDot =
+      beta[0] * betaUpper[0] + beta[1] * betaUpper[1] + beta[2] * betaUpper[2];
+  const double g00Recon = -alpha * alpha + betaDot;
+  const double g0Recon[3] = {beta[0], beta[1], beta[2]};
+
+  const double g00In = evalCtx.buffers.metric4[0][0];
+  const double g0In[3] = {evalCtx.buffers.metric4[1][0], evalCtx.buffers.metric4[2][0],
+                          evalCtx.buffers.metric4[3][0]};
+  const unsigned spatialMap[9] = {5, 6, 7, 9, 10, 11, 13, 14, 15};
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Kerr-like reconstruction check\n"
+            << "  beta_i      got=" << formatVector3(evalCtx.buffers.beta)
+            << "\n"
+            << "  g00 recon   got=" << g00Recon << " in=" << g00In << "\n"
+            << "  g0i recon   got=[" << g0Recon[0] << ", " << g0Recon[1] << ", "
+            << g0Recon[2] << "]"
+            << " in=[" << g0In[0] << ", " << g0In[1] << ", " << g0In[2]
+            << "]\n";
+
+  if (!almostEqual(g00Recon, g00In)) {
+    std::cerr << "FAIL: reconstructed g00 mismatch\n";
+    return false;
+  }
+
+  for (unsigned i = 0; i < 3; ++i) {
+    if (!almostEqual(g0Recon[i], g0In[i])) {
+      std::cerr << "FAIL: reconstructed g0i mismatch at i=" << i << "\n";
+      return false;
+    }
+  }
+
+  for (unsigned i = 0; i < 3; ++i) {
+    for (unsigned j = 0; j < 3; ++j) {
+      const double gijRecon = evalCtx.buffers.gamma[i * 3 + j][0];
+      const double gijIn = evalCtx.buffers.metric4[spatialMap[i * 3 + j]][0];
+      if (!almostEqual(gijRecon, gijIn)) {
+        std::cerr << "FAIL: reconstructed gij mismatch at (" << i << "," << j
+                  << ")\n";
+        return false;
+      }
+    }
+  }
+
+  // Keep symmetry in check on g_ti/g_it for the same evaluated metric point.
+  if (!almostEqual(evalCtx.buffers.metric4[1][0], evalCtx.buffers.metric4[4][0]) ||
+      !almostEqual(evalCtx.buffers.metric4[2][0], evalCtx.buffers.metric4[8][0]) ||
+      !almostEqual(evalCtx.buffers.metric4[3][0], evalCtx.buffers.metric4[12][0])) {
+    std::cerr << "FAIL: metric4 symmetry mismatch on time-space components\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testKerrLikeHasNonZeroBetaPhi() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/kerr_like_3d.tn",
+                                        CompilationMode::Executable, ctx);
+
+  const double M = 1.0;
+  const double r = 10.0;
+  const double theta = std::acos(-1.0) * 0.5;
+
+  InitEvalContext evalShift;
+  setupSinglePointInitContext(evalShift, M, r, theta, 0.0);
+  evalShift.desc.params["a"] = 0.3;
+  auto shiftedRes = tensorium_mlir::evaluateTensoriumInit(*module, evalShift.desc);
+  if (!shiftedRes.ok) {
+    std::cerr << "FAIL: Kerr-like beta sanity (a=0.3) failed: "
+              << shiftedRes.message << "\n";
+    return false;
+  }
+
+  InitEvalContext evalNoShift;
+  setupSinglePointInitContext(evalNoShift, M, r, theta, 0.0);
+  evalNoShift.desc.params["a"] = 0.0;
+  auto noShiftRes =
+      tensorium_mlir::evaluateTensoriumInit(*module, evalNoShift.desc);
+  if (!noShiftRes.ok) {
+    std::cerr << "FAIL: Kerr-like beta sanity (a=0) failed: "
+              << noShiftRes.message << "\n";
+    return false;
+  }
+
+  const double betaPhiShift = evalShift.buffers.beta[2][0];
+  const double betaPhiNoShift = evalNoShift.buffers.beta[2][0];
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Kerr-like beta sanity\n"
+            << "  beta_i (a=0.3) got=" << formatVector3(evalShift.buffers.beta)
+            << "\n"
+            << "  beta_i (a=0.0) got=" << formatVector3(evalNoShift.buffers.beta)
+            << "\n";
+
+  if (!(std::abs(betaPhiShift) > 1e-12)) {
+    std::cerr << "FAIL: expected non-zero beta_phi for a=0.3\n";
+    return false;
+  }
+  if (!almostEqual(betaPhiNoShift, 0.0)) {
+    std::cerr << "FAIL: expected beta_phi == 0 for a=0\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testInitRhsInvariantRejectsMetricInRhs() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -1841,6 +1991,9 @@ int main() {
        &testReissnerNordstromInitNumericPoint},
       {"testSpatialOffdiagInitNumericPoint", &testSpatialOffdiagInitNumericPoint},
       {"testKerrLikeInitNumericPoint", &testKerrLikeInitNumericPoint},
+      {"testKerrLikeReconstructMetricPoint",
+       &testKerrLikeReconstructMetricPoint},
+      {"testKerrLikeHasNonZeroBetaPhi", &testKerrLikeHasNonZeroBetaPhi},
       {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
   };
 
