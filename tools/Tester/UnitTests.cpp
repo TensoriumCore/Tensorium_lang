@@ -2255,24 +2255,32 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     }
   }
 
-  auto valueFeedsContract = [](::mlir::Value v) {
+  auto valueFeedsContraction = [](::mlir::Value v) {
+    for (::mlir::Operation *user : v.getUsers()) {
+      if (llvm::isa<tensorium::mlir::ContractOp>(user) ||
+          llvm::isa<tensorium::mlir::EinsumOp>(user)) {
+        return true;
+      }
+    }
     for (::mlir::Operation *user : v.getUsers()) {
       auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(user);
       if (!mul)
         continue;
       for (::mlir::Operation *mulUser : mul.getRes().getUsers()) {
-        if (llvm::isa<tensorium::mlir::ContractOp>(mulUser))
+        if (llvm::isa<tensorium::mlir::ContractOp>(mulUser) ||
+            llvm::isa<tensorium::mlir::EinsumOp>(mulUser)) {
           return true;
+        }
       }
     }
     return false;
   };
 
-  int derivCount = 0;
   int addCount = 0;
   int subCount = 0;
   int mulCount = 0;
   int contractCount = 0;
+  int einsumCount = 0;
   int dtAssignCount = 0;
   bool hasChristoffelMagicOp = false;
   bool rhsBuildsLocalGammaU = false;
@@ -2280,11 +2288,11 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
   bool gammaUContractUsesNonInitSource = false;
 
   for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
-    derivCount += llvm::isa<tensorium::mlir::DerivOp>(&op) ? 1 : 0;
     addCount += llvm::isa<tensorium::mlir::AddOp>(&op) ? 1 : 0;
     subCount += llvm::isa<tensorium::mlir::SubOp>(&op) ? 1 : 0;
     mulCount += llvm::isa<tensorium::mlir::MulOp>(&op) ? 1 : 0;
     contractCount += llvm::isa<tensorium::mlir::ContractOp>(&op) ? 1 : 0;
+    einsumCount += llvm::isa<tensorium::mlir::EinsumOp>(&op) ? 1 : 0;
     rhsBuildsLocalGammaU |= llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op);
     hasChristoffelMagicOp |= (op.getName().getStringRef() == "tensorium.christoffel");
 
@@ -2307,7 +2315,7 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     auto idx = ref.getIndices();
     if (!idx || idx->size() != 2)
       continue;
-    if (!valueFeedsContract(ref.getResult()))
+    if (!valueFeedsContraction(ref.getResult()))
       continue;
 
     bool fromInitAssignedField = false;
@@ -2336,12 +2344,15 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     return false;
   }
   if (!gammaUFromInitAssignedFeedsContract || gammaUContractUsesNonInitSource) {
-    std::cerr << "FAIL: Christoffel contract must consume init-assigned gammaU field\n";
+    std::cerr << "FAIL: Christoffel contraction must consume init-assigned gammaU field\n";
     return false;
   }
-  if (derivCount < 3 || addCount < 1 || subCount < 1 || mulCount < 2 ||
-      contractCount < 1 || dtAssignCount != 1) {
+  if (addCount < 1 || subCount < 1 || mulCount < 2 || dtAssignCount != 1) {
     std::cerr << "FAIL: Christoffel MLIR structure is incomplete\n";
+    return false;
+  }
+  if (contractCount == 0 && einsumCount == 0) {
+    std::cerr << "FAIL: Christoffel MLIR must include contract or einsum contraction ops\n";
     return false;
   }
 

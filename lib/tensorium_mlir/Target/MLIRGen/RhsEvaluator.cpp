@@ -337,6 +337,100 @@ static RhsEvalResult evalContractTensor(tensorium::mlir::ContractOp op,
   return RhsEvalResult::success();
 }
 
+static bool parseEinsumOutIndices(tensorium::mlir::EinsumOp op,
+                                  std::vector<std::string> &out) {
+  out.clear();
+  if (auto outAttr = op->getAttrOfType<::mlir::ArrayAttr>("tin.idx.out")) {
+    for (::mlir::Attribute attr : outAttr) {
+      auto s = llvm::dyn_cast<::mlir::StringAttr>(attr);
+      if (!s)
+        return false;
+      out.push_back(s.getValue().str());
+    }
+    return true;
+  }
+
+  auto specAttr = op->getAttrOfType<::mlir::StringAttr>("spec");
+  if (!specAttr)
+    return false;
+  std::string spec = specAttr.getValue().str();
+  auto pos = spec.find("->");
+  if (pos == std::string::npos)
+    return false;
+  std::string rhs = spec.substr(pos + 2);
+  for (char c : rhs) {
+    if (c == ',' || c == ' ' || c == '\t')
+      continue;
+    out.push_back(std::string(1, c));
+  }
+  return !out.empty();
+}
+
+static RhsEvalResult evalEinsumTensor(
+    tensorium::mlir::EinsumOp op, unsigned spatialDim,
+    llvm::ArrayRef<RuntimeTensor> inputs, RuntimeTensor &out) {
+  std::vector<std::string> outIdx;
+  if (!parseEinsumOutIndices(op, outIdx))
+    return RhsEvalResult::failure("einsum missing parseable output indices");
+
+  out.indices = outIdx;
+
+  std::unordered_set<std::string> outSet(outIdx.begin(), outIdx.end());
+  std::vector<std::string> contracted;
+  std::unordered_set<std::string> seenAll;
+  for (const RuntimeTensor &in : inputs) {
+    for (const auto &name : in.indices) {
+      if (!seenAll.insert(name).second)
+        continue;
+      if (!outSet.count(name))
+        contracted.push_back(name);
+    }
+  }
+
+  const std::size_t outCount = powU(spatialDim, out.indices.size());
+  out.data.assign(outCount, 0.0);
+
+  for (std::size_t outComp = 0; outComp < outCount; ++outComp) {
+    const auto outAxes = unflattenAxes(outComp, out.indices.size(), spatialDim);
+    std::unordered_map<std::string, unsigned> indexValues;
+    for (std::size_t i = 0; i < out.indices.size(); ++i)
+      indexValues[out.indices[i]] = outAxes[i];
+
+    std::function<double(std::size_t)> evalLoop = [&](std::size_t depth) {
+      if (depth == contracted.size()) {
+        double prod = 1.0;
+        for (const RuntimeTensor &in : inputs) {
+          std::vector<unsigned> inAxes;
+          inAxes.reserve(in.indices.size());
+          for (const auto &name : in.indices) {
+            auto it = indexValues.find(name);
+            if (it == indexValues.end())
+              return 0.0;
+            inAxes.push_back(it->second);
+          }
+          const std::size_t comp = flattenAxes(inAxes, spatialDim);
+          if (comp >= in.data.size())
+            return 0.0;
+          prod *= in.data[comp];
+        }
+        return prod;
+      }
+
+      double acc = 0.0;
+      const std::string &name = contracted[depth];
+      for (unsigned axis = 0; axis < spatialDim; ++axis) {
+        indexValues[name] = axis;
+        acc += evalLoop(depth + 1);
+      }
+      return acc;
+    };
+
+    out.data[outComp] = evalLoop(0);
+  }
+
+  return RhsEvalResult::success();
+}
+
 static RhsEvalResult evalDerivTensor(
     const RhsEvalDescriptor &desc, unsigned spatialDim, tensorium::mlir::DerivOp deriv,
     const RuntimeTensor &in, RuntimeTensor &out) {
@@ -678,6 +772,25 @@ RhsEvalResult evaluateTensoriumRHS(::mlir::ModuleOp module,
       if (!outRes.ok)
         return outRes;
       values[contract.getOut()] = std::move(out);
+      continue;
+    }
+
+    if (auto einsum = llvm::dyn_cast<tensorium::mlir::EinsumOp>(&op)) {
+      std::vector<RuntimeTensor> inputs;
+      inputs.reserve(einsum.getOperands().size());
+      for (::mlir::Value operand : einsum.getOperands()) {
+        RuntimeTensor in;
+        auto inRes = valueFromOperand(values, operand, in);
+        if (!inRes.ok)
+          return inRes;
+        inputs.push_back(std::move(in));
+      }
+
+      RuntimeTensor out;
+      auto outRes = evalEinsumTensor(einsum, spatialDim, inputs, out);
+      if (!outRes.ok)
+        return outRes;
+      values[einsum.getResult()] = std::move(out);
       continue;
     }
 
