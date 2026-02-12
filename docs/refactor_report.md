@@ -648,3 +648,25 @@ Planned commit sequence (one intention per commit):
     normalization and asserts compaction (`2*M/r` and `sin(theta)` duplicates
     are reduced to single producers),
   - init/rhs invariants remain validated on normalized MLIR.
+
+## 16) Einstein canonical normal form
+
+- Canonical Einstein form is now enforced at backend IR level before MLIR
+  emission (`validation::canonicalizeEinsteinIR`):
+  - sorted/unique contraction summed indices,
+  - deterministic alpha-renaming of dummy indices to canonical names
+    (excluding currently free indices),
+  - redundant `index_rename` elimination by applying renaming directly into
+    the expression tree,
+  - redundant `index_permute` elimination (`index_permute(index_permute(x))`
+    with identical order, and empty order),
+  - `trace(...)` canonicalized into contraction form.
+- Canonicalization is idempotent by test:
+  - applying Einstein canonicalization twice preserves the same canonical
+    expression key/signature.
+- Equivalent Einstein DSL fixtures now checked for MLIR canonical equivalence:
+  - `tests/semantic/einstein/canon/01_contract_ij.tn`
+    vs `tests/semantic/einstein/canon/02_contract_mn.tn`,
+  - `tests/semantic/einstein/canon/03_trace_form.tn`
+    vs `tests/semantic/einstein/canon/04_contract_form.tn`.
+- Validation strategy is structural (UnitTests IR/MLIR walk), not textual grep.
