@@ -30,12 +30,17 @@ struct MLIRGenOptions {
   bool enableMLIRCSEPass = true;
   // Optional compaction across function boundaries.
   bool enableMLIRInlinePass = false;
+  // MLIR diagnostics/debug toggles.
+  bool mlirDisableThreading = false;
+  bool mlirPrintOpOnDiagnostic = false;
+  bool mlirPrintIRAfterFailure = false;
 };
 
 mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
-                mlir::MLIRContext &ctx, const MLIRGenOptions &opts = {});
+                mlir::MLIRContext &ctx, const MLIRGenOptions &opts = {},
+                bool *pipelineSuccess = nullptr);
 
-void emitMLIR(const tensorium::backend::ModuleIR &module,
+bool emitMLIR(const tensorium::backend::ModuleIR &module,
               const MLIRGenOptions &opts = {});
 } // namespace tensorium_mlir

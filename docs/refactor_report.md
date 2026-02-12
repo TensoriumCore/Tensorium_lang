@@ -693,3 +693,32 @@ Planned commit sequence (one intention per commit):
     `Gamma^theta_rtheta`, `Gamma^phi_rphi`, `Gamma^phi_thetaphi`,
   - structural MLIR test asserts Christoffel path contains deriv/add/sub/mul/contract
     and that `gammaU` feeding contraction comes from init-assigned field provenance.
+
+## 18) RHS MLIR Anti-Bias Evaluation
+
+- Added a dedicated front-only RHS evaluator:
+  - API: `include/tensorium_mlir/Target/MLIRGen/RhsEvaluator.h`
+  - Impl: `lib/tensorium_mlir/Target/MLIRGen/RhsEvaluator.cpp`
+- Scope (generic op subset, no Schwarzschild hardcode):
+  - `tensorium.ref` (indices + offsets),
+  - `tensorium.deriv` (central FD, interior-only),
+  - `tensorium.add/sub/mul/div`,
+  - `tensorium.contract` (sum over `sum_indices`),
+  - `tensorium.promote`,
+  - `tensorium.dt_assign`.
+- Test upgrade:
+  - `testSchwarzschildChristoffelNumericPoint` now executes `@tensorium_rhs`
+    emitted from `tests/fixtures/gr/schwarzschild_christoffel_3d.tn` on a
+    small 3D grid, then checks six analytical Christoffel components at the
+    center point (`M=1, r=10, theta=1`).
+  - This removes the prior bias where Christoffel numeric checks were evaluated
+    through a dedicated backend-expression helper instead of RHS MLIR execution.
+- Driver instrumentation (without breaking existing suite defaults):
+  - New MLIR flags:
+    - `--mlir-disable-threading`
+    - `--mlir-print-op-on-diagnostic`
+    - `--mlir-print-ir-after-failure`
+    - `--mlir-strict-pipeline`
+  - `emitMLIR(...)` now returns pipeline success.
+  - Driver no longer prints `[Tensorium] OK` for files where MLIR pipeline fails;
+    it prints `[Tensorium] FAILED` (and returns non-zero if `--mlir-strict-pipeline` is set).

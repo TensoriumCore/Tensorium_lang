@@ -934,7 +934,12 @@ static void addPostMLIRNormalizationPipeline(::mlir::PassManager &pm,
 
 mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
-                mlir::MLIRContext &ctx, const MLIRGenOptions &opts) {
+                mlir::MLIRContext &ctx, const MLIRGenOptions &opts,
+                bool *pipelineSuccess) {
+  if (opts.mlirDisableThreading)
+    ctx.disableMultithreading();
+  ctx.printOpOnDiagnostic(opts.mlirPrintOpOnDiagnostic);
+
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
   ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
   ctx.getOrLoadDialect<tensorium::mlir::TensoriumDialect>();
@@ -1024,19 +1029,32 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   }
 
   mlir::PassManager pm(&ctx);
+  if (pipelineOpts.mlirPrintIRAfterFailure) {
+    pm.enableIRPrinting(
+        [](mlir::Pass *, mlir::Operation *) { return false; },
+        [](mlir::Pass *, mlir::Operation *) { return true; },
+        /*printModuleScope=*/true,
+        /*printAfterOnlyOnChange=*/false,
+        /*printAfterOnlyOnFailure=*/true);
+  }
   addEinsteinPipelineSafe(pm, pipelineOpts);
   addPostMLIRNormalizationPipeline(pm, pipelineOpts);
-  if (mlir::failed(pm.run(*moduleOp))) {
+  const bool ok = mlir::succeeded(pm.run(*moduleOp));
+  if (!ok) {
     llvm::errs() << "Pipeline failed\n";
   }
+  if (pipelineSuccess)
+    *pipelineSuccess = ok;
   return moduleOp;
 }
 
-void emitMLIR(const tensorium::backend::ModuleIR &module,
+bool emitMLIR(const tensorium::backend::ModuleIR &module,
               const MLIRGenOptions &opts) {
   mlir::MLIRContext ctx;
-  auto moduleOp = buildMLIRModule(module, ctx, opts);
+  bool pipelineOk = true;
+  auto moduleOp = buildMLIRModule(module, ctx, opts, &pipelineOk);
   moduleOp->print(llvm::outs());
+  return pipelineOk;
 }
 
 } // namespace tensorium_mlir

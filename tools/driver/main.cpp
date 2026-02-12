@@ -119,6 +119,10 @@ int main(int argc, char **argv) {
   bool enableEinsteinAnalyzeEinsumPass = false;
   bool enableStencilLoweringPass = false;
   bool enableDissipationPass = false;
+  bool mlirDisableThreading = false;
+  bool mlirPrintOpOnDiagnostic = false;
+  bool mlirPrintIRAfterFailure = false;
+  bool failOnMLIRPipelineFailure = false;
   CompilationMode compilationMode = CompilationMode::Executable;
 
   if (argc < 2) {
@@ -161,6 +165,14 @@ int main(int argc, char **argv) {
       enableDissipationPass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
+    } else if (arg == "--mlir-disable-threading") {
+      mlirDisableThreading = true;
+    } else if (arg == "--mlir-print-op-on-diagnostic") {
+      mlirPrintOpOnDiagnostic = true;
+    } else if (arg == "--mlir-print-ir-after-failure") {
+      mlirPrintIRAfterFailure = true;
+    } else if (arg == "--mlir-strict-pipeline") {
+      failOnMLIRPipelineFailure = true;
     } else if (arg == "--validate") {
       validateOnly = true;
     } else if (arg == "--steps") {
@@ -189,6 +201,7 @@ int main(int argc, char **argv) {
 
   try {
     for (const auto &path : files) {
+      bool fileOK = true;
       std::cout << "[Tensorium] parsing " << path << "\n";
 
       std::string src = readFile(path);
@@ -307,8 +320,17 @@ int main(int argc, char **argv) {
         opts.enableEinsteinCanonicalizePass = enableEinsteinCanonicalizePass;
         opts.enableEinsteinAnalyzeEinsumPass = enableEinsteinAnalyzeEinsumPass;
         opts.enableStencilLoweringPass = enableStencilLoweringPass;
-		opts.enableDissipationPass = enableDissipationPass;
-        tensorium_mlir::emitMLIR(mod, opts);
+        opts.enableDissipationPass = enableDissipationPass;
+        opts.mlirDisableThreading = mlirDisableThreading;
+        opts.mlirPrintOpOnDiagnostic = mlirPrintOpOnDiagnostic;
+        opts.mlirPrintIRAfterFailure = mlirPrintIRAfterFailure;
+        const bool pipelineOK = tensorium_mlir::emitMLIR(mod, opts);
+        if (!pipelineOK) {
+          fileOK = false;
+          std::cerr << "[Tensorium] MLIR pipeline failed: " << path << "\n";
+          if (failOnMLIRPipelineFailure)
+            return 1;
+        }
         std::cout << "==============================\n";
       }
       if (runCpu) {
@@ -326,7 +348,10 @@ int main(int argc, char **argv) {
           std::cout << "\n";
         }
       }
-      std::cout << "[Tensorium] OK: " << path << "\n";
+      if (fileOK)
+        std::cout << "[Tensorium] OK: " << path << "\n";
+      else
+        std::cout << "[Tensorium] FAILED: " << path << "\n";
     }
 
   } catch (const std::exception &e) {
