@@ -352,7 +352,7 @@ void SemanticAnalyzer::validateInitialDataExpr(const Expr *expr,
 
   if (auto c = dynamic_cast<const CallExpr *>(expr)) {
     static const std::set<std::string> kAllowedScalarFns = {
-        "sin", "cos", "tan", "exp", "log", "sqrt", "pow"};
+        "sin", "sqrt"};
     if (kAllowedScalarFns.count(c->callee) == 0) {
       throw std::runtime_error("initial_data " + context +
                                " uses unsupported scalar function '" +

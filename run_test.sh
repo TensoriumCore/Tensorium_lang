@@ -107,6 +107,7 @@ SEMANTIC_DIFF_ERROR_TESTS=(
 INITIAL_DATA_ERROR_TESTS=(
   "tests/semantic/initial_data/01_invalid_spherical_coord.tn|uses coordinate 'x' incompatible with simulation coordinates"
   "tests/semantic/initial_data/02_symmetry_violation.tn|metric4 symmetry violation"
+  "tests/semantic/initial_data/06_unsupported_builtin.tn|uses unsupported scalar function 'cos'"
 )
 
 INITIAL_DATA_MLIR_ERROR_TESTS=(
