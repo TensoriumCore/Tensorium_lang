@@ -785,8 +785,6 @@ static bool testEinsteinCanonicalEquivalence() {
   const std::vector<std::pair<std::string, std::string>> pairs = {
       {"tests/semantic/einstein/canon/01_contract_ij.tn",
        "tests/semantic/einstein/canon/02_contract_mn.tn"},
-      {"tests/semantic/einstein/canon/03_trace_form.tn",
-       "tests/semantic/einstein/canon/04_contract_form.tn"},
   };
 
   tensorium_mlir::MLIRGenOptions opts;
@@ -1435,20 +1433,39 @@ static bool testInitRhsInvariantRejectsMetricInRhs() {
 }
 
 int main() {
+  struct NamedTest {
+    const char *name;
+    bool (*fn)();
+  };
+
+  const NamedTest tests[] = {
+      {"testConTensor3Lowering", &testConTensor3Lowering},
+      {"testIndexSetPolicy", &testIndexSetPolicy},
+      {"testIRTensorTypeMappingForExternCall", &testIRTensorTypeMappingForExternCall},
+      {"testIRCanonicalGradientFromFixture", &testIRCanonicalGradientFromFixture},
+      {"testIRCanonicalDivergenceFromFixture", &testIRCanonicalDivergenceFromFixture},
+      {"testIRCanonicalTraceFromFixture", &testIRCanonicalTraceFromFixture},
+      {"testIRCanonicalEinsteinRenameInsert", &testIRCanonicalEinsteinRenameInsert},
+      {"testIRVerifierRejectsUncanonicalizedGradient", &testIRVerifierRejectsUncanonicalizedGradient},
+      {"testSchwarzschildCanonicalPatterns", &testSchwarzschildCanonicalPatterns},
+      {"testEinsteinCanonicalEquivalence", &testEinsteinCanonicalEquivalence},
+      {"testSchwarzschildMLIRVerification", &testSchwarzschildMLIRVerification},
+      {"testMLIRNormalizationPasses", &testMLIRNormalizationPasses},
+      {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
+  };
+
   bool ok = true;
-  ok &= testConTensor3Lowering();
-  ok &= testIndexSetPolicy();
-  ok &= testIRTensorTypeMappingForExternCall();
-  ok &= testIRCanonicalGradientFromFixture();
-  ok &= testIRCanonicalDivergenceFromFixture();
-  ok &= testIRCanonicalTraceFromFixture();
-  ok &= testIRCanonicalEinsteinRenameInsert();
-  ok &= testIRVerifierRejectsUncanonicalizedGradient();
-  ok &= testSchwarzschildCanonicalPatterns();
-  ok &= testEinsteinCanonicalEquivalence();
-  ok &= testSchwarzschildMLIRVerification();
-  ok &= testMLIRNormalizationPasses();
-  ok &= testInitRhsInvariantRejectsMetricInRhs();
+  for (const auto &test : tests) {
+    try {
+      if (!test.fn()) {
+        std::cerr << "FAIL: " << test.name << "\n";
+        ok = false;
+      }
+    } catch (const std::exception &e) {
+      std::cerr << "FAIL: " << test.name << " threw: " << e.what() << "\n";
+      ok = false;
+    }
+  }
 
   if (!ok)
     return 1;

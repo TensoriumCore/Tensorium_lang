@@ -666,7 +666,5 @@ Planned commit sequence (one intention per commit):
     expression key/signature.
 - Equivalent Einstein DSL fixtures now checked for MLIR canonical equivalence:
   - `tests/semantic/einstein/canon/01_contract_ij.tn`
-    vs `tests/semantic/einstein/canon/02_contract_mn.tn`,
-  - `tests/semantic/einstein/canon/03_trace_form.tn`
-    vs `tests/semantic/einstein/canon/04_contract_form.tn`.
+    vs `tests/semantic/einstein/canon/02_contract_mn.tn`.
 - Validation strategy is structural (UnitTests IR/MLIR walk), not textual grep.

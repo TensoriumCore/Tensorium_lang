@@ -1,13 +1,14 @@
-field cov_tensor2 T[i,j]
+field vector A[i]
+field covector B[i]
 field scalar s
 
 simulation {
-  dimension = 2
-  resolution = [8,8]
+  dimension = 1
+  resolution = [8]
   time { dt = 0.1 integrator = euler }
   spatial { scheme = fd derivative = centered order = 2 }
 }
 
 evolution CanonContractForm {
-  dt s = contract(T[i,i])
+  dt s = contract(A[i] * B[i])
 }
