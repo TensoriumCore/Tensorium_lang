@@ -2070,6 +2070,33 @@ static bool testStripSourceFuncsAfterGridLowering() {
   return true;
 }
 
+static bool testStripSourceFuncsRhsOnly() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/covariant_rank1_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+
+  if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs")) {
+    std::cerr << "FAIL: rhs-only strip-source-funcs must remove tensorium_rhs\n";
+    return false;
+  }
+  if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry")) {
+    std::cerr
+        << "FAIL: rhs-only strip-source-funcs must remove tensorium_entry\n";
+    return false;
+  }
+  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_affine")) {
+    std::cerr
+        << "FAIL: rhs-only strip-source-funcs missing tensorium_rhs_grid_affine\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testLoweredGridModuleLLVMIREmission() {
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableMetricLoweringPass = true;
@@ -2986,6 +3013,7 @@ int main() {
        &testSchwarzschildRhsGridAffineLowering},
       {"testStripSourceFuncsAfterGridLowering",
        &testStripSourceFuncsAfterGridLowering},
+      {"testStripSourceFuncsRhsOnly", &testStripSourceFuncsRhsOnly},
       {"testLoweredGridModuleLLVMIREmission",
        &testLoweredGridModuleLLVMIREmission},
       {"testSchwarzschildInitThetaZeroNoNaN",

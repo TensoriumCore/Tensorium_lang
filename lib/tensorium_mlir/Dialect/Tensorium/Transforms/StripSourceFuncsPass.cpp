@@ -33,7 +33,9 @@ struct StripSourceFuncsPass
       eraseIfPresent("tensorium_init");
     if (hasRhsReplacement)
       eraseIfPresent("tensorium_rhs");
-    if (hasInitReplacement && hasRhsReplacement)
+    // tensorium_entry calls source init/rhs; once either source function is
+    // replaced and erased, keeping entry can leave dangling call targets.
+    if (hasInitReplacement || hasRhsReplacement)
       eraseIfPresent("tensorium_entry");
   }
 };
