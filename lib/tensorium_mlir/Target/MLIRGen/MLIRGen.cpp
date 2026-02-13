@@ -1,4 +1,5 @@
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
+#include "MLIRGenPipeline.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -891,76 +892,6 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
 }
 } // namespace
 
-static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
-                                    const MLIRGenOptions &opts) {
-
-  if (opts.enableMetricLoweringPass) {
-    pm.addPass(tensorium::mlir::createTensoriumMetricLoweringPass());
-  }
-  if (opts.enableInitStdLoweringPass) {
-    pm.addPass(tensorium::mlir::createTensoriumInitToStdPass());
-  }
-  if (opts.enableInitGridScfPass) {
-    pm.addPass(tensorium::mlir::createTensoriumInitGridScfPass());
-  }
-  if (opts.enableInitGridAffinePass) {
-    pm.addPass(tensorium::mlir::createTensoriumInitGridAffinePass());
-  }
-  if (opts.enableRhsGridScfPass) {
-    pm.addPass(tensorium::mlir::createTensoriumRhsGridScfPass());
-  }
-  if (opts.enableRhsGridAffinePass) {
-    pm.addPass(tensorium::mlir::createTensoriumRhsGridAffinePass());
-  }
-  if (opts.enableStripSourceFuncsPass) {
-    pm.addPass(tensorium::mlir::createTensoriumStripSourceFuncsPass());
-  }
-
-  if (opts.enableEinsteinLoweringPass) {
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());
-  }
-
-  const bool needValidity = opts.enableEinsteinValidityPass;
-  const bool needCanon = opts.enableEinsteinCanonicalizePass;
-  const bool needAnalyze = opts.enableEinsteinAnalyzeEinsumPass || needValidity;
-  const bool needIndex = opts.enableIndexAnalyzePass || needValidity;
-
-  if (needIndex) {
-    pm.addPass(tensorium::mlir::createTensoriumIndexAnalyzePass());
-  }
-
-  if (needAnalyze) {
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinAnalyzeEinsumPass());
-  }
-
-  if (needCanon) {
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinCanonicalizePass());
-  }
-
-  if (needValidity) {
-    pm.addPass(tensorium::mlir::createTensoriumEinsteinValidityPass());
-  }
-
-  if (opts.enableStencilLoweringPass) {
-    pm.addPass(tensorium::mlir::createTensoriumStencilLoweringPass(opts.dx,
-                                                                   opts.order));
-  }
-  if (opts.enableDissipationPass) {
-    pm.addPass(tensorium::mlir::createTensoriumDissipationPass(
-        opts.dissipationStrength, opts.dx));
-  }
-}
-
-static void addPostMLIRNormalizationPipeline(::mlir::PassManager &pm,
-                                             const MLIRGenOptions &opts) {
-  if (opts.enableMLIRInlinePass)
-    pm.addPass(mlir::createInlinerPass());
-  if (opts.enableMLIRCanonicalizePass)
-    pm.addPass(mlir::createCanonicalizerPass());
-  if (opts.enableMLIRCSEPass)
-    pm.addPass(mlir::createCSEPass());
-}
-
 mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
                 mlir::MLIRContext &ctx, const MLIRGenOptions &opts,
@@ -1075,34 +1006,6 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   if (pipelineSuccess)
     *pipelineSuccess = ok;
   return moduleOp;
-}
-
-static bool lowerModuleToLLVM(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
-                              const MLIRGenOptions &opts) {
-  mlir::PassManager pm(&ctx);
-  if (opts.mlirPrintIRAfterFailure) {
-    pm.enableIRPrinting(
-        [](mlir::Pass *, mlir::Operation *) { return false; },
-        [](mlir::Pass *, mlir::Operation *) { return true; },
-        /*printModuleScope=*/true,
-        /*printAfterOnlyOnChange=*/false,
-        /*printAfterOnlyOnFailure=*/true);
-  }
-
-  pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(mlir::createCSEPass());
-  pm.addPass(mlir::createLowerAffinePass());
-  pm.addPass(mlir::createSCFToControlFlowPass());
-  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
-  pm.addPass(mlir::createArithToLLVMConversionPass());
-  pm.addPass(mlir::createConvertMathToLLVMPass());
-  pm.addPass(mlir::createConvertIndexToLLVMPass());
-  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
-  pm.addPass(mlir::createConvertFuncToLLVMPass());
-  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
-  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-
-  return mlir::succeeded(pm.run(moduleOp));
 }
 
 bool emitMLIR(const tensorium::backend::ModuleIR &module,

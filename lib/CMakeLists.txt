@@ -208,6 +208,7 @@ add_library(tensoriumMlirCodegen
   tensorium_mlir/Target/MLIRGen/InitEvaluator.cpp
   tensorium_mlir/Target/MLIRGen/RhsEvaluator.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenPipeline.cpp
   tensorium_mlir/Init/Registry.cpp
   tensorium_mlir/Init/Passes.cpp
   tensorium_mlir/Pipeline/Pipeline.cpp
