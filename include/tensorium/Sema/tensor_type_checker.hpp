@@ -65,6 +65,38 @@ class TensorTypeChecker {
     return TensorKind::MixedTensor;
   }
 
+  static int getDeclaredUpCount(const IndexedVar *v) {
+    if (!v)
+      return 0;
+    switch (v->tensorKind) {
+    case TensorKind::Scalar:
+      return 0;
+    case TensorKind::Vector:
+      return 1;
+    case TensorKind::Covector:
+      return 0;
+    case TensorKind::CovTensor2:
+      return 0;
+    case TensorKind::ConTensor2:
+      return 2;
+    case TensorKind::CovTensor3:
+      return 0;
+    case TensorKind::ConTensor3:
+      return 3;
+    case TensorKind::CovTensor4:
+      return 0;
+    case TensorKind::ConTensor4:
+      return 4;
+    case TensorKind::MixedTensor:
+      return v->up;
+    case TensorKind::Metric:
+      return 0;
+    case TensorKind::InverseMetric:
+      return 2;
+    }
+    return 0;
+  }
+
   static void annotateType(const IndexedExpr *expr, const TensorType &tt) {
     auto *mut = const_cast<IndexedExpr *>(expr);
     mut->inferredType.kind = deduceKind(tt.up, tt.down);
@@ -170,8 +202,11 @@ class TensorTypeChecker {
           continue;
         auto &entry = analysis.entries[(unsigned char)c];
         bool isUp = false;
-        if (i < v->tensorIndexIsUp.size())
+        if (i < v->tensorIndexIsUp.size()) {
           isUp = v->tensorIndexIsUp[i];
+        } else {
+          isUp = static_cast<int>(i) < getDeclaredUpCount(v);
+        }
         if (isUp)
           entry.variance.contravariant += 1;
         else
@@ -291,6 +326,68 @@ class TensorTypeChecker {
     }
 
     out.push_back(e);
+  }
+
+  TensorType inferContractResultType(const IndexedExpr *arg,
+                                     const TensorType &argType) const {
+    auto analysis = analyzeIndices(arg);
+
+    if (!analysis.ambiguousIndices.empty()) {
+      throw std::runtime_error(
+          std::string("Ambiguous contraction: index '") +
+          analysis.ambiguousIndices.front() +
+          "' appears 3 or more times.");
+    }
+
+    const int contracted = static_cast<int>(analysis.summedIndices.size());
+    if (contracted == 0)
+      throw std::runtime_error("contract() expects at least one repeated index");
+
+    int up = argType.up;
+    int down = argType.down;
+    int unresolvedPairs = 0;
+
+    for (const auto &name : analysis.summedIndices) {
+      const auto &entry = analysis.entries[(unsigned char)name[0]];
+      const auto &variance = entry.variance;
+      const bool mixedVariance =
+          (variance.contravariant > 0 && variance.covariant > 0);
+      if (!mixedVariance) {
+        ++unresolvedPairs;
+        continue;
+      }
+      if (up == 0 || down == 0) {
+        throw std::runtime_error(
+            "internal error: mixed-variance contraction rank underflow");
+      }
+      --up;
+      --down;
+    }
+
+    // Compatibility rule: legacy Tensorium accepted same-variance contractions
+    // and removed two ranks with down-priority. Keep that behavior while
+    // fixing mixed-variance contractions to remove one up + one down.
+    int rem = 2 * unresolvedPairs;
+    int takeDown = (down < rem) ? down : rem;
+    down -= takeDown;
+    rem -= takeDown;
+
+    int takeUp = (up < rem) ? up : rem;
+    up -= takeUp;
+    rem -= takeUp;
+
+    if (rem != 0) {
+      throw std::runtime_error(
+          "internal error: contract() could not remove requested rank");
+    }
+
+    const int expectedRank = argType.rank() - (2 * contracted);
+    if (expectedRank < 0 || expectedRank != (up + down)) {
+      throw std::runtime_error(
+          "internal error: contract() produced inconsistent inferred rank");
+    }
+
+    return TensorType{up, down};
   }
 
 public:
@@ -422,52 +519,7 @@ public:
 
         const IndexedExpr *arg = call->args[0].get();
         TensorType t = inferImpl(arg, true);
-        auto analysis = analyzeIndices(arg);
-
-        if (!analysis.ambiguousIndices.empty()) {
-          throw std::runtime_error(
-              std::string("Ambiguous contraction: index '") +
-              analysis.ambiguousIndices.front() +
-              "' appears 3 or more times.");
-        }
-
-        int freeCount = static_cast<int>(analysis.freeIndices.size());
-        int contracted = static_cast<int>(analysis.summedIndices.size());
-
-        if (contracted == 0)
-          throw std::runtime_error(
-              "contract() expects at least one repeated index");
-
-        if (t.up == 0 && t.down > 0) {
-          TensorType res{0, freeCount};
-          annotateType(e, res);
-          return res;
-        }
-
-        if (t.down == 0 && t.up > 0) {
-          TensorType res{freeCount, 0};
-          annotateType(e, res);
-          return res;
-        }
-
-        int remove = 2 * contracted;
-        int up = t.up;
-        int down = t.down;
-
-        int rem = remove;
-        int takeDown = (down < rem) ? down : rem;
-        down -= takeDown;
-        rem -= takeDown;
-
-        int takeUp = (up < rem) ? up : rem;
-        up -= takeUp;
-        rem -= takeUp;
-
-        if (rem != 0)
-          throw std::runtime_error(
-              "internal error: contract() could not remove requested rank");
-
-        TensorType res{up, down};
+        TensorType res = inferContractResultType(arg, t);
         annotateType(e, res);
         return res;
       }
