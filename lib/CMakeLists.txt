@@ -207,6 +207,9 @@ target_link_libraries(tensoriumMlirTransforms PUBLIC
 add_library(tensoriumMlirCodegen
   tensorium_mlir/Target/MLIRGen/InitEvaluator.cpp
   tensorium_mlir/Target/MLIRGen/RhsEvaluator.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenShared.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenInitialData.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenExpr.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenPipeline.cpp
   tensorium_mlir/Init/Registry.cpp
