@@ -788,6 +788,15 @@ Planned commit sequence (one intention per commit):
     - prints full `Gamma^i_{jk}` matrices at the grid center and checks key
       Schwarzschild components against analytical values with finite-difference
       tolerance.
+  - additional metric cases (same `.tn -> lowered MLIR -> LLVM IR -> native` path):
+    - `tools/dev/test_reissner_christoffel_ll.sh`
+      with `tests/fixtures/gr/reissner_nordstrom_christoffel_3d.tn`
+      and analytical RN checks.
+    - `tools/dev/test_kerr_like_christoffel_ll.sh`
+      with `tests/fixtures/gr/kerr_like_christoffel_3d.tn`
+      and analytical checks on spatial Christoffel components.
+  - shell orchestration now uses a reusable driver helper:
+    - `tools/dev/test_metric_christoffel_ll.sh`.
 
 ## 21) MLIRGen Scalability Refactor
 
