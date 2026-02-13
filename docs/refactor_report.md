@@ -780,3 +780,11 @@ Planned commit sequence (one intention per commit):
     and executes the binary,
   - prints computed values for `alpha`, `gamma_ij`, `gammaU^ij` and validates
     them against Schwarzschild reference values at `M=1, r=10, theta=pi/2`.
+  - companion Christoffel smoke:
+    - script: `tools/dev/test_schwarzschild_christoffel_ll.sh`
+    - runner: `tools/dev/ll_rhs_runner_schwarzschild_christoffel.c`
+    - executes lowered `tensorium_init_grid_affine` + `tensorium_rhs_grid_affine`
+      for `tests/fixtures/gr/schwarzschild_christoffel_3d.tn`,
+    - prints full `Gamma^i_{jk}` matrices at the grid center and checks key
+      Schwarzschild components against analytical values with finite-difference
+      tolerance.
