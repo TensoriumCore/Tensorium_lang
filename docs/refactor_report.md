@@ -843,3 +843,9 @@ Planned commit sequence (one intention per commit):
   - executable lowering for contravariant derivative notation (`nabla^i(...)`)
     is still intentionally rejected until inverse-metric raising semantics are
     implemented.
+- Added end-to-end LLVM smoke for derivative execution:
+  - script: `tools/dev/test_covariant_rank1_ll.sh`,
+  - runner: `tools/dev/ll_rhs_runner_covariant_rank1.c`,
+  - flow: `.tn -> MLIR passes -> LLVM IR -> native executable`,
+  - runtime output prints full `nabla_j(V_i)` and `nabla_j(W^i)` 3x3 matrices
+    at the grid center and checks selected analytical components.
