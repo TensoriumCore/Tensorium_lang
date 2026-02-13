@@ -2641,6 +2641,136 @@ static bool testSchwarzschildChristoffelNumericPoint() {
   return true;
 }
 
+static bool testCovariantDerivativeRankOneNumericPoint() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/covariant_rank1_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+
+  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhsFunc) {
+    std::cerr << "FAIL: missing @tensorium_rhs for covariant derivative test\n";
+    return false;
+  }
+
+  if (rhsFunc.getNumArguments() != 5) {
+    std::cerr << "FAIL: expected @tensorium_rhs(Christoffel,V,W,nablaV,nablaW) "
+                 "signature\n";
+    return false;
+  }
+
+  bool hasCovariantDerivAttr = false;
+  rhsFunc.walk([&](tensorium::mlir::DerivOp deriv) {
+    if (auto cov = deriv->getAttrOfType<::mlir::BoolAttr>("covariant")) {
+      if (cov.getValue())
+        hasCovariantDerivAttr = true;
+    }
+  });
+  if (hasCovariantDerivAttr) {
+    std::cerr << "FAIL: covariant derivatives must be lowered to explicit "
+                 "Christoffel terms (no covariant deriv attrs)\n";
+    return false;
+  }
+
+  constexpr std::size_t nr = 9;
+  constexpr std::size_t nt = 9;
+  constexpr std::size_t np = 9;
+  constexpr std::size_t nPoints = nr * nt * np;
+  constexpr std::size_t center = 4;
+  const auto linearIndex = [](std::size_t ir, std::size_t it, std::size_t ip) {
+    return (ir * nt + it) * np + ip;
+  };
+  const std::size_t p0 = linearIndex(center, center, center);
+  const auto comp3 = [](unsigned a, unsigned b, unsigned c) {
+    return a * 9 + b * 3 + c;
+  };
+  const auto comp2 = [](unsigned a, unsigned b) { return a * 3 + b; };
+
+  std::array<std::vector<double>, 27> christoffel;
+  std::array<std::vector<double>, 3> covectorV;
+  std::array<std::vector<double>, 3> vectorW;
+  std::array<std::vector<double>, 9> outNablaV;
+  std::array<std::vector<double>, 9> outNablaW;
+  std::array<double *, 27> christoffelPtrs{};
+  std::array<double *, 3> covectorVPtrs{};
+  std::array<double *, 3> vectorWPtrs{};
+  std::array<double *, 9> outNablaVPtrs{};
+  std::array<double *, 9> outNablaWPtrs{};
+
+  for (unsigned c = 0; c < 27; ++c) {
+    christoffel[c].assign(nPoints, 0.0);
+    christoffelPtrs[c] = christoffel[c].data();
+  }
+  for (unsigned c = 0; c < 3; ++c) {
+    covectorV[c].assign(nPoints, 0.0);
+    vectorW[c].assign(nPoints, 0.0);
+    covectorVPtrs[c] = covectorV[c].data();
+    vectorWPtrs[c] = vectorW[c].data();
+  }
+  for (unsigned c = 0; c < 9; ++c) {
+    outNablaV[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    outNablaW[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    outNablaVPtrs[c] = outNablaV[c].data();
+    outNablaWPtrs[c] = outNablaW[c].data();
+  }
+
+  // Non-zero components:
+  // Gamma^0_{0 1} = 2.0  -> contributes to covector correction term.
+  // Gamma^0_{1 2} = 3.0  -> contributes to vector correction term.
+  for (std::size_t p = 0; p < nPoints; ++p) {
+    christoffel[comp3(0, 0, 1)][p] = 2.0;
+    christoffel[comp3(0, 1, 2)][p] = 3.0;
+
+    covectorV[0][p] = 1.0;
+    covectorV[1][p] = 2.0;
+    covectorV[2][p] = 3.0;
+
+    vectorW[0][p] = 4.0;
+    vectorW[1][p] = 5.0;
+    vectorW[2][p] = 6.0;
+  }
+
+  tensorium_mlir::RhsEvalDescriptor desc;
+  desc.grid.spatialDim = 3;
+  desc.grid.extents = {nr, nt, np};
+  desc.grid.spacing = {1.0, 1.0, 1.0};
+  desc.point = {center, center, center};
+  desc.args.resize(5);
+  desc.args[0].components.assign(christoffelPtrs.begin(), christoffelPtrs.end());
+  desc.args[1].components.assign(covectorVPtrs.begin(), covectorVPtrs.end());
+  desc.args[2].components.assign(vectorWPtrs.begin(), vectorWPtrs.end());
+  desc.args[3].components.assign(outNablaVPtrs.begin(), outNablaVPtrs.end());
+  desc.args[4].components.assign(outNablaWPtrs.begin(), outNablaWPtrs.end());
+
+  auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
+  if (!evalRes.ok) {
+    std::cerr << "FAIL: rhs evaluator failed for covariant derivative test: "
+              << evalRes.message << "\n";
+    return false;
+  }
+
+  const double nablaV_01 = outNablaV[comp2(0, 1)][p0];
+  const double nablaW_01 = outNablaW[comp2(0, 1)][p0];
+  const double expectedNablaV_01 = -2.0; // -Gamma^m_{0 1} V_m = -2*1
+  const double expectedNablaW_01 = 18.0; // +Gamma^0_{1 m} W^m = +3*6
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Covariant rank-1 point\n"
+            << "  nabla_j(V_i) component [0,1] got=" << nablaV_01
+            << " expected=" << expectedNablaV_01 << "\n"
+            << "  nabla_j(W^i) component [0,1] got=" << nablaW_01
+            << " expected=" << expectedNablaW_01 << "\n";
+
+  if (!almostEqual(nablaV_01, expectedNablaV_01, 1e-10, 1e-10) ||
+      !almostEqual(nablaW_01, expectedNablaW_01, 1e-10, 1e-10)) {
+    std::cerr << "FAIL: covariant derivative rank-1 numeric mismatch\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSchwarzschildChristoffelMLIRStructure() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile(
@@ -2868,6 +2998,8 @@ int main() {
       {"testKerrLikeReconstructMetricPoint",
        &testKerrLikeReconstructMetricPoint},
       {"testKerrLikeHasNonZeroBetaPhi", &testKerrLikeHasNonZeroBetaPhi},
+      {"testCovariantDerivativeRankOneNumericPoint",
+       &testCovariantDerivativeRankOneNumericPoint},
       {"testSchwarzschildChristoffelNumericPoint",
        &testSchwarzschildChristoffelNumericPoint},
       {"testSchwarzschildChristoffelMLIRStructure",

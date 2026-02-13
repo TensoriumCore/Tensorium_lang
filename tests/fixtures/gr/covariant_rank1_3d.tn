@@ -1,0 +1,19 @@
+# Rank-1 covariant derivative fixture (vector + covector) with explicit connection field.
+field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
+field covector V[i]
+field vector W[i]
+field cov_tensor2 nablaV[i,j]
+field mixed_tensor(up=1,down=1) nablaW[i,j]
+
+simulation {
+  coordinates = spherical
+  dimension = 3
+  resolution = [9,9,9]
+  time { dt = 0.01 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution CovariantRank1 {
+  dt nablaV[i,j] = nabla_j(V[i])
+  dt nablaW[i,j] = nabla_j(W[i])
+}

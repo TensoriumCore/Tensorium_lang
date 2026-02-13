@@ -222,6 +222,90 @@ static bool exprUsesFieldName(const tensorium::backend::ExprIR *expr,
   return false;
 }
 
+static bool exprUsesCovariantConnection(const tensorium::backend::ExprIR *expr) {
+  using namespace tensorium::backend;
+  if (!expr)
+    return false;
+  switch (expr->kind) {
+  case ExprIR::Kind::Number:
+  case ExprIR::Kind::Var:
+    return false;
+  case ExprIR::Kind::Binary: {
+    auto *b = static_cast<const BinaryIR *>(expr);
+    return exprUsesCovariantConnection(b->lhs.get()) ||
+           exprUsesCovariantConnection(b->rhs.get());
+  }
+  case ExprIR::Kind::Call: {
+    auto *c = static_cast<const CallIR *>(expr);
+    for (const auto &arg : c->args) {
+      if (exprUsesCovariantConnection(arg.get()))
+        return true;
+    }
+    return false;
+  }
+  case ExprIR::Kind::TensorProduct: {
+    auto *p = static_cast<const TensorProductIR *>(expr);
+    return exprUsesCovariantConnection(p->lhs.get()) ||
+           exprUsesCovariantConnection(p->rhs.get());
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *c = static_cast<const ContractionIR *>(expr);
+    return exprUsesCovariantConnection(c->in.get());
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *r = static_cast<const IndexRenameIR *>(expr);
+    return exprUsesCovariantConnection(r->in.get());
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *p = static_cast<const IndexPermuteIR *>(expr);
+    return exprUsesCovariantConnection(p->in.get());
+  }
+  case ExprIR::Kind::Trace: {
+    auto *t = static_cast<const TraceIR *>(expr);
+    return exprUsesCovariantConnection(t->in.get());
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *d = static_cast<const PartialDerivativeIR *>(expr);
+    return exprUsesCovariantConnection(d->in.get());
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *g = static_cast<const GradientIR *>(expr);
+    return exprUsesCovariantConnection(g->in.get());
+  }
+  case ExprIR::Kind::CovariantDerivative:
+    return true;
+  case ExprIR::Kind::Divergence: {
+    auto *d = static_cast<const DivergenceIR *>(expr);
+    return exprUsesCovariantConnection(d->in.get());
+  }
+  }
+  return false;
+}
+
+static const FieldDesc *
+selectConnectionFieldForRhs(const std::vector<FieldDesc> &fields) {
+  auto findNamed = [&](llvm::StringRef name) -> const FieldDesc * {
+    for (const auto &field : fields) {
+      if (field.name != name)
+        continue;
+      if ((field.up + field.down) == 3 && field.up == 1 && field.down == 2)
+        return &field;
+    }
+    return nullptr;
+  };
+
+  if (const FieldDesc *preferred = findNamed("Christoffel"))
+    return preferred;
+  if (const FieldDesc *preferred = findNamed("Gamma"))
+    return preferred;
+
+  for (const auto &field : fields) {
+    if ((field.up + field.down) == 3 && field.up == 1 && field.down == 2)
+      return &field;
+  }
+  return nullptr;
+}
+
 bool moduleUsesFieldName(const tensorium::backend::ModuleIR &module,
                          llvm::StringRef fieldName) {
   for (const auto &evo : module.evolutions) {
@@ -296,12 +380,22 @@ std::vector<unsigned>
 collectRhsArgIndices(const tensorium::backend::ModuleIR &module,
                      const std::vector<FieldDesc> &fields) {
   llvm::StringSet<> needed;
+  bool needsConnectionField = false;
   for (const auto &evo : module.evolutions) {
-    for (const auto &tmp : evo.temporaries)
+    for (const auto &tmp : evo.temporaries) {
       collectExprFieldNames(tmp.rhs.get(), needed);
+      needsConnectionField |= exprUsesCovariantConnection(tmp.rhs.get());
+    }
     for (const auto &eq : evo.equations) {
       needed.insert(eq.fieldName);
       collectExprFieldNames(eq.rhs.get(), needed);
+      needsConnectionField |= exprUsesCovariantConnection(eq.rhs.get());
+    }
+  }
+
+  if (needsConnectionField) {
+    if (const FieldDesc *connection = selectConnectionFieldForRhs(fields)) {
+      needed.insert(connection->name);
     }
   }
 

@@ -1,12 +1,92 @@
 #include "MLIRGenExpr.h"
 #include "MLIRGenShared.h"
 #include "mlir/IR/Builders.h"
+#include "tensorium/Core/IndexSet.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "llvm/ADT/StringMap.h"
 
+#include <unordered_set>
+
 namespace tensorium_mlir {
 namespace {
+
+static mlir::ArrayAttr makeIndicesAttr(mlir::OpBuilder &b,
+                                       llvm::ArrayRef<std::string> names) {
+  if (names.empty())
+    return mlir::ArrayAttr();
+  llvm::SmallVector<mlir::Attribute, 4> idxList;
+  idxList.reserve(names.size());
+  for (const auto &s : names)
+    idxList.push_back(b.getStringAttr(s));
+  return b.getArrayAttr(idxList);
+}
+
+static mlir::Value emitFieldRefFromSource(mlir::OpBuilder &b, mlir::Location loc,
+                                          mlir::Value source,
+                                          llvm::ArrayRef<std::string> names) {
+  auto sourceType = mlir::dyn_cast<tensorium::mlir::FieldType>(source.getType());
+  if (!sourceType)
+    emitUnsupportedExprError(loc, "field source does not have tensorium.field type");
+
+  auto ref = tensorium::mlir::RefOp::create(
+      b, loc, sourceType, source, b.getStringAttr("field"),
+      makeIndicesAttr(b, names), mlir::ArrayAttr());
+  return ref.getResult();
+}
+
+static mlir::Value emitFieldRefByName(
+    mlir::OpBuilder &b, mlir::Location loc, llvm::StringRef fieldName,
+    llvm::ArrayRef<std::string> names,
+    const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg) {
+  auto it = fieldArg.find(fieldName);
+  if (it == fieldArg.end())
+    emitUnsupportedExprError(loc, "unknown field reference '" + fieldName.str() +
+                                     "' in MLIR emission");
+  return emitFieldRefFromSource(b, loc, it->second, names);
+}
+
+static mlir::Value
+findConnectionFieldValue(const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg) {
+  auto isConnectionType = [](mlir::Type ty) {
+    auto fieldTy = mlir::dyn_cast<tensorium::mlir::FieldType>(ty);
+    return fieldTy && fieldTy.getRank() == 3 && fieldTy.getUp() == 1 &&
+           fieldTy.getDown() == 2;
+  };
+
+  auto pickNamed = [&](llvm::StringRef name) -> mlir::Value {
+    auto it = fieldArg.find(name);
+    if (it == fieldArg.end())
+      return mlir::Value();
+    if (!isConnectionType(it->second.getType()))
+      return mlir::Value();
+    return it->second;
+  };
+
+  if (auto preferred = pickNamed("Christoffel"))
+    return preferred;
+  if (auto preferred = pickNamed("Gamma"))
+    return preferred;
+
+  for (const auto &entry : fieldArg) {
+    if (isConnectionType(entry.second.getType()))
+      return entry.second;
+  }
+  return mlir::Value();
+}
+
+static std::string pickDummyIndex(llvm::ArrayRef<std::string> used) {
+  std::unordered_set<std::string> usedSet;
+  usedSet.reserve(used.size());
+  for (const auto &idx : used)
+    usedSet.insert(idx);
+  for (char c : tensorium::core::kTensorIndices) {
+    std::string name(1, c);
+    if (!usedSet.count(name))
+      return name;
+  }
+  return "l";
+}
 
 mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
                      const tensorium::backend::ExprIR *e,
@@ -39,30 +119,7 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
       return itLocal->second;
     }
 
-    auto it = fieldArg.find(v->name);
-    if (it == fieldArg.end())
-      emitUnsupportedExprError(loc, "unknown field reference '" + v->name +
-                                       "' in MLIR emission");
-
-    mlir::ArrayAttr indicesAttr;
-    if (!v->tensorIndexNames.empty()) {
-      llvm::SmallVector<mlir::Attribute, 4> idxList;
-      for (const auto &s : v->tensorIndexNames)
-        idxList.push_back(b.getStringAttr(s));
-      indicesAttr = b.getArrayAttr(idxList);
-    }
-
-    auto sourceType =
-        mlir::dyn_cast<tensorium::mlir::FieldType>(it->second.getType());
-    if (!sourceType)
-      emitUnsupportedExprError(loc, "field argument '" + v->name +
-                                       "' does not have tensorium.field type");
-
-    auto r = tensorium::mlir::RefOp::create(
-        b, loc, sourceType, it->second, b.getStringAttr("field"), indicesAttr,
-        mlir::ArrayAttr());
-
-    return r.getResult();
+    return emitFieldRefByName(b, loc, v->name, v->tensorIndexNames, fieldArg);
   }
   case ExprIR::Kind::Binary: {
     auto *bin = static_cast<const BinaryIR *>(e);
@@ -163,12 +220,93 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
       emitUnsupportedExprError(
           loc, "covariant derivative requires connection tensor Gamma");
     }
-    auto in = emitExpr(b, loc, d->in.get(), fieldArg, localTemps);
-    auto deriv = tensorium::mlir::DerivOp::create(b, loc, desiredType, in);
-    deriv->setAttr("index", b.getStringAttr(d->derivIndex));
-    deriv->setAttr("covariant", b.getBoolAttr(true));
-    deriv->setAttr("contravariant", b.getBoolAttr(d->contravariant));
-    return deriv.getResult();
+
+    if (d->contravariant) {
+      emitUnsupportedExprError(
+          loc,
+          "contravariant covariant derivative (nabla^) lowering is not implemented");
+    }
+
+    auto *inVar = dynamic_cast<const VarIR *>(d->in.get());
+    if (!inVar || inVar->vkind != VarKind::Field) {
+      emitUnsupportedExprError(
+          loc, "covariant derivative lowering requires a field reference input");
+    }
+
+    auto inValue =
+        emitFieldRefByName(b, loc, inVar->name, inVar->tensorIndexNames, fieldArg);
+    auto partial = tensorium::mlir::DerivOp::create(b, loc, desiredType, inValue);
+    partial->setAttr("index", b.getStringAttr(d->derivIndex));
+
+    const int rank = inVar->exprType.rank();
+    if (rank == 0) {
+      // For scalars, ∇_k phi == ∂_k phi.
+      return partial.getResult();
+    }
+
+    if (rank != 1 || inVar->tensorIndexNames.size() != 1) {
+      emitUnsupportedExprError(
+          loc,
+          "covariant derivative lowering currently supports rank-1 field inputs");
+    }
+
+    const bool isVector = inVar->exprType.up == 1 && inVar->exprType.down == 0;
+    const bool isCovector =
+        inVar->exprType.up == 0 && inVar->exprType.down == 1;
+    if (!isVector && !isCovector) {
+      emitUnsupportedExprError(
+          loc,
+          "covariant derivative lowering supports vector/covector rank-1 fields");
+    }
+
+    if (inVar->tensorIndexNames[0].empty() || d->derivIndex.empty()) {
+      emitUnsupportedExprError(loc, "covariant derivative requires explicit indices");
+    }
+
+    mlir::Value connection = findConnectionFieldValue(fieldArg);
+    if (!connection) {
+      emitUnsupportedExprError(
+          loc, "covariant derivative requires a rank-3 mixed connection field "
+               "(prefer 'Christoffel' or 'Gamma')");
+    }
+
+    const std::string tensorIndex = inVar->tensorIndexNames[0];
+    const std::string dummy = pickDummyIndex({tensorIndex, d->derivIndex});
+
+    std::vector<std::string> gammaIndices;
+    if (isVector) {
+      // +Gamma^i_{k m} V^m
+      gammaIndices = {tensorIndex, d->derivIndex, dummy};
+    } else {
+      // -Gamma^m_{i k} V_m
+      gammaIndices = {dummy, tensorIndex, d->derivIndex};
+    }
+
+    auto gammaRef = emitFieldRefFromSource(b, loc, connection, gammaIndices);
+    auto shiftedTensorRef =
+        emitFieldRefByName(b, loc, inVar->name, {dummy}, fieldArg);
+
+    tensorium::ir::TensorType productTypeDesc;
+    productTypeDesc.up = 1 + inVar->exprType.up;
+    productTypeDesc.down = 2 + inVar->exprType.down;
+    auto productType = asFieldType(b, productTypeDesc);
+
+    auto product = tensorium::mlir::MulOp::create(b, loc, productType, gammaRef,
+                                                   shiftedTensorRef);
+    auto correction =
+        tensorium::mlir::ContractOp::create(b, loc, desiredType, product.getRes());
+    correction->setAttr("sum_indices", makeIndexArrayAttr(b, {dummy}));
+
+    if (isVector) {
+      return tensorium::mlir::AddOp::create(b, loc, desiredType,
+                                            partial.getResult(),
+                                            correction.getOut())
+          .getResult();
+    }
+    return tensorium::mlir::SubOp::create(b, loc, desiredType,
+                                          partial.getResult(),
+                                          correction.getOut())
+        .getResult();
   }
   case ExprIR::Kind::Divergence: {
     auto *d = static_cast<const DivergenceIR *>(e);
