@@ -746,3 +746,31 @@ Planned commit sequence (one intention per commit):
     - source functions are removed,
     - lowered affine grid kernels are present,
     - no `tensorium.*` operations remain in the resulting module.
+
+## 20) LLVM IR Emission Handoff
+
+- Added front-end LLVM IR emission API:
+  - `emitLLVMIR(...)` in `include/tensorium_mlir/Target/MLIRGen/MLIRGen.h`
+  - implementation in `lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp`
+- Driver support:
+  - new flag `--dump-llvm-ir` in `tools/driver/main.cpp`
+- Lowering scope:
+  - starts from MLIR produced by existing Tensorium passes,
+  - runs a dedicated conversion pipeline to LLVM dialect:
+    - canonicalize + cse
+    - lower-affine
+    - scf-to-cf
+    - expand-strided-metadata
+    - arith/math/index/cf/func to LLVM
+    - finalize-memref-to-llvm
+    - reconcile-unrealized-casts
+  - translates final LLVM dialect module to textual LLVM IR.
+- Expected usage for lowered kernels:
+  - include grid lowering and source-function stripping flags so source-level
+    Tensorium functions are not part of the conversion path.
+- Structural test coverage:
+  - `testLoweredGridModuleLLVMIREmission` verifies LLVM IR emission succeeds
+    for Schwarzschild with lowered affine init/rhs kernels and confirms:
+    - `tensorium_init_grid_affine` + `tensorium_rhs_grid_affine` are present,
+    - source symbols `tensorium_init` / `tensorium_rhs` / `tensorium_entry`
+      are absent.
