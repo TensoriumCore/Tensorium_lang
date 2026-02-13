@@ -24,6 +24,7 @@ struct MLIRGenOptions {
   bool enableInitStdLoweringPass = false;
   bool enableInitGridScfPass = false;
   bool enableInitGridAffinePass = false;
+  bool enableRhsGridScfPass = false;
   bool enableStencilLoweringPass = false;
   double dx = 0.1;
   int order = 2;

@@ -121,6 +121,7 @@ int main(int argc, char **argv) {
   bool enableInitStdLoweringPass = false;
   bool enableInitGridScfPass = false;
   bool enableInitGridAffinePass = false;
+  bool enableRhsGridScfPass = false;
   bool enableStencilLoweringPass = false;
   bool enableDissipationPass = false;
   bool mlirDisableThreading = false;
@@ -171,6 +172,8 @@ int main(int argc, char **argv) {
       enableInitGridScfPass = true;
     } else if (arg == "--tensorium-init-grid-affine-lower") {
       enableInitGridAffinePass = true;
+    } else if (arg == "--tensorium-rhs-grid-scf-lower") {
+      enableRhsGridScfPass = true;
     } else if (arg == "--tensorium-stencil-lower") {
       enableStencilLoweringPass = true;
     } else if (arg == "--tensorium-dissipation") {
@@ -335,6 +338,7 @@ int main(int argc, char **argv) {
         opts.enableInitStdLoweringPass = enableInitStdLoweringPass;
         opts.enableInitGridScfPass = enableInitGridScfPass;
         opts.enableInitGridAffinePass = enableInitGridAffinePass;
+        opts.enableRhsGridScfPass = enableRhsGridScfPass;
         opts.enableStencilLoweringPass = enableStencilLoweringPass;
         opts.enableDissipationPass = enableDissipationPass;
         opts.mlirDisableThreading = mlirDisableThreading;
