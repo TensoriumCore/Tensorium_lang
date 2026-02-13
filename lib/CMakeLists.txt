@@ -108,6 +108,22 @@ set(TENSORIUM_MLIR_COMMON_LINK_LIBS
   MLIRSupport
   MLIRPass
   MLIRTransforms
+  MLIRConvertToLLVMPass
+  MLIRConvertToLLVMInterface
+  MLIRSCFToControlFlow
+  MLIRAffineToStandard
+  MLIRMemRefTransforms
+  MLIRArithToLLVM
+  MLIRMathToLLVM
+  MLIRIndexToLLVM
+  MLIRControlFlowToLLVM
+  MLIRFuncToLLVM
+  MLIRMemRefToLLVM
+  MLIRLLVMCommonConversion
+  MLIRReconcileUnrealizedCasts
+  MLIRLLVMDialect
+  MLIRTargetLLVMIRExport
+  MLIRToLLVMIRTranslationRegistration
   MLIRFuncDialect
   MLIRArithDialect
   MLIRAffineDialect

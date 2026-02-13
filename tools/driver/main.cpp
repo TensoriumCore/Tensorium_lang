@@ -109,6 +109,7 @@ int main(int argc, char **argv) {
   double initScalar = 1.0;
   double initAlpha = 2.0;
   bool dumpMLIR = false;
+  bool dumpLLVMIR = false;
   bool enableNoOpPass = false;
   bool enableAnalysisPass = false;
   bool validateOnly = false;
@@ -186,6 +187,8 @@ int main(int argc, char **argv) {
       enableDissipationPass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
+    } else if (arg == "--dump-llvm-ir") {
+      dumpLLVMIR = true;
     } else if (arg == "--mlir-disable-threading") {
       mlirDisableThreading = true;
     } else if (arg == "--mlir-print-op-on-diagnostic") {
@@ -328,13 +331,11 @@ int main(int argc, char **argv) {
         tensorium::backend::printModuleIR(mod);
         std::cout << "==============================\n";
       }
-      if (dumpMLIR) {
-        std::cout << "\n=== MLIR DUMP (" << path << ") ===\n";
 
+      auto makeMLIRGenOptions = [&]() {
         tensorium_mlir::MLIRGenOptions opts;
         opts.enableNoOpPass = enableNoOpPass;
         opts.enableAnalysisPass = enableAnalysisPass;
-
         opts.enableEinsteinLoweringPass = enableEinsteinLoweringPass;
         opts.enableEinsteinValidityPass = enableEinsteinValidityPass;
         opts.enableIndexAnalyzePass = enableIndexAnalyzePass;
@@ -352,10 +353,28 @@ int main(int argc, char **argv) {
         opts.mlirDisableThreading = mlirDisableThreading;
         opts.mlirPrintOpOnDiagnostic = mlirPrintOpOnDiagnostic;
         opts.mlirPrintIRAfterFailure = mlirPrintIRAfterFailure;
+        return opts;
+      };
+
+      if (dumpMLIR) {
+        std::cout << "\n=== MLIR DUMP (" << path << ") ===\n";
+        auto opts = makeMLIRGenOptions();
         const bool pipelineOK = tensorium_mlir::emitMLIR(mod, opts);
         if (!pipelineOK) {
           fileOK = false;
           std::cerr << "[Tensorium] MLIR pipeline failed: " << path << "\n";
+          if (failOnMLIRPipelineFailure)
+            return 1;
+        }
+        std::cout << "==============================\n";
+      }
+      if (dumpLLVMIR) {
+        std::cout << "\n=== LLVM IR DUMP (" << path << ") ===\n";
+        auto opts = makeMLIRGenOptions();
+        const bool pipelineOK = tensorium_mlir::emitLLVMIR(mod, opts);
+        if (!pipelineOK) {
+          fileOK = false;
+          std::cerr << "[Tensorium] LLVM IR pipeline failed: " << path << "\n";
           if (failOnMLIRPipelineFailure)
             return 1;
         }

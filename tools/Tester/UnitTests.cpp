@@ -2070,6 +2070,50 @@ static bool testStripSourceFuncsAfterGridLowering() {
   return true;
 }
 
+static bool testLoweredGridModuleLLVMIREmission() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  backend::ModuleIR mod =
+      buildModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
+                          CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  auto verify = validation::verifyIR(mod);
+  if (!verify.ok()) {
+    std::cerr << "FAIL: IR verification failed before LLVM emission test\n";
+    return false;
+  }
+
+  std::string llvmIR;
+  if (!tensorium_mlir::emitLLVMIR(mod, opts, &llvmIR)) {
+    std::cerr << "FAIL: emitLLVMIR failed for lowered grid module\n";
+    return false;
+  }
+
+  if (llvmIR.find("tensorium_init_grid_affine") == std::string::npos) {
+    std::cerr << "FAIL: LLVM IR missing tensorium_init_grid_affine symbol\n";
+    return false;
+  }
+  if (llvmIR.find("tensorium_rhs_grid_affine") == std::string::npos) {
+    std::cerr << "FAIL: LLVM IR missing tensorium_rhs_grid_affine symbol\n";
+    return false;
+  }
+  if (llvmIR.find("@tensorium_entry") != std::string::npos ||
+      llvmIR.find("@tensorium_init(") != std::string::npos ||
+      llvmIR.find("@tensorium_rhs(") != std::string::npos) {
+    std::cerr << "FAIL: LLVM IR should not expose source tensorium_init/rhs/entry symbols\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildInitThetaZeroNoNaN() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -2812,6 +2856,8 @@ int main() {
        &testSchwarzschildRhsGridAffineLowering},
       {"testStripSourceFuncsAfterGridLowering",
        &testStripSourceFuncsAfterGridLowering},
+      {"testLoweredGridModuleLLVMIREmission",
+       &testLoweredGridModuleLLVMIREmission},
       {"testSchwarzschildInitThetaZeroNoNaN",
        &testSchwarzschildInitThetaZeroNoNaN},
       {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},

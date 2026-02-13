@@ -1,6 +1,7 @@
 
 #pragma once
 #include "tensorium/Backend/DomainIR.hpp"
+#include <string>
 
 namespace mlir {
 class MLIRContext;
@@ -50,4 +51,8 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 
 bool emitMLIR(const tensorium::backend::ModuleIR &module,
               const MLIRGenOptions &opts = {});
+
+bool emitLLVMIR(const tensorium::backend::ModuleIR &module,
+                const MLIRGenOptions &opts = {},
+                std::string *llvmIRText = nullptr);
 } // namespace tensorium_mlir
