@@ -848,4 +848,19 @@ Planned commit sequence (one intention per commit):
   - runner: `tools/dev/ll_rhs_runner_covariant_rank1.c`,
   - flow: `.tn -> MLIR passes -> LLVM IR -> native executable`,
   - runtime output prints full `nabla_j(V_i)` and `nabla_j(W^i)` 3x3 matrices
-    at the grid center and checks selected analytical components.
+  at the grid center and checks selected analytical components.
+
+## 23) Ricci Typing Fix (Contract + Derivative)
+
+- Fixed tensor-type inference for `contract(...)` on mixed-variance tensors.
+  - Previous behavior removed contracted rank by dropping lower indices first,
+    which could return wrong variance on expressions such as
+    `contract(d_k(Christoffel[k,i,j]))`.
+  - New behavior infers result variance from free-index variance roles
+    (contravariant/covariant) and validates rank consistency.
+- Added GR regression fixture:
+  - `tests/fixtures/gr/schwarzschild_ricci_3d.tn`
+  - Builds `Ricci[i,j]` directly from Christoffel symbols derived from
+    `metric4`/`split_3p1`.
+- Added the fixture to automated GR checks in `run_test.sh` to prevent future
+  regressions.
