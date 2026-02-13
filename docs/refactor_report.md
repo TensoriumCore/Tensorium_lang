@@ -864,3 +864,12 @@ Planned commit sequence (one intention per commit):
     `metric4`/`split_3p1`.
 - Added the fixture to automated GR checks in `run_test.sh` to prevent future
   regressions.
+- Added end-to-end LLVM smoke for Ricci execution with full matrix prints:
+  - script: `tools/dev/test_minkowski_ricci_ll.sh`,
+  - helper script: `tools/dev/test_metric_ricci_ll.sh`,
+  - runner: `tools/dev/ll_rhs_runner_minkowski_ricci.c`,
+  - flow: `.tn -> MLIR passes -> LLVM IR -> native executable`,
+  - runtime output prints reconstructed `g_uv`, `Gamma_ij`, `GammaU^ij`,
+    `Christoffel^i_{jk}` and `Ricci_ij` at the grid center,
+  - fixture: `tests/fixtures/gr/minkowski_ricci_3d.tn` (exact check:
+    `Christoffel = 0`, `Ricci = 0`).

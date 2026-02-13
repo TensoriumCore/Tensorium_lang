@@ -125,6 +125,7 @@ GR_FIXTURES=(
   tests/fixtures/gr/schwarzschild_3d.tn
   tests/fixtures/gr/schwarzschild_christoffel_3d.tn
   tests/fixtures/gr/schwarzschild_ricci_3d.tn
+  tests/fixtures/gr/minkowski_ricci_3d.tn
   tests/fixtures/gr/reissner_nordstrom_3d.tn
   tests/fixtures/gr/reissner_nordstrom_christoffel_3d.tn
   tests/fixtures/gr/spatial_offdiag_3d.tn
@@ -437,6 +438,7 @@ bash tools/dev/test_schwarzschild_ll.sh
 bash tools/dev/test_schwarzschild_christoffel_ll.sh
 bash tools/dev/test_reissner_christoffel_ll.sh
 bash tools/dev/test_kerr_like_christoffel_ll.sh
+bash tools/dev/test_minkowski_ricci_ll.sh
 bash tools/dev/test_covariant_rank1_ll.sh
 
 echo
