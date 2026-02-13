@@ -1,5 +1,6 @@
 #include "tensorium_mlir/Dialect/Tensorium/Transform/Passes.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -732,10 +733,117 @@ struct RhsGridScfPass
   }
 };
 
+struct RhsGridAffinePass
+    : public PassWrapper<RhsGridAffinePass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RhsGridAffinePass)
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<TensoriumDialect, affine::AffineDialect,
+                    func::FuncDialect, arith::ArithDialect,
+                    memref::MemRefDialect>();
+  }
+
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    auto rhs = module.lookupSymbol<func::FuncOp>("tensorium_rhs");
+    if (!rhs)
+      return;
+
+    if (module.lookupSymbol<func::FuncOp>("tensorium_rhs_grid_affine"))
+      return;
+
+    OpBuilder b(&getContext());
+    Location loc = rhs.getLoc();
+    Type idxTy = b.getIndexType();
+    Type f64 = b.getF64Type();
+    Type dynMemF64 = MemRefType::get({ShapedType::kDynamic}, f64);
+
+    SmallVector<Type> args;
+    args.push_back(idxTy); // nx
+    args.push_back(idxTy); // ny
+    args.push_back(idxTy); // nz
+    args.push_back(f64);   // dx
+    args.push_back(f64);   // dy
+    args.push_back(f64);   // dz
+    for (Type argTy : rhs.getFunctionType().getInputs()) {
+      if (!isa<FieldType>(argTy)) {
+        rhs.emitError(
+            "rhs-grid-affine: expected tensorium.field arg in tensorium_rhs");
+        signalPassFailure();
+        return;
+      }
+      args.push_back(dynMemF64);
+    }
+
+    auto fnTy = b.getFunctionType(args, {});
+    auto outFn = func::FuncOp::create(loc, "tensorium_rhs_grid_affine", fnTy);
+    Block *entry = outFn.addEntryBlock();
+    b.setInsertionPointToEnd(entry);
+
+    Value nx = entry->getArgument(0);
+    Value ny = entry->getArgument(1);
+    Value nz = entry->getArgument(2);
+    Value dx = entry->getArgument(3);
+    Value dy = entry->getArgument(4);
+    Value dz = entry->getArgument(5);
+
+    SmallVector<Value> fieldMemrefs;
+    fieldMemrefs.reserve(rhs.getNumArguments());
+    for (unsigned i = 0; i < rhs.getNumArguments(); ++i)
+      fieldMemrefs.push_back(entry->getArgument(6 + i));
+
+    Value c2 = arith::ConstantIndexOp::create(b, loc, 2);
+    Value ubX = arith::SubIOp::create(b, loc, nx, c2);
+    Value ubY = arith::SubIOp::create(b, loc, ny, c2);
+    Value ubZ = arith::SubIOp::create(b, loc, nz, c2);
+
+    AffineMap lbMap = AffineMap::getConstantMap(2, &getContext());
+    AffineExpr s0 = b.getAffineSymbolExpr(0);
+    AffineMap ubMap = AffineMap::get(0, 1, s0);
+
+    auto loopX = affine::AffineForOp::create(
+        b, loc, ValueRange{}, lbMap, ValueRange{ubX}, ubMap, 1);
+    b.setInsertionPointToStart(loopX.getBody());
+    auto loopY = affine::AffineForOp::create(
+        b, loc, ValueRange{}, lbMap, ValueRange{ubY}, ubMap, 1);
+    b.setInsertionPointToStart(loopY.getBody());
+    auto loopZ = affine::AffineForOp::create(
+        b, loc, ValueRange{}, lbMap, ValueRange{ubZ}, ubMap, 1);
+
+    {
+      OpBuilder ib = OpBuilder::atBlockBegin(loopZ.getBody());
+      Value ix = loopX.getInductionVar();
+      Value iy = loopY.getInductionVar();
+      Value iz = loopZ.getInductionVar();
+
+      RhsScalarizer scalarizer(ib, loc, rhs, nx, ny, nz, dx, dy, dz, ix, iy,
+                               iz, fieldMemrefs);
+
+      for (Operation &op : rhs.getBody().front().without_terminator()) {
+        if (auto dt = dyn_cast<DtAssignOp>(&op)) {
+          if (failed(scalarizer.lowerDtAssign(dt))) {
+            signalPassFailure();
+            return;
+          }
+        }
+      }
+    }
+
+    b.setInsertionPointAfter(loopX);
+    func::ReturnOp::create(b, loc);
+
+    module.push_back(outFn);
+  }
+};
+
 } // namespace
 
 std::unique_ptr<::mlir::Pass> createTensoriumRhsGridScfPass() {
   return std::make_unique<RhsGridScfPass>();
+}
+
+std::unique_ptr<::mlir::Pass> createTensoriumRhsGridAffinePass() {
+  return std::make_unique<RhsGridAffinePass>();
 }
 
 } // namespace tensorium::mlir
