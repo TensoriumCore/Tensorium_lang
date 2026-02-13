@@ -905,6 +905,9 @@ static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
   if (opts.enableRhsGridAffinePass) {
     pm.addPass(tensorium::mlir::createTensoriumRhsGridAffinePass());
   }
+  if (opts.enableStripSourceFuncsPass) {
+    pm.addPass(tensorium::mlir::createTensoriumStripSourceFuncsPass());
+  }
 
   if (opts.enableEinsteinLoweringPass) {
     pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());

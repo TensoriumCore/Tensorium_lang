@@ -172,6 +172,7 @@ add_library(tensoriumMlirTransforms
   tensorium_mlir/Dialect/Tensorium/Transforms/InitGridScfPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/InitGridAffinePass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/RhsGridScfPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/StripSourceFuncsPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/StencilLoweringPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/DissipationPass.cpp
 )
