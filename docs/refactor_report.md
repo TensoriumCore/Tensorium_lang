@@ -788,3 +788,24 @@ Planned commit sequence (one intention per commit):
     - prints full `Gamma^i_{jk}` matrices at the grid center and checks key
       Schwarzschild components against analytical values with finite-difference
       tolerance.
+
+## 21) MLIRGen Scalability Refactor
+
+- Goal:
+  - remove "catch-all" growth in `MLIRGen.cpp` and separate concerns by stage.
+- New internal split:
+  - `lib/tensorium_mlir/Target/MLIRGen/MLIRGenShared.{h,cpp}`
+    - shared helpers (field extraction, argument collection, common diagnostics,
+      index/string attrs, field-type conversion).
+  - `lib/tensorium_mlir/Target/MLIRGen/MLIRGenInitialData.{h,cpp}`
+    - init-only emission (`metric4` / `decompose3p1_from_metric` / `init3p1` /
+      split bindings).
+  - `lib/tensorium_mlir/Target/MLIRGen/MLIRGenExpr.{h,cpp}`
+    - expression emission and RHS/evolution lowering.
+  - `lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp`
+    - orchestration only (`tensorium_init`/`tensorium_rhs`/`tensorium_entry`
+      assembly, pass-manager execution, MLIR/LLVM dump API).
+- Result:
+  - smaller units with explicit ownership,
+  - easier addition of new ops without touching module orchestration logic,
+  - lower merge-conflict surface for parallel work on init vs rhs pipelines.
