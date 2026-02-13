@@ -2024,6 +2024,52 @@ static bool testSchwarzschildRhsGridAffineLowering() {
   return true;
 }
 
+static bool testStripSourceFuncsAfterGridLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init") ||
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs") ||
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry")) {
+    std::cerr << "FAIL: strip-source-funcs must remove tensorium_init/rhs/entry\n";
+    return false;
+  }
+
+  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_grid_affine")) {
+    std::cerr << "FAIL: missing tensorium_init_grid_affine after strip-source-funcs\n";
+    return false;
+  }
+  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_affine")) {
+    std::cerr << "FAIL: missing tensorium_rhs_grid_affine after strip-source-funcs\n";
+    return false;
+  }
+
+  bool hasTensoriumOp = false;
+  std::string tensoriumOpName;
+  module->walk([&](::mlir::Operation *op) {
+    if (op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+      tensoriumOpName = op->getName().getStringRef().str();
+    }
+  });
+  if (hasTensoriumOp) {
+    std::cerr << "FAIL: strip-source-funcs module must not contain tensorium ops, found "
+              << tensoriumOpName << "\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildInitThetaZeroNoNaN() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -2764,6 +2810,8 @@ int main() {
        &testSchwarzschildRhsGridScfLowering},
       {"testSchwarzschildRhsGridAffineLowering",
        &testSchwarzschildRhsGridAffineLowering},
+      {"testStripSourceFuncsAfterGridLowering",
+       &testStripSourceFuncsAfterGridLowering},
       {"testSchwarzschildInitThetaZeroNoNaN",
        &testSchwarzschildInitThetaZeroNoNaN},
       {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},

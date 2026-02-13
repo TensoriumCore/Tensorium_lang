@@ -722,3 +722,27 @@ Planned commit sequence (one intention per commit):
   - `emitMLIR(...)` now returns pipeline success.
   - Driver no longer prints `[Tensorium] OK` for files where MLIR pipeline fails;
     it prints `[Tensorium] FAILED` (and returns non-zero if `--mlir-strict-pipeline` is set).
+
+## 19) Lowered-Only Module Cleanup
+
+- Added a dedicated transform pass:
+  - `createTensoriumStripSourceFuncsPass()`
+  - implementation: `lib/tensorium_mlir/Dialect/Tensorium/Transforms/StripSourceFuncsPass.cpp`
+- Purpose:
+  - after grid lowering passes have produced executable kernels, remove source-level
+    `tensorium_init`, `tensorium_rhs`, and `tensorium_entry` so the module is closer
+    to LLVM-convertible form.
+- Safety contract:
+  - `tensorium_init` is removed only when an init replacement exists
+    (`tensorium_init_point` or `tensorium_init_grid_*`),
+  - `tensorium_rhs` is removed only when an RHS replacement exists
+    (`tensorium_rhs_grid_*`),
+  - `tensorium_entry` is removed only when both init and RHS replacements exist.
+- Driver wiring:
+  - new flag: `--tensorium-strip-source-funcs`
+  - this flag is explicit and opt-in (default behavior unchanged).
+- Structural test coverage:
+  - `testStripSourceFuncsAfterGridLowering` asserts:
+    - source functions are removed,
+    - lowered affine grid kernels are present,
+    - no `tensorium.*` operations remain in the resulting module.
