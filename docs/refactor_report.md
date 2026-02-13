@@ -774,3 +774,9 @@ Planned commit sequence (one intention per commit):
     - `tensorium_init_grid_affine` + `tensorium_rhs_grid_affine` are present,
     - source symbols `tensorium_init` / `tensorium_rhs` / `tensorium_entry`
       are absent.
+- Compile+run smoke (real `.ll` execution path):
+  - script: `tools/dev/test_schwarzschild_ll.sh`
+  - compiles emitted LLVM IR (`llc`) + C runner (`tools/dev/ll_init_runner_schwarzschild.c`)
+    and executes the binary,
+  - prints computed values for `alpha`, `gamma_ij`, `gammaU^ij` and validates
+    them against Schwarzschild reference values at `M=1, r=10, theta=pi/2`.
