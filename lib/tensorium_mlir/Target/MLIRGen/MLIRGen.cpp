@@ -1,14 +1,16 @@
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
-#include <algorithm>
-#include <set>
-#include <stdexcept>
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/Dialect/All.h"
+#include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/Passes.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
@@ -17,7 +19,12 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <set>
+#include <stdexcept>
 
 namespace tensorium_mlir {
 
@@ -887,6 +894,28 @@ emitExpr(mlir::OpBuilder &b, mlir::Location loc,
 static void addEinsteinPipelineSafe(::mlir::PassManager &pm,
                                     const MLIRGenOptions &opts) {
 
+  if (opts.enableMetricLoweringPass) {
+    pm.addPass(tensorium::mlir::createTensoriumMetricLoweringPass());
+  }
+  if (opts.enableInitStdLoweringPass) {
+    pm.addPass(tensorium::mlir::createTensoriumInitToStdPass());
+  }
+  if (opts.enableInitGridScfPass) {
+    pm.addPass(tensorium::mlir::createTensoriumInitGridScfPass());
+  }
+  if (opts.enableInitGridAffinePass) {
+    pm.addPass(tensorium::mlir::createTensoriumInitGridAffinePass());
+  }
+  if (opts.enableRhsGridScfPass) {
+    pm.addPass(tensorium::mlir::createTensoriumRhsGridScfPass());
+  }
+  if (opts.enableRhsGridAffinePass) {
+    pm.addPass(tensorium::mlir::createTensoriumRhsGridAffinePass());
+  }
+  if (opts.enableStripSourceFuncsPass) {
+    pm.addPass(tensorium::mlir::createTensoriumStripSourceFuncsPass());
+  }
+
   if (opts.enableEinsteinLoweringPass) {
     pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());
   }
@@ -934,7 +963,12 @@ static void addPostMLIRNormalizationPipeline(::mlir::PassManager &pm,
 
 mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
-                mlir::MLIRContext &ctx, const MLIRGenOptions &opts) {
+                mlir::MLIRContext &ctx, const MLIRGenOptions &opts,
+                bool *pipelineSuccess) {
+  if (opts.mlirDisableThreading)
+    ctx.disableMultithreading();
+  ctx.printOpOnDiagnostic(opts.mlirPrintOpOnDiagnostic);
+
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
   ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
   ctx.getOrLoadDialect<tensorium::mlir::TensoriumDialect>();
@@ -1024,19 +1058,98 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   }
 
   mlir::PassManager pm(&ctx);
+  if (pipelineOpts.mlirPrintIRAfterFailure) {
+    pm.enableIRPrinting(
+        [](mlir::Pass *, mlir::Operation *) { return false; },
+        [](mlir::Pass *, mlir::Operation *) { return true; },
+        /*printModuleScope=*/true,
+        /*printAfterOnlyOnChange=*/false,
+        /*printAfterOnlyOnFailure=*/true);
+  }
   addEinsteinPipelineSafe(pm, pipelineOpts);
   addPostMLIRNormalizationPipeline(pm, pipelineOpts);
-  if (mlir::failed(pm.run(*moduleOp))) {
+  const bool ok = mlir::succeeded(pm.run(*moduleOp));
+  if (!ok) {
     llvm::errs() << "Pipeline failed\n";
   }
+  if (pipelineSuccess)
+    *pipelineSuccess = ok;
   return moduleOp;
 }
 
-void emitMLIR(const tensorium::backend::ModuleIR &module,
+static bool lowerModuleToLLVM(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
+                              const MLIRGenOptions &opts) {
+  mlir::PassManager pm(&ctx);
+  if (opts.mlirPrintIRAfterFailure) {
+    pm.enableIRPrinting(
+        [](mlir::Pass *, mlir::Operation *) { return false; },
+        [](mlir::Pass *, mlir::Operation *) { return true; },
+        /*printModuleScope=*/true,
+        /*printAfterOnlyOnChange=*/false,
+        /*printAfterOnlyOnFailure=*/true);
+  }
+
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createLowerAffinePass());
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createConvertMathToLLVMPass());
+  pm.addPass(mlir::createConvertIndexToLLVMPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+  pm.addPass(mlir::createConvertFuncToLLVMPass());
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+
+  return mlir::succeeded(pm.run(moduleOp));
+}
+
+bool emitMLIR(const tensorium::backend::ModuleIR &module,
               const MLIRGenOptions &opts) {
   mlir::MLIRContext ctx;
-  auto moduleOp = buildMLIRModule(module, ctx, opts);
+  bool pipelineOk = true;
+  auto moduleOp = buildMLIRModule(module, ctx, opts, &pipelineOk);
   moduleOp->print(llvm::outs());
+  return pipelineOk;
+}
+
+bool emitLLVMIR(const tensorium::backend::ModuleIR &module,
+                const MLIRGenOptions &opts, std::string *llvmIRText) {
+  mlir::MLIRContext ctx;
+  mlir::DialectRegistry registry;
+  mlir::registerAllToLLVMIRTranslations(registry);
+  ctx.appendDialectRegistry(registry);
+  ctx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+
+  bool pipelineOk = true;
+  auto moduleOp = buildMLIRModule(module, ctx, opts, &pipelineOk);
+  if (!pipelineOk)
+    return false;
+
+  if (!lowerModuleToLLVM(*moduleOp, ctx, opts)) {
+    llvm::errs() << "LLVM lowering pipeline failed\n";
+    return false;
+  }
+
+  llvm::LLVMContext llvmCtx;
+  auto llvmModule = mlir::translateModuleToLLVMIR(*moduleOp, llvmCtx);
+  if (!llvmModule) {
+    llvm::errs() << "LLVM IR translation failed\n";
+    return false;
+  }
+
+  std::string buffer;
+  llvm::raw_string_ostream stream(buffer);
+  llvmModule->print(stream, nullptr);
+  stream.flush();
+
+  if (llvmIRText) {
+    *llvmIRText = std::move(buffer);
+  } else {
+    llvm::outs() << buffer;
+  }
+  return true;
 }
 
 } // namespace tensorium_mlir

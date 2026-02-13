@@ -427,6 +427,14 @@ done
 
 echo
 echo "=============================="
+echo " RUN LLVM IR COMPILE+RUN SMOKE"
+echo "=============================="
+
+bash tools/dev/test_schwarzschild_ll.sh
+bash tools/dev/test_schwarzschild_christoffel_ll.sh
+
+echo
+echo "=============================="
 echo " ALL TESTS PASSED"
 echo " MLIR outputs in $OUT"
 echo "=============================="

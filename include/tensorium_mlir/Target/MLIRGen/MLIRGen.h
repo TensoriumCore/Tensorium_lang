@@ -1,6 +1,7 @@
 
 #pragma once
 #include "tensorium/Backend/DomainIR.hpp"
+#include <string>
 
 namespace mlir {
 class MLIRContext;
@@ -20,6 +21,13 @@ struct MLIRGenOptions {
   bool enableIndexAnalyzePass = false;
   bool enableEinsteinCanonicalizePass = false;
   bool enableEinsteinAnalyzeEinsumPass = false;
+  bool enableMetricLoweringPass = false;
+  bool enableInitStdLoweringPass = false;
+  bool enableInitGridScfPass = false;
+  bool enableInitGridAffinePass = false;
+  bool enableRhsGridScfPass = false;
+  bool enableRhsGridAffinePass = false;
+  bool enableStripSourceFuncsPass = false;
   bool enableStencilLoweringPass = false;
   double dx = 0.1;
   int order = 2;
@@ -30,12 +38,21 @@ struct MLIRGenOptions {
   bool enableMLIRCSEPass = true;
   // Optional compaction across function boundaries.
   bool enableMLIRInlinePass = false;
+  // MLIR diagnostics/debug toggles.
+  bool mlirDisableThreading = false;
+  bool mlirPrintOpOnDiagnostic = false;
+  bool mlirPrintIRAfterFailure = false;
 };
 
 mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
-                mlir::MLIRContext &ctx, const MLIRGenOptions &opts = {});
+                mlir::MLIRContext &ctx, const MLIRGenOptions &opts = {},
+                bool *pipelineSuccess = nullptr);
 
-void emitMLIR(const tensorium::backend::ModuleIR &module,
+bool emitMLIR(const tensorium::backend::ModuleIR &module,
               const MLIRGenOptions &opts = {});
+
+bool emitLLVMIR(const tensorium::backend::ModuleIR &module,
+                const MLIRGenOptions &opts = {},
+                std::string *llvmIRText = nullptr);
 } // namespace tensorium_mlir

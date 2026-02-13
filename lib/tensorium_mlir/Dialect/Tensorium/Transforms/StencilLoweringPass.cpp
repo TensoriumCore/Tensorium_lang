@@ -56,17 +56,6 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
     auto derivIdxAttr = op->getAttrOfType<StringAttr>("index");
     if (!derivIdxAttr)
       return failure();
-    StringRef idxName = derivIdxAttr.getValue();
-
-    int dim = -1;
-    if (idxName == "i" || idxName == "x")
-      dim = 0;
-    else if (idxName == "j" || idxName == "y")
-      dim = 1;
-    else if (idxName == "k" || idxName == "z")
-      dim = 2;
-    if (dim == -1)
-      return failure();
 
     auto stencil = getCoefficients(order);
     auto mod = op->getParentOfType<ModuleOp>();
@@ -74,50 +63,82 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
     if (!dimAttr)
       return failure();
     unsigned spatialDim = (unsigned)dimAttr.getInt();
+    if (spatialDim != 3)
+      return failure();
 
     Location loc = op.getLoc();
+    auto inputTy = llvm::dyn_cast<FieldType>(input.getType());
     auto resultType = op.getType();
-    Value sum;
-    bool firstTerm = true;
-    for (const auto &pt : stencil) {
-      auto offAttr =
-          rewriter.getI64ArrayAttr(makeOffsets(spatialDim, dim, pt.offset));
-      Value val = RefOp::create(rewriter, loc, input.getType(), refOp.getSource(),
-                                refOp.getKindAttr(), refOp.getIndicesAttr(),
-                                offAttr)
-                      .getResult();
+    auto resultTy = llvm::dyn_cast<FieldType>(resultType);
+    if (!inputTy || !resultTy)
+      return failure();
+    if (resultTy.getRank() != inputTy.getRank() + 1)
+      return failure();
 
-      auto scalarTy = getScalarFieldType(rewriter.getContext());
-      Value weight =
-          ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(pt.weight))
-              .getResult();
-      Value term =
-          MulOp::create(rewriter, loc, input.getType(), val, weight).getResult();
-
-      if (term.getType() != resultType) {
-        auto termTy = llvm::dyn_cast<FieldType>(term.getType());
-        auto resTy = llvm::dyn_cast<FieldType>(resultType);
-        if (!termTy || !resTy || termTy.getRank() != 0)
-          return failure();
-        term = PromoteOp::create(rewriter, loc, resultType, term).getResult();
-      }
-
-      if (firstTerm) {
-        sum = term;
-        firstTerm = false;
-        continue;
-      }
-      sum = AddOp::create(rewriter, loc, resultType, sum, term).getResult();
-    }
+    auto scalarTy = getScalarFieldType(rewriter.getContext());
+    auto covectorTy = FieldType::get(rewriter.getContext(),
+                                     Float64Type::get(rewriter.getContext()),
+                                     /*up=*/0, /*down=*/1);
+    Value zero =
+        ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(0.0))
+            .getResult();
+    Value one =
+        ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(1.0))
+            .getResult();
 
     double invDx = (dx > 1e-12) ? (1.0 / dx) : 1.0;
-    auto scalarTy = getScalarFieldType(rewriter.getContext());
     Value invDxVal =
         ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(invDx))
             .getResult();
-    Value res = MulOp::create(rewriter, loc, resultType, sum, invDxVal).getResult();
 
-    rewriter.replaceOp(op, res);
+    Value derivOut;
+    bool firstAxis = true;
+    for (unsigned dim = 0; dim < spatialDim; ++dim) {
+      Value sum;
+      bool firstTerm = true;
+      for (const auto &pt : stencil) {
+        auto offAttr =
+            rewriter.getI64ArrayAttr(makeOffsets(spatialDim, dim, pt.offset));
+        Value val =
+            RefOp::create(rewriter, loc, input.getType(), refOp.getSource(),
+                          refOp.getKindAttr(), refOp.getIndicesAttr(), offAttr)
+                .getResult();
+
+        Value weight = ConstOp::create(rewriter, loc, scalarTy,
+                                       rewriter.getF64FloatAttr(pt.weight))
+                           .getResult();
+        Value term =
+            MulOp::create(rewriter, loc, input.getType(), val, weight).getResult();
+
+        if (firstTerm) {
+          sum = term;
+          firstTerm = false;
+          continue;
+        }
+        sum = AddOp::create(rewriter, loc, input.getType(), sum, term).getResult();
+      }
+
+      Value axisDeriv =
+          MulOp::create(rewriter, loc, input.getType(), sum, invDxVal).getResult();
+
+      SmallVector<Value, 3> basisComps = {zero, zero, zero};
+      basisComps[dim] = one;
+      Value basis =
+          BuildCovectorOp::create(rewriter, loc, covectorTy, basisComps).getOut();
+
+      Value lifted =
+          MulOp::create(rewriter, loc, resultType, axisDeriv, basis).getResult();
+
+      if (firstAxis) {
+        derivOut = lifted;
+        firstAxis = false;
+        continue;
+      }
+      derivOut =
+          AddOp::create(rewriter, loc, resultType, derivOut, lifted).getResult();
+    }
+
+    rewriter.replaceOp(op, derivOut);
     return success();
   }
 };

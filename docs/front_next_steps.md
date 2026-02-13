@@ -65,6 +65,14 @@ The front is "Schwarzschild init-only JIT-ready" when all are true:
   - `r=2M` follows documented IEEE contract (allow inf/0, no front rejection).
 - Sema/MLIRGen builtin support is consistent and tested.
 
+## Recent Progress
+- Added optional metric-lowered init bridge to standard MLIR:
+  - `--tensorium-metric-lower --tensorium-init-std-lower`
+  - emits `@tensorium_init_point` with scalar args (`M,r,theta,phi`) and
+    `memref` outputs (`alpha`, `gamma`, `gammaU`).
+- Added regression test ensuring `@tensorium_init_point` is generated with
+  no Tensorium ops and explicit `memref.store` writes.
+
 ## Plan (max 3 phases)
 ### Phase 1: Contract and consistency
 - Deliver ABI doc and descriptor structs.

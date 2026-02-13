@@ -504,6 +504,67 @@ static InitEvalResult executeInitPoint(
       continue;
     }
 
+    if (auto build = llvm::dyn_cast<tensorium::mlir::BuildCovectorOp>(&op)) {
+      if (build.getComponents().size() != 3) {
+        return InitEvalResult::failure(
+            "build_covector expects exactly 3 scalar components");
+      }
+      RuntimeValue out = makeCovector3();
+      for (unsigned i = 0; i < 3; ++i) {
+        RuntimeValue c;
+        auto cRes = valueFromOperand(values, build.getComponents()[i], c);
+        if (!cRes.ok)
+          return cRes;
+        if (c.kind != ValueKind::Scalar)
+          return InitEvalResult::failure("build_covector component must be scalar");
+        out.data[i] = c.data[0];
+      }
+      values[build.getOut()] = out;
+      continue;
+    }
+
+    if (auto build = llvm::dyn_cast<tensorium::mlir::BuildCovTensor2Op>(&op)) {
+      if (build.getComponents().size() != 9) {
+        return InitEvalResult::failure(
+            "build_cov_tensor2 expects exactly 9 scalar components");
+      }
+      RuntimeValue out = makeTensor3x3();
+      for (unsigned i = 0; i < 9; ++i) {
+        RuntimeValue c;
+        auto cRes = valueFromOperand(values, build.getComponents()[i], c);
+        if (!cRes.ok)
+          return cRes;
+        if (c.kind != ValueKind::Scalar) {
+          return InitEvalResult::failure(
+              "build_cov_tensor2 component must be scalar");
+        }
+        out.data[i] = c.data[0];
+      }
+      values[build.getOut()] = out;
+      continue;
+    }
+
+    if (auto build = llvm::dyn_cast<tensorium::mlir::BuildConTensor2Op>(&op)) {
+      if (build.getComponents().size() != 9) {
+        return InitEvalResult::failure(
+            "build_con_tensor2 expects exactly 9 scalar components");
+      }
+      RuntimeValue out = makeTensor3x3();
+      for (unsigned i = 0; i < 9; ++i) {
+        RuntimeValue c;
+        auto cRes = valueFromOperand(values, build.getComponents()[i], c);
+        if (!cRes.ok)
+          return cRes;
+        if (c.kind != ValueKind::Scalar) {
+          return InitEvalResult::failure(
+              "build_con_tensor2 component must be scalar");
+        }
+        out.data[i] = c.data[0];
+      }
+      values[build.getOut()] = out;
+      continue;
+    }
+
     if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op)) {
       auto out = makeMetric4x4();
       auto comps = metric.getComponents();

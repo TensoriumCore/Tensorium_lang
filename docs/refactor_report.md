@@ -693,3 +693,98 @@ Planned commit sequence (one intention per commit):
     `Gamma^theta_rtheta`, `Gamma^phi_rphi`, `Gamma^phi_thetaphi`,
   - structural MLIR test asserts Christoffel path contains deriv/add/sub/mul/contract
     and that `gammaU` feeding contraction comes from init-assigned field provenance.
+
+## 18) RHS MLIR Anti-Bias Evaluation
+
+- Added a dedicated front-only RHS evaluator:
+  - API: `include/tensorium_mlir/Target/MLIRGen/RhsEvaluator.h`
+  - Impl: `lib/tensorium_mlir/Target/MLIRGen/RhsEvaluator.cpp`
+- Scope (generic op subset, no Schwarzschild hardcode):
+  - `tensorium.ref` (indices + offsets),
+  - `tensorium.deriv` (central FD, interior-only),
+  - `tensorium.add/sub/mul/div`,
+  - `tensorium.contract` (sum over `sum_indices`),
+  - `tensorium.promote`,
+  - `tensorium.dt_assign`.
+- Test upgrade:
+  - `testSchwarzschildChristoffelNumericPoint` now executes `@tensorium_rhs`
+    emitted from `tests/fixtures/gr/schwarzschild_christoffel_3d.tn` on a
+    small 3D grid, then checks six analytical Christoffel components at the
+    center point (`M=1, r=10, theta=1`).
+  - This removes the prior bias where Christoffel numeric checks were evaluated
+    through a dedicated backend-expression helper instead of RHS MLIR execution.
+- Driver instrumentation (without breaking existing suite defaults):
+  - New MLIR flags:
+    - `--mlir-disable-threading`
+    - `--mlir-print-op-on-diagnostic`
+    - `--mlir-print-ir-after-failure`
+    - `--mlir-strict-pipeline`
+  - `emitMLIR(...)` now returns pipeline success.
+  - Driver no longer prints `[Tensorium] OK` for files where MLIR pipeline fails;
+    it prints `[Tensorium] FAILED` (and returns non-zero if `--mlir-strict-pipeline` is set).
+
+## 19) Lowered-Only Module Cleanup
+
+- Added a dedicated transform pass:
+  - `createTensoriumStripSourceFuncsPass()`
+  - implementation: `lib/tensorium_mlir/Dialect/Tensorium/Transforms/StripSourceFuncsPass.cpp`
+- Purpose:
+  - after grid lowering passes have produced executable kernels, remove source-level
+    `tensorium_init`, `tensorium_rhs`, and `tensorium_entry` so the module is closer
+    to LLVM-convertible form.
+- Safety contract:
+  - `tensorium_init` is removed only when an init replacement exists
+    (`tensorium_init_point` or `tensorium_init_grid_*`),
+  - `tensorium_rhs` is removed only when an RHS replacement exists
+    (`tensorium_rhs_grid_*`),
+  - `tensorium_entry` is removed only when both init and RHS replacements exist.
+- Driver wiring:
+  - new flag: `--tensorium-strip-source-funcs`
+  - this flag is explicit and opt-in (default behavior unchanged).
+- Structural test coverage:
+  - `testStripSourceFuncsAfterGridLowering` asserts:
+    - source functions are removed,
+    - lowered affine grid kernels are present,
+    - no `tensorium.*` operations remain in the resulting module.
+
+## 20) LLVM IR Emission Handoff
+
+- Added front-end LLVM IR emission API:
+  - `emitLLVMIR(...)` in `include/tensorium_mlir/Target/MLIRGen/MLIRGen.h`
+  - implementation in `lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp`
+- Driver support:
+  - new flag `--dump-llvm-ir` in `tools/driver/main.cpp`
+- Lowering scope:
+  - starts from MLIR produced by existing Tensorium passes,
+  - runs a dedicated conversion pipeline to LLVM dialect:
+    - canonicalize + cse
+    - lower-affine
+    - scf-to-cf
+    - expand-strided-metadata
+    - arith/math/index/cf/func to LLVM
+    - finalize-memref-to-llvm
+    - reconcile-unrealized-casts
+  - translates final LLVM dialect module to textual LLVM IR.
+- Expected usage for lowered kernels:
+  - include grid lowering and source-function stripping flags so source-level
+    Tensorium functions are not part of the conversion path.
+- Structural test coverage:
+  - `testLoweredGridModuleLLVMIREmission` verifies LLVM IR emission succeeds
+    for Schwarzschild with lowered affine init/rhs kernels and confirms:
+    - `tensorium_init_grid_affine` + `tensorium_rhs_grid_affine` are present,
+    - source symbols `tensorium_init` / `tensorium_rhs` / `tensorium_entry`
+      are absent.
+- Compile+run smoke (real `.ll` execution path):
+  - script: `tools/dev/test_schwarzschild_ll.sh`
+  - compiles emitted LLVM IR (`llc`) + C runner (`tools/dev/ll_init_runner_schwarzschild.c`)
+    and executes the binary,
+  - prints computed values for `alpha`, `gamma_ij`, `gammaU^ij` and validates
+    them against Schwarzschild reference values at `M=1, r=10, theta=pi/2`.
+  - companion Christoffel smoke:
+    - script: `tools/dev/test_schwarzschild_christoffel_ll.sh`
+    - runner: `tools/dev/ll_rhs_runner_schwarzschild_christoffel.c`
+    - executes lowered `tensorium_init_grid_affine` + `tensorium_rhs_grid_affine`
+      for `tests/fixtures/gr/schwarzschild_christoffel_3d.tn`,
+    - prints full `Gamma^i_{jk}` matrices at the grid center and checks key
+      Schwarzschild components against analytical values with finite-difference
+      tolerance.

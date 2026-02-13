@@ -108,8 +108,25 @@ set(TENSORIUM_MLIR_COMMON_LINK_LIBS
   MLIRSupport
   MLIRPass
   MLIRTransforms
+  MLIRConvertToLLVMPass
+  MLIRConvertToLLVMInterface
+  MLIRSCFToControlFlow
+  MLIRAffineToStandard
+  MLIRMemRefTransforms
+  MLIRArithToLLVM
+  MLIRMathToLLVM
+  MLIRIndexToLLVM
+  MLIRControlFlowToLLVM
+  MLIRFuncToLLVM
+  MLIRMemRefToLLVM
+  MLIRLLVMCommonConversion
+  MLIRReconcileUnrealizedCasts
+  MLIRLLVMDialect
+  MLIRTargetLLVMIRExport
+  MLIRToLLVMIRTranslationRegistration
   MLIRFuncDialect
   MLIRArithDialect
+  MLIRAffineDialect
   MLIRSCFDialect
   MLIRMemRefDialect
   MLIRMathDialect
@@ -166,6 +183,12 @@ add_library(tensoriumMlirTransforms
   tensorium_mlir/Dialect/Tensorium/Transforms/IndexAnalyzePass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinCanonicalizePass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinAnalyzeEinsumPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/MetricLoweringPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/InitToStdPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/InitGridScfPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/InitGridAffinePass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/RhsGridScfPass.cpp
+  tensorium_mlir/Dialect/Tensorium/Transforms/StripSourceFuncsPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/StencilLoweringPass.cpp
   tensorium_mlir/Dialect/Tensorium/Transforms/DissipationPass.cpp
 )
@@ -182,6 +205,7 @@ target_link_libraries(tensoriumMlirTransforms PUBLIC
 
 add_library(tensoriumMlirCodegen
   tensorium_mlir/Target/MLIRGen/InitEvaluator.cpp
+  tensorium_mlir/Target/MLIRGen/RhsEvaluator.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp
   tensorium_mlir/Init/Registry.cpp
   tensorium_mlir/Init/Passes.cpp

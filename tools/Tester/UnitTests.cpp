@@ -9,7 +9,10 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
+#include "tensorium_mlir/Target/MLIRGen/RhsEvaluator.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 
@@ -210,193 +213,6 @@ struct EvalPoint3 {
   double theta = 0.0;
   double phi = 0.0;
 };
-
-static double schwarzschildFactor(double M, double r) {
-  return 1.0 - 2.0 * M / r;
-}
-
-static double schwarzschildGammaComponent(int a, int b, double M, double r,
-                                          double theta) {
-  const double f = schwarzschildFactor(M, r);
-  const double sinTheta = std::sin(theta);
-  const double sin2 = sinTheta * sinTheta;
-
-  if (a == 0 && b == 0)
-    return 1.0 / f;
-  if (a == 1 && b == 1)
-    return r * r;
-  if (a == 2 && b == 2)
-    return r * r * sin2;
-  return 0.0;
-}
-
-static double schwarzschildGammaUComponent(int a, int b, double M, double r,
-                                           double theta) {
-  const double f = schwarzschildFactor(M, r);
-  const double sinTheta = std::sin(theta);
-  const double sin2 = sinTheta * sinTheta;
-
-  if (a == 0 && b == 0)
-    return f;
-  if (a == 1 && b == 1)
-    return 1.0 / (r * r);
-  if (a == 2 && b == 2)
-    return 1.0 / (r * r * sin2);
-  return 0.0;
-}
-
-static double schwarzschildGammaDerivative(int derivAxis, int a, int b,
-                                           double M, double r, double theta) {
-  const double f = schwarzschildFactor(M, r);
-  const double sinTheta = std::sin(theta);
-  const double cosTheta = std::cos(theta);
-  const double sin2 = sinTheta * sinTheta;
-  const double twoMOverR2 = 2.0 * M / (r * r);
-
-  if (a == 0 && b == 0) {
-    if (derivAxis == 0)
-      return -twoMOverR2 / (f * f);
-    return 0.0;
-  }
-
-  if (a == 1 && b == 1) {
-    if (derivAxis == 0)
-      return 2.0 * r;
-    return 0.0;
-  }
-
-  if (a == 2 && b == 2) {
-    if (derivAxis == 0)
-      return 2.0 * r * sin2;
-    if (derivAxis == 1)
-      return 2.0 * r * r * sinTheta * cosTheta;
-    return 0.0;
-  }
-
-  return 0.0;
-}
-
-static bool lookupIndexValue(const std::unordered_map<std::string, int> &indexValues,
-                             const std::string &name, int &out) {
-  auto it = indexValues.find(name);
-  if (it == indexValues.end())
-    return false;
-  out = it->second;
-  return true;
-}
-
-static double evalSchwarzschildChristoffelLoweredScalar(
-    const backend::ExprIR *expr, std::unordered_map<std::string, int> &indexValues,
-    double M, const EvalPoint3 &point) {
-  using namespace backend;
-  if (!expr)
-    throw std::runtime_error("null expression in Christoffel evaluator");
-
-  switch (expr->kind) {
-  case ExprIR::Kind::Number: {
-    auto *n = static_cast<const NumberIR *>(expr);
-    return n->value;
-  }
-  case ExprIR::Kind::Var: {
-    auto *v = static_cast<const VarIR *>(expr);
-    if (v->tensorIndexNames.size() != 2)
-      throw std::runtime_error("Christoffel evaluator expects rank-2 var refs");
-    int a = -1;
-    int b = -1;
-    if (!lookupIndexValue(indexValues, v->tensorIndexNames[0], a) ||
-        !lookupIndexValue(indexValues, v->tensorIndexNames[1], b)) {
-      throw std::runtime_error("missing index binding for var reference");
-    }
-    if (v->name == "gamma")
-      return schwarzschildGammaComponent(a, b, M, point.r, point.theta);
-    if (v->name == "gammaU")
-      return schwarzschildGammaUComponent(a, b, M, point.r, point.theta);
-    throw std::runtime_error("unsupported field '" + v->name +
-                             "' in Christoffel evaluator");
-  }
-  case ExprIR::Kind::Binary: {
-    auto *b = static_cast<const BinaryIR *>(expr);
-    const double lhs = evalSchwarzschildChristoffelLoweredScalar(
-        b->lhs.get(), indexValues, M, point);
-    const double rhs = evalSchwarzschildChristoffelLoweredScalar(
-        b->rhs.get(), indexValues, M, point);
-    if (b->op == "+")
-      return lhs + rhs;
-    if (b->op == "-")
-      return lhs - rhs;
-    if (b->op == "*")
-      return lhs * rhs;
-    if (b->op == "/")
-      return lhs / rhs;
-    throw std::runtime_error("unsupported binary op in Christoffel evaluator");
-  }
-  case ExprIR::Kind::TensorProduct: {
-    auto *p = static_cast<const TensorProductIR *>(expr);
-    const double lhs = evalSchwarzschildChristoffelLoweredScalar(
-        p->lhs.get(), indexValues, M, point);
-    const double rhs = evalSchwarzschildChristoffelLoweredScalar(
-        p->rhs.get(), indexValues, M, point);
-    return lhs * rhs;
-  }
-  case ExprIR::Kind::Contraction: {
-    auto *c = static_cast<const ContractionIR *>(expr);
-    std::function<double(size_t)> evalLoop = [&](size_t pos) -> double {
-      if (pos >= c->summedIndices.size()) {
-        return evalSchwarzschildChristoffelLoweredScalar(c->in.get(), indexValues,
-                                                         M, point);
-      }
-      const std::string &idxName = c->summedIndices[pos];
-      auto prev = indexValues.find(idxName);
-      const bool hadPrev = prev != indexValues.end();
-      const int prevValue = hadPrev ? prev->second : 0;
-
-      double accum = 0.0;
-      for (int axis = 0; axis < 3; ++axis) {
-        indexValues[idxName] = axis;
-        accum += evalLoop(pos + 1);
-      }
-
-      if (hadPrev)
-        indexValues[idxName] = prevValue;
-      else
-        indexValues.erase(idxName);
-      return accum;
-    };
-    return evalLoop(0);
-  }
-  case ExprIR::Kind::PartialDerivative: {
-    auto *d = static_cast<const PartialDerivativeIR *>(expr);
-    auto *innerVar = dynamic_cast<const VarIR *>(d->in.get());
-    if (!innerVar || innerVar->name != "gamma" ||
-        innerVar->tensorIndexNames.size() != 2) {
-      throw std::runtime_error(
-          "Christoffel evaluator expects derivative over gamma component");
-    }
-
-    int derivAxis = -1;
-    int a = -1;
-    int b = -1;
-    if (!lookupIndexValue(indexValues, d->coordIndex, derivAxis) ||
-        !lookupIndexValue(indexValues, innerVar->tensorIndexNames[0], a) ||
-        !lookupIndexValue(indexValues, innerVar->tensorIndexNames[1], b)) {
-      throw std::runtime_error("missing index binding for derivative");
-    }
-    return schwarzschildGammaDerivative(derivAxis, a, b, M, point.r,
-                                        point.theta);
-  }
-  case ExprIR::Kind::Call:
-  case ExprIR::Kind::IndexRename:
-  case ExprIR::Kind::IndexPermute:
-  case ExprIR::Kind::Trace:
-  case ExprIR::Kind::Gradient:
-  case ExprIR::Kind::CovariantDerivative:
-  case ExprIR::Kind::Divergence:
-    throw std::runtime_error(
-        "unsupported expression kind in Christoffel evaluator");
-  }
-
-  throw std::runtime_error("unexpected expression kind in Christoffel evaluator");
-}
 
 static bool valueDependsOnImpl(
     ::mlir::Value root,
@@ -1743,6 +1559,561 @@ static bool testSchwarzschildInitNumericPoint() {
   return true;
 }
 
+static bool testSchwarzschildInitMetricLoweringPass() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto initFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
+  if (!initFunc) {
+    std::cerr << "FAIL: missing tensorium_init after metric lowering\n";
+    return false;
+  }
+
+  int metricOps = 0;
+  int decomposeOps = 0;
+  int init3p1Ops = 0;
+  int buildGammaOps = 0;
+  int buildGammaUOps = 0;
+  for (::mlir::Operation &op : initFunc.getBody().front()) {
+    metricOps += llvm::isa<tensorium::mlir::Metric4Op>(&op) ? 1 : 0;
+    decomposeOps +=
+        llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op) ? 1 : 0;
+    init3p1Ops += llvm::isa<tensorium::mlir::Init3P1Op>(&op) ? 1 : 0;
+    buildGammaOps += llvm::isa<tensorium::mlir::BuildCovTensor2Op>(&op) ? 1 : 0;
+    buildGammaUOps += llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op) ? 1 : 0;
+  }
+
+  if (metricOps != 0 || decomposeOps != 0 || init3p1Ops != 0) {
+    std::cerr << "FAIL: metric lowering pass must remove metric4/decompose/init3p1 "
+                 "from tensorium_init\n";
+    return false;
+  }
+  if (buildGammaOps == 0 || buildGammaUOps == 0) {
+    std::cerr << "FAIL: metric lowering pass must materialize gamma/gammaU builders\n";
+    return false;
+  }
+
+  InitEvalContext evalCtx;
+  const double M = 1.0;
+  const double r = 10.0;
+  const double theta = std::acos(-1.0) * 0.5;
+  setupSinglePointInitContext(evalCtx, M, r, theta, 0.0);
+
+  auto result = tensorium_mlir::evaluateTensoriumInit(*module, evalCtx.desc);
+  if (!result.ok) {
+    std::cerr << "FAIL: init evaluator failed after metric lowering: "
+              << result.message << "\n";
+    return false;
+  }
+
+  const double f = 1.0 - 2.0 * M / r;
+  if (!almostEqual(evalCtx.buffers.alpha[0], std::sqrt(f)) ||
+      !almostEqual(evalCtx.buffers.gamma[0][0], 1.0 / f) ||
+      !almostEqual(evalCtx.buffers.gamma[4][0], r * r) ||
+      !almostEqual(evalCtx.buffers.gamma[8][0], r * r) ||
+      !almostEqual(evalCtx.buffers.gammaU[0][0], f) ||
+      !almostEqual(evalCtx.buffers.gammaU[4][0], 1.0 / (r * r)) ||
+      !almostEqual(evalCtx.buffers.gammaU[8][0], 1.0 / (r * r))) {
+    std::cerr << "FAIL: metric lowering changed Schwarzschild init numerics\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSchwarzschildInitPointStdLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto initPoint = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_point");
+  if (!initPoint) {
+    std::cerr << "FAIL: missing tensorium_init_point after init-to-std lowering\n";
+    return false;
+  }
+
+  if (initPoint.getNumArguments() != 7) {
+    std::cerr << "FAIL: tensorium_init_point must have 7 arguments, got "
+              << initPoint.getNumArguments() << "\n";
+    return false;
+  }
+
+  for (unsigned i = 0; i < 4; ++i) {
+    if (!initPoint.getArgument(i).getType().isF64()) {
+      std::cerr << "FAIL: tensorium_init_point arg " << i
+                << " must be f64\n";
+      return false;
+    }
+  }
+
+  auto checkMemRefArg = [&](unsigned argIndex, int64_t expectedSize) {
+    auto memTy = llvm::dyn_cast<::mlir::MemRefType>(
+        initPoint.getArgument(argIndex).getType());
+    if (!memTy || memTy.getRank() != 1 || memTy.getShape()[0] != expectedSize ||
+        !memTy.getElementType().isF64()) {
+      std::cerr << "FAIL: tensorium_init_point arg " << argIndex
+                << " must be memref<" << expectedSize << "xf64>\n";
+      return false;
+    }
+    return true;
+  };
+  if (!checkMemRefArg(4, 1) || !checkMemRefArg(5, 9) || !checkMemRefArg(6, 9))
+    return false;
+
+  bool hasMemrefStore = false;
+  for (::mlir::Operation &op : initPoint.getBody().front()) {
+    if (op.getName().getDialectNamespace() == "tensorium") {
+      std::cerr << "FAIL: tensorium_init_point must not keep tensorium ops, found "
+                << op.getName().getStringRef().str() << "\n";
+      return false;
+    }
+    if (op.getName().getStringRef() == "memref.store")
+      hasMemrefStore = true;
+  }
+  if (!hasMemrefStore) {
+    std::cerr << "FAIL: tensorium_init_point must contain memref.store writes\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSchwarzschildInitGridScfLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridScfPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto initGrid =
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_grid_scf");
+  if (!initGrid) {
+    std::cerr << "FAIL: missing tensorium_init_grid_scf after SCF init lowering\n";
+    return false;
+  }
+  if (initGrid.getNumArguments() != 7) {
+    std::cerr << "FAIL: tensorium_init_grid_scf must have 7 arguments, got "
+              << initGrid.getNumArguments() << "\n";
+    return false;
+  }
+
+  if (!initGrid.getArgument(0).getType().isF64()) {
+    std::cerr << "FAIL: tensorium_init_grid_scf arg 0 must be f64 (M)\n";
+    return false;
+  }
+
+  auto checkDynMemRef = [&](unsigned argIndex) {
+    auto memTy = llvm::dyn_cast<::mlir::MemRefType>(
+        initGrid.getArgument(argIndex).getType());
+    if (!memTy || memTy.getRank() != 1 || memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
+        !memTy.getElementType().isF64()) {
+      std::cerr << "FAIL: tensorium_init_grid_scf arg " << argIndex
+                << " must be memref<?xf64>\n";
+      return false;
+    }
+    return true;
+  };
+  for (unsigned arg = 1; arg < 7; ++arg) {
+    if (!checkDynMemRef(arg))
+      return false;
+  }
+
+  bool hasScfFor = false;
+  bool callsInitPoint = false;
+  bool hasTensoriumOp = false;
+  std::string tensoriumOpName;
+  initGrid.walk([&](::mlir::Operation *op) {
+    if (llvm::isa<::mlir::scf::ForOp>(op))
+      hasScfFor = true;
+    if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(op)) {
+      if (call.getCallee() == "tensorium_init_point")
+        callsInitPoint = true;
+    }
+    if (op != initGrid.getOperation() &&
+        op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+      tensoriumOpName = op->getName().getStringRef().str();
+    }
+  });
+  if (hasTensoriumOp) {
+    std::cerr << "FAIL: tensorium_init_grid_scf must not keep tensorium ops, found "
+              << tensoriumOpName << "\n";
+    return false;
+  }
+
+  if (!hasScfFor) {
+    std::cerr << "FAIL: tensorium_init_grid_scf must contain scf.for\n";
+    return false;
+  }
+  if (!callsInitPoint) {
+    std::cerr << "FAIL: tensorium_init_grid_scf must call tensorium_init_point\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSchwarzschildInitGridAffineLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto initGrid =
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_grid_affine");
+  if (!initGrid) {
+    std::cerr << "FAIL: missing tensorium_init_grid_affine after affine init lowering\n";
+    return false;
+  }
+  if (initGrid.getNumArguments() != 7) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must have 7 arguments, got "
+              << initGrid.getNumArguments() << "\n";
+    return false;
+  }
+
+  if (!initGrid.getArgument(0).getType().isF64()) {
+    std::cerr << "FAIL: tensorium_init_grid_affine arg 0 must be f64 (M)\n";
+    return false;
+  }
+
+  auto checkDynMemRef = [&](unsigned argIndex) {
+    auto memTy = llvm::dyn_cast<::mlir::MemRefType>(
+        initGrid.getArgument(argIndex).getType());
+    if (!memTy || memTy.getRank() != 1 ||
+        memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
+        !memTy.getElementType().isF64()) {
+      std::cerr << "FAIL: tensorium_init_grid_affine arg " << argIndex
+                << " must be memref<?xf64>\n";
+      return false;
+    }
+    return true;
+  };
+  for (unsigned arg = 1; arg < 7; ++arg) {
+    if (!checkDynMemRef(arg))
+      return false;
+  }
+
+  bool hasAffineFor = false;
+  bool callsInitPoint = false;
+  bool hasTensoriumOp = false;
+  std::string tensoriumOpName;
+  initGrid.walk([&](::mlir::Operation *op) {
+    if (llvm::isa<::mlir::affine::AffineForOp>(op))
+      hasAffineFor = true;
+    if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(op)) {
+      if (call.getCallee() == "tensorium_init_point")
+        callsInitPoint = true;
+    }
+    if (op != initGrid.getOperation() &&
+        op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+      tensoriumOpName = op->getName().getStringRef().str();
+    }
+  });
+  if (hasTensoriumOp) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must not keep tensorium ops, found "
+              << tensoriumOpName << "\n";
+    return false;
+  }
+  if (!hasAffineFor) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must contain affine.for\n";
+    return false;
+  }
+  if (!callsInitPoint) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must call tensorium_init_point\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSchwarzschildRhsGridScfLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridScfPass = true;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto rhsGrid =
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_scf");
+  if (!rhsGrid) {
+    std::cerr << "FAIL: missing tensorium_rhs_grid_scf after rhs SCF lowering\n";
+    return false;
+  }
+
+  auto rhs = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhs) {
+    std::cerr << "FAIL: missing source tensorium_rhs for rhs SCF lowering test\n";
+    return false;
+  }
+
+  const unsigned expectedArgs = 6 + rhs.getNumArguments();
+  if (rhsGrid.getNumArguments() != expectedArgs) {
+    std::cerr << "FAIL: tensorium_rhs_grid_scf must have " << expectedArgs
+              << " args, got " << rhsGrid.getNumArguments() << "\n";
+    return false;
+  }
+
+  for (unsigned i = 0; i < 3; ++i) {
+    if (!rhsGrid.getArgument(i).getType().isIndex()) {
+      std::cerr << "FAIL: tensorium_rhs_grid_scf arg " << i
+                << " must be index\n";
+      return false;
+    }
+  }
+  for (unsigned i = 3; i < 6; ++i) {
+    if (!rhsGrid.getArgument(i).getType().isF64()) {
+      std::cerr << "FAIL: tensorium_rhs_grid_scf arg " << i
+                << " must be f64\n";
+      return false;
+    }
+  }
+  for (unsigned i = 6; i < expectedArgs; ++i) {
+    auto memTy = llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(i).getType());
+    if (!memTy || memTy.getRank() != 1 ||
+        memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
+        !memTy.getElementType().isF64()) {
+      std::cerr << "FAIL: tensorium_rhs_grid_scf arg " << i
+                << " must be memref<?xf64>\n";
+      return false;
+    }
+  }
+
+  bool hasFor = false;
+  bool hasStore = false;
+  bool hasTensoriumOp = false;
+  std::string tensoriumOpName;
+  rhsGrid.walk([&](::mlir::Operation *op) {
+    hasFor |= llvm::isa<::mlir::scf::ForOp>(op);
+    hasStore |= (op->getName().getStringRef() == "memref.store");
+    if (op != rhsGrid.getOperation() &&
+        op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+      tensoriumOpName = op->getName().getStringRef().str();
+    }
+  });
+
+  if (!hasFor) {
+    std::cerr << "FAIL: tensorium_rhs_grid_scf must contain scf.for\n";
+    return false;
+  }
+  if (!hasStore) {
+    std::cerr << "FAIL: tensorium_rhs_grid_scf must contain memref.store\n";
+    return false;
+  }
+  if (hasTensoriumOp) {
+    std::cerr << "FAIL: tensorium_rhs_grid_scf must not contain tensorium ops, found "
+              << tensoriumOpName << "\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSchwarzschildRhsGridAffineLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridAffinePass = true;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto rhsGrid =
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_affine");
+  if (!rhsGrid) {
+    std::cerr
+        << "FAIL: missing tensorium_rhs_grid_affine after rhs affine lowering\n";
+    return false;
+  }
+
+  auto rhs = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhs) {
+    std::cerr
+        << "FAIL: missing source tensorium_rhs for rhs affine lowering test\n";
+    return false;
+  }
+
+  const unsigned expectedArgs = 6 + rhs.getNumArguments();
+  if (rhsGrid.getNumArguments() != expectedArgs) {
+    std::cerr << "FAIL: tensorium_rhs_grid_affine must have " << expectedArgs
+              << " args, got " << rhsGrid.getNumArguments() << "\n";
+    return false;
+  }
+
+  for (unsigned i = 0; i < 3; ++i) {
+    if (!rhsGrid.getArgument(i).getType().isIndex()) {
+      std::cerr << "FAIL: tensorium_rhs_grid_affine arg " << i
+                << " must be index\n";
+      return false;
+    }
+  }
+  for (unsigned i = 3; i < 6; ++i) {
+    if (!rhsGrid.getArgument(i).getType().isF64()) {
+      std::cerr << "FAIL: tensorium_rhs_grid_affine arg " << i
+                << " must be f64\n";
+      return false;
+    }
+  }
+  for (unsigned i = 6; i < expectedArgs; ++i) {
+    auto memTy =
+        llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(i).getType());
+    if (!memTy || memTy.getRank() != 1 ||
+        memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
+        !memTy.getElementType().isF64()) {
+      std::cerr << "FAIL: tensorium_rhs_grid_affine arg " << i
+                << " must be memref<?xf64>\n";
+      return false;
+    }
+  }
+
+  bool hasFor = false;
+  bool hasStore = false;
+  bool hasTensoriumOp = false;
+  std::string tensoriumOpName;
+  rhsGrid.walk([&](::mlir::Operation *op) {
+    hasFor |= llvm::isa<::mlir::affine::AffineForOp>(op);
+    hasStore |= (op->getName().getStringRef() == "memref.store");
+    if (op != rhsGrid.getOperation() &&
+        op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+      tensoriumOpName = op->getName().getStringRef().str();
+    }
+  });
+
+  if (!hasFor) {
+    std::cerr << "FAIL: tensorium_rhs_grid_affine must contain affine.for\n";
+    return false;
+  }
+  if (!hasStore) {
+    std::cerr << "FAIL: tensorium_rhs_grid_affine must contain memref.store\n";
+    return false;
+  }
+  if (hasTensoriumOp) {
+    std::cerr
+        << "FAIL: tensorium_rhs_grid_affine must not contain tensorium ops, found "
+        << tensoriumOpName << "\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testStripSourceFuncsAfterGridLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init") ||
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs") ||
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry")) {
+    std::cerr << "FAIL: strip-source-funcs must remove tensorium_init/rhs/entry\n";
+    return false;
+  }
+
+  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_grid_affine")) {
+    std::cerr << "FAIL: missing tensorium_init_grid_affine after strip-source-funcs\n";
+    return false;
+  }
+  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_affine")) {
+    std::cerr << "FAIL: missing tensorium_rhs_grid_affine after strip-source-funcs\n";
+    return false;
+  }
+
+  bool hasTensoriumOp = false;
+  std::string tensoriumOpName;
+  module->walk([&](::mlir::Operation *op) {
+    if (op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+      tensoriumOpName = op->getName().getStringRef().str();
+    }
+  });
+  if (hasTensoriumOp) {
+    std::cerr << "FAIL: strip-source-funcs module must not contain tensorium ops, found "
+              << tensoriumOpName << "\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testLoweredGridModuleLLVMIREmission() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  backend::ModuleIR mod =
+      buildModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
+                          CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  auto verify = validation::verifyIR(mod);
+  if (!verify.ok()) {
+    std::cerr << "FAIL: IR verification failed before LLVM emission test\n";
+    return false;
+  }
+
+  std::string llvmIR;
+  if (!tensorium_mlir::emitLLVMIR(mod, opts, &llvmIR)) {
+    std::cerr << "FAIL: emitLLVMIR failed for lowered grid module\n";
+    return false;
+  }
+
+  if (llvmIR.find("tensorium_init_grid_affine") == std::string::npos) {
+    std::cerr << "FAIL: LLVM IR missing tensorium_init_grid_affine symbol\n";
+    return false;
+  }
+  if (llvmIR.find("tensorium_rhs_grid_affine") == std::string::npos) {
+    std::cerr << "FAIL: LLVM IR missing tensorium_rhs_grid_affine symbol\n";
+    return false;
+  }
+  if (llvmIR.find("@tensorium_entry") != std::string::npos ||
+      llvmIR.find("@tensorium_init(") != std::string::npos ||
+      llvmIR.find("@tensorium_rhs(") != std::string::npos) {
+    std::cerr << "FAIL: LLVM IR should not expose source tensorium_init/rhs/entry symbols\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildInitThetaZeroNoNaN() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
@@ -2121,66 +2492,148 @@ static bool testKerrLikeHasNonZeroBetaPhi() {
 }
 
 static bool testSchwarzschildChristoffelNumericPoint() {
-  const auto module = buildModuleFromFile(
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  auto module = buildMLIRModuleFromFileWithOpts(
       "tests/fixtures/gr/schwarzschild_christoffel_3d.tn",
-      CompilationMode::Executable);
+      CompilationMode::Executable, ctx, opts);
 
-  if (module.evolutions.empty() || module.evolutions[0].equations.empty()) {
-    std::cerr << "FAIL: Christoffel fixture did not produce evolution equations\n";
+  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhsFunc) {
+    std::cerr << "FAIL: missing @tensorium_rhs for Christoffel numeric test\n";
+    return false;
+  }
+  if (rhsFunc.getNumArguments() != 3) {
+    std::cerr << "FAIL: expected @tensorium_rhs(gamma,gammaU,dtGamma) signature\n";
     return false;
   }
 
-  const backend::EquationIR *eq = nullptr;
-  for (const auto &candidate : module.evolutions[0].equations) {
-    if (candidate.fieldName == "Christoffel") {
-      eq = &candidate;
-      break;
-    }
-  }
-  if (!eq || !eq->rhs) {
-    std::cerr << "FAIL: missing Christoffel equation in backend IR\n";
-    return false;
-  }
+  constexpr std::size_t nr = 9;
+  constexpr std::size_t nt = 9;
+  constexpr std::size_t np = 9;
+  constexpr std::size_t nPoints = nr * nt * np;
+  constexpr std::size_t center = 4;
 
-  const double M = 1.0;
-  EvalPoint3 point;
-  point.r = 10.0;
-  point.theta = std::acos(-1.0) * 0.5;
-  point.phi = 0.0;
-
-  auto evalGamma = [&](int i, int j, int k) {
-    std::unordered_map<std::string, int> idx = {
-        {"i", i}, {"j", j}, {"k", k}};
-    return evalSchwarzschildChristoffelLoweredScalar(eq->rhs.get(), idx, M,
-                                                     point);
+  const auto linearIndex = [](std::size_t ir, std::size_t it, std::size_t ip) {
+    return (ir * nt + it) * np + ip;
   };
 
-  const double gamma_r_rr = evalGamma(0, 0, 0);
-  const double gamma_r_thth = evalGamma(0, 1, 1);
-  const double gamma_r_phph = evalGamma(0, 2, 2);
-  const double gamma_th_rth = evalGamma(1, 0, 1);
-  const double gamma_ph_rph = evalGamma(2, 0, 2);
-  const double gamma_ph_thph = evalGamma(2, 1, 2);
+  const double M = 1.0;
+  const double r0 = 10.0;
+  const double theta0 = 1.0;
+  const double dr = 1.0e-4;
+  const double dtheta = 1.0e-4;
+  const double dphi = 1.0e-4;
+
+  std::array<std::vector<double>, 9> gamma;
+  std::array<std::vector<double>, 9> gammaU;
+  std::array<std::vector<double>, 27> dtGamma;
+  std::array<double *, 9> gammaPtrs{};
+  std::array<double *, 9> gammaUPtrs{};
+  std::array<double *, 27> dtGammaPtrs{};
+  for (unsigned c = 0; c < 9; ++c) {
+    gamma[c].assign(nPoints, 0.0);
+    gammaU[c].assign(nPoints, 0.0);
+    gammaPtrs[c] = gamma[c].data();
+    gammaUPtrs[c] = gammaU[c].data();
+  }
+  for (unsigned c = 0; c < 27; ++c) {
+    dtGamma[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    dtGammaPtrs[c] = dtGamma[c].data();
+  }
+
+  for (std::size_t ir = 0; ir < nr; ++ir) {
+    const double r = r0 + (static_cast<double>(ir) - static_cast<double>(center)) * dr;
+    for (std::size_t it = 0; it < nt; ++it) {
+      const double theta =
+          theta0 + (static_cast<double>(it) - static_cast<double>(center)) * dtheta;
+      const double sinTheta = std::sin(theta);
+      const double sin2 = sinTheta * sinTheta;
+      const double f = 1.0 - 2.0 * M / r;
+      for (std::size_t ip = 0; ip < np; ++ip) {
+        (void)ip;
+        const std::size_t p = linearIndex(ir, it, ip);
+        gamma[0][p] = 1.0 / f;
+        gamma[4][p] = r * r;
+        gamma[8][p] = r * r * sin2;
+        gammaU[0][p] = f;
+        gammaU[4][p] = 1.0 / (r * r);
+        gammaU[8][p] = 1.0 / (r * r * sin2);
+      }
+    }
+  }
+
+  tensorium_mlir::RhsEvalDescriptor desc;
+  desc.grid.spatialDim = 3;
+  desc.grid.extents = {nr, nt, np};
+  desc.grid.spacing = {dr, dtheta, dphi};
+  desc.point = {center, center, center};
+  desc.args.resize(3);
+  desc.args[0].components.assign(gammaPtrs.begin(), gammaPtrs.end());
+  desc.args[1].components.assign(gammaUPtrs.begin(), gammaUPtrs.end());
+  desc.args[2].components.assign(dtGammaPtrs.begin(), dtGammaPtrs.end());
+
+  auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
+  if (!evalRes.ok) {
+    std::cerr << "FAIL: rhs evaluator failed for Christoffel test: "
+              << evalRes.message << "\n";
+    return false;
+  }
+
+  const std::size_t p0 = linearIndex(center, center, center);
+  const auto comp3 = [](unsigned i, unsigned j, unsigned k) {
+    return i * 9 + j * 3 + k;
+  };
+
+  const double r = r0;
+  const double theta = theta0;
+  const double f = 1.0 - 2.0 * M / r;
+  const double sinTheta = std::sin(theta);
+  const double sin2 = sinTheta * sinTheta;
+
+  const double gamma_r_rr = dtGamma[comp3(0, 0, 0)][p0];
+  const double gamma_r_thth = dtGamma[comp3(0, 1, 1)][p0];
+  const double gamma_r_phph = dtGamma[comp3(0, 2, 2)][p0];
+  const double gamma_th_rth = dtGamma[comp3(1, 0, 1)][p0];
+  const double gamma_ph_rph = dtGamma[comp3(2, 0, 2)][p0];
+  const double gamma_ph_thph = dtGamma[comp3(2, 1, 2)][p0];
+
+  const double expected_r_rr = -M / (r * (r - 2.0 * M));
+  const double expected_r_thth = -r * f;
+  const double expected_r_phph = -r * f * sin2;
+  const double expected_th_rth = 1.0 / r;
+  const double expected_ph_rph = 1.0 / r;
+  const double expected_ph_thph = std::cos(theta) / sinTheta;
+
+  const auto finite = [](double v) { return std::isfinite(v); };
+  const auto closeFD = [](double got, double expected) {
+    return almostEqual(got, expected, 1e-8, 1e-8);
+  };
 
   std::cout << std::setprecision(17)
-            << "[numeric] Schwarzschild Christoffel point M=1 r=10 theta=pi/2\n"
+            << "[numeric] Schwarzschild Christoffel point M=1 r=10 theta=1\n"
             << "  Gamma^r_rr      got=" << gamma_r_rr
-            << " expected=-0.0125\n"
+            << " expected=" << expected_r_rr << "\n"
             << "  Gamma^r_thetatheta got=" << gamma_r_thth
-            << " expected=-8\n"
+            << " expected=" << expected_r_thth << "\n"
             << "  Gamma^r_phiphi  got=" << gamma_r_phph
-            << " expected=-8\n"
+            << " expected=" << expected_r_phph << "\n"
             << "  Gamma^theta_rtheta got=" << gamma_th_rth
-            << " expected=0.1\n"
+            << " expected=" << expected_th_rth << "\n"
             << "  Gamma^phi_rphi  got=" << gamma_ph_rph
-            << " expected=0.1\n"
+            << " expected=" << expected_ph_rph << "\n"
             << "  Gamma^phi_thetaphi got=" << gamma_ph_thph
-            << " expected=0\n";
+            << " expected=" << expected_ph_thph << "\n";
 
-  if (!almostEqual(gamma_r_rr, -0.0125) || !almostEqual(gamma_r_thth, -8.0) ||
-      !almostEqual(gamma_r_phph, -8.0) || !almostEqual(gamma_th_rth, 0.1) ||
-      !almostEqual(gamma_ph_rph, 0.1) ||
-      !almostEqual(gamma_ph_thph, 0.0)) {
+  if (!finite(gamma_r_rr) || !finite(gamma_r_thth) || !finite(gamma_r_phph) ||
+      !finite(gamma_th_rth) || !finite(gamma_ph_rph) ||
+      !finite(gamma_ph_thph) || !closeFD(gamma_r_rr, expected_r_rr) ||
+      !closeFD(gamma_r_thth, expected_r_thth) ||
+      !closeFD(gamma_r_phph, expected_r_phph) ||
+      !closeFD(gamma_th_rth, expected_th_rth) ||
+      !closeFD(gamma_ph_rph, expected_ph_rph) ||
+      !closeFD(gamma_ph_thph, expected_ph_thph)) {
     std::cerr << "FAIL: Schwarzschild Christoffel numeric mismatch\n";
     return false;
   }
@@ -2228,24 +2681,32 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     }
   }
 
-  auto valueFeedsContract = [](::mlir::Value v) {
+  auto valueFeedsContraction = [](::mlir::Value v) {
+    for (::mlir::Operation *user : v.getUsers()) {
+      if (llvm::isa<tensorium::mlir::ContractOp>(user) ||
+          llvm::isa<tensorium::mlir::EinsumOp>(user)) {
+        return true;
+      }
+    }
     for (::mlir::Operation *user : v.getUsers()) {
       auto mul = llvm::dyn_cast<tensorium::mlir::MulOp>(user);
       if (!mul)
         continue;
       for (::mlir::Operation *mulUser : mul.getRes().getUsers()) {
-        if (llvm::isa<tensorium::mlir::ContractOp>(mulUser))
+        if (llvm::isa<tensorium::mlir::ContractOp>(mulUser) ||
+            llvm::isa<tensorium::mlir::EinsumOp>(mulUser)) {
           return true;
+        }
       }
     }
     return false;
   };
 
-  int derivCount = 0;
   int addCount = 0;
   int subCount = 0;
   int mulCount = 0;
   int contractCount = 0;
+  int einsumCount = 0;
   int dtAssignCount = 0;
   bool hasChristoffelMagicOp = false;
   bool rhsBuildsLocalGammaU = false;
@@ -2253,11 +2714,11 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
   bool gammaUContractUsesNonInitSource = false;
 
   for (::mlir::Operation &op : layout.rhsFunc.getBody().front()) {
-    derivCount += llvm::isa<tensorium::mlir::DerivOp>(&op) ? 1 : 0;
     addCount += llvm::isa<tensorium::mlir::AddOp>(&op) ? 1 : 0;
     subCount += llvm::isa<tensorium::mlir::SubOp>(&op) ? 1 : 0;
     mulCount += llvm::isa<tensorium::mlir::MulOp>(&op) ? 1 : 0;
     contractCount += llvm::isa<tensorium::mlir::ContractOp>(&op) ? 1 : 0;
+    einsumCount += llvm::isa<tensorium::mlir::EinsumOp>(&op) ? 1 : 0;
     rhsBuildsLocalGammaU |= llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op);
     hasChristoffelMagicOp |= (op.getName().getStringRef() == "tensorium.christoffel");
 
@@ -2280,7 +2741,7 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     auto idx = ref.getIndices();
     if (!idx || idx->size() != 2)
       continue;
-    if (!valueFeedsContract(ref.getResult()))
+    if (!valueFeedsContraction(ref.getResult()))
       continue;
 
     bool fromInitAssignedField = false;
@@ -2309,12 +2770,15 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     return false;
   }
   if (!gammaUFromInitAssignedFeedsContract || gammaUContractUsesNonInitSource) {
-    std::cerr << "FAIL: Christoffel contract must consume init-assigned gammaU field\n";
+    std::cerr << "FAIL: Christoffel contraction must consume init-assigned gammaU field\n";
     return false;
   }
-  if (derivCount < 3 || addCount < 1 || subCount < 1 || mulCount < 2 ||
-      contractCount < 1 || dtAssignCount != 1) {
+  if (addCount < 1 || subCount < 1 || mulCount < 2 || dtAssignCount != 1) {
     std::cerr << "FAIL: Christoffel MLIR structure is incomplete\n";
+    return false;
+  }
+  if (contractCount == 0 && einsumCount == 0) {
+    std::cerr << "FAIL: Christoffel MLIR must include contract or einsum contraction ops\n";
     return false;
   }
 
@@ -2378,6 +2842,22 @@ int main() {
       {"testSchwarzschildMLIRVerification", &testSchwarzschildMLIRVerification},
       {"testMLIRNormalizationPasses", &testMLIRNormalizationPasses},
       {"testSchwarzschildInitNumericPoint", &testSchwarzschildInitNumericPoint},
+      {"testSchwarzschildInitMetricLoweringPass",
+       &testSchwarzschildInitMetricLoweringPass},
+      {"testSchwarzschildInitPointStdLowering",
+       &testSchwarzschildInitPointStdLowering},
+      {"testSchwarzschildInitGridScfLowering",
+       &testSchwarzschildInitGridScfLowering},
+      {"testSchwarzschildInitGridAffineLowering",
+       &testSchwarzschildInitGridAffineLowering},
+      {"testSchwarzschildRhsGridScfLowering",
+       &testSchwarzschildRhsGridScfLowering},
+      {"testSchwarzschildRhsGridAffineLowering",
+       &testSchwarzschildRhsGridAffineLowering},
+      {"testStripSourceFuncsAfterGridLowering",
+       &testStripSourceFuncsAfterGridLowering},
+      {"testLoweredGridModuleLLVMIREmission",
+       &testLoweredGridModuleLLVMIREmission},
       {"testSchwarzschildInitThetaZeroNoNaN",
        &testSchwarzschildInitThetaZeroNoNaN},
       {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},
