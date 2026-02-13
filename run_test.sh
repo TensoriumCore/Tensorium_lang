@@ -125,8 +125,10 @@ GR_FIXTURES=(
   tests/fixtures/gr/schwarzschild_3d.tn
   tests/fixtures/gr/schwarzschild_christoffel_3d.tn
   tests/fixtures/gr/reissner_nordstrom_3d.tn
+  tests/fixtures/gr/reissner_nordstrom_christoffel_3d.tn
   tests/fixtures/gr/spatial_offdiag_3d.tn
   tests/fixtures/gr/kerr_like_3d.tn
+  tests/fixtures/gr/kerr_like_christoffel_3d.tn
 )
 
 SYMBOLIC_VALID_TESTS=(
@@ -432,6 +434,8 @@ echo "=============================="
 
 bash tools/dev/test_schwarzschild_ll.sh
 bash tools/dev/test_schwarzschild_christoffel_ll.sh
+bash tools/dev/test_reissner_christoffel_ll.sh
+bash tools/dev/test_kerr_like_christoffel_ll.sh
 
 echo
 echo "=============================="
