@@ -818,3 +818,28 @@ Planned commit sequence (one intention per commit):
   - smaller units with explicit ownership,
   - easier addition of new ops without touching module orchestration logic,
   - lower merge-conflict surface for parallel work on init vs rhs pipelines.
+
+## 22) Covariant Derivative Rank-1 Lowering
+
+- Executable MLIR lowering now expands covariant derivatives explicitly for:
+  - scalar inputs (`nabla_j(phi)`),
+  - covectors (`nabla_j(V_i)`),
+  - vectors (`nabla_j(W^i)`).
+- Lowered form (no magic op semantics):
+  - scalar: `deriv(phi, j)`,
+  - covector: `deriv(V_i, j) - contract(Gamma^m_{i j} * V_m)`,
+  - vector: `deriv(W^i, j) + contract(Gamma^i_{j m} * W^m)`.
+- RHS signature minimization now also injects the connection field when
+  covariant derivatives are present, so executable lowering has a concrete
+  data source for `Gamma`.
+- New anti-false-green numeric test:
+  - fixture: `tests/fixtures/gr/covariant_rank1_3d.tn`,
+  - test: `testCovariantDerivativeRankOneNumericPoint` in
+    `tools/Tester/UnitTests.cpp`,
+  - validates the Christoffel correction sign/magnitude on both covector and
+    vector derivatives at an interior grid point via the generic RHS MLIR
+    evaluator.
+- Current limitation:
+  - executable lowering for contravariant derivative notation (`nabla^i(...)`)
+    is still intentionally rejected until inverse-metric raising semantics are
+    implemented.
