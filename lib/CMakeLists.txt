@@ -7,6 +7,7 @@ add_library(tensoriumCore
   Runtime/Eval.cpp
   Sema/CallSupport.cpp
   Sema/Sema.cpp
+  Sema/SemaInitialData.cpp
 )
 
 target_include_directories(tensoriumCore PUBLIC
