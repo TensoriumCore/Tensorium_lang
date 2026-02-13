@@ -1,0 +1,49 @@
+# Minkowski 3D fixture: Ricci should be zero (Christoffel zero) in Cartesian.
+field metric g[mu,nu]
+field inverse_metric gU[mu,nu]
+field scalar alpha
+field cov_tensor2 gamma[i,j]
+field con_tensor2 gammaU[i,j]
+field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
+field cov_tensor2 Ricci[i,j]
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.001
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+initial_data {
+  enforce_symmetry = true
+  metric4 g[mu,nu] = [
+    [-1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ]
+  split_3p1 {
+    alpha -> alpha;
+    gamma -> gamma[i,j];
+    gammaU -> gammaU[i,j];
+  }
+}
+
+evolution MinkowskiRicci {
+  dt Christoffel[i,j,k] = christoffel(gamma, gammaU)
+  dt Ricci[i,j] =
+      contract(d_k(Christoffel[k,i,j]))
+    - contract(d_j(Christoffel[k,i,k]))
+    + contract(Christoffel[k,i,j] * Christoffel[l,k,l])
+    - contract(Christoffel[k,i,l] * Christoffel[l,j,k])
+}
