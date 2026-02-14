@@ -31,6 +31,15 @@ static std::string readFile(const std::string &path) {
   return ss.str();
 }
 
+static void writeFile(const std::string &path, const std::string &content) {
+  std::ofstream file(path);
+  if (!file)
+    throw std::runtime_error("cannot open output file: " + path);
+  file << content;
+  if (!file.good())
+    throw std::runtime_error("failed to write output file: " + path);
+}
+
 static void printIndexedType(const IndexedExpr *e) {
   if (!e)
     return;
@@ -111,6 +120,8 @@ int main(int argc, char **argv) {
   double initAlpha = 2.0;
   bool dumpMLIR = false;
   bool dumpLLVMIR = false;
+  std::string emitMLIRPath;
+  std::string emitLLVMIRPath;
   bool enableNoOpPass = false;
   bool enableAnalysisPass = false;
   bool validateOnly = false;
@@ -189,8 +200,28 @@ int main(int argc, char **argv) {
       enableDissipationPass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
+    } else if (arg.rfind("--emit-mlir=", 0) == 0) {
+      emitMLIRPath = arg.substr(std::string("--emit-mlir=").size());
+      if (emitMLIRPath.empty())
+        throw std::runtime_error("--emit-mlir requires a non-empty path");
+    } else if (arg == "--emit-mlir") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--emit-mlir expects a file path");
+      emitMLIRPath = argv[++i];
+      if (emitMLIRPath.empty())
+        throw std::runtime_error("--emit-mlir requires a non-empty path");
     } else if (arg == "--dump-llvm-ir") {
       dumpLLVMIR = true;
+    } else if (arg.rfind("--emit-llvm=", 0) == 0) {
+      emitLLVMIRPath = arg.substr(std::string("--emit-llvm=").size());
+      if (emitLLVMIRPath.empty())
+        throw std::runtime_error("--emit-llvm requires a non-empty path");
+    } else if (arg == "--emit-llvm") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--emit-llvm expects a file path");
+      emitLLVMIRPath = argv[++i];
+      if (emitLLVMIRPath.empty())
+        throw std::runtime_error("--emit-llvm requires a non-empty path");
     } else if (arg == "--mlir-disable-threading") {
       mlirDisableThreading = true;
     } else if (arg == "--mlir-print-op-on-diagnostic") {
@@ -249,6 +280,16 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  if ((!emitMLIRPath.empty() || !emitLLVMIRPath.empty()) &&
+      files.size() != 1) {
+    PrintDiagnosticOptions opts;
+    opts.colorMode = colorMode;
+    printDiagnostic(std::cerr, "<command line>", {}, DiagnosticLevel::Error,
+                    "--emit-mlir/--emit-llvm require exactly one input file",
+                    {}, "E9002", opts);
+    return 1;
+  }
+
   const bool hasExplicitTensoriumPipelineSelection =
       enableNoOpPass || enableAnalysisPass || enableEinsteinLoweringPass ||
       enableEinsteinValidityPass || enableIndexAnalyzePass ||
@@ -259,8 +300,9 @@ int main(int argc, char **argv) {
       enableStripSourceFuncsPass || enableStencilLoweringPass ||
       enableDissipationPass;
 
-  // Make `--dump-llvm-ir` usable out-of-the-box for executable kernels.
-  if (dumpLLVMIR && compilationMode == CompilationMode::Executable &&
+  // Make LLVM IR emission usable out-of-the-box for executable kernels.
+  if ((dumpLLVMIR || !emitLLVMIRPath.empty()) &&
+      compilationMode == CompilationMode::Executable &&
       !hasExplicitTensoriumPipelineSelection) {
     enableMetricLoweringPass = true;
     enableInitStdLoweringPass = true;
@@ -415,10 +457,16 @@ int main(int argc, char **argv) {
         return opts;
       };
 
-      if (dumpMLIR) {
-        std::cerr << "\n=== MLIR DUMP (" << path << ") ===\n";
+      if (dumpMLIR || !emitMLIRPath.empty()) {
+        if (dumpMLIR)
+          std::cerr << "\n=== MLIR DUMP (" << path << ") ===\n";
         auto opts = makeMLIRGenOptions();
-        const bool pipelineOK = tensorium_mlir::emitMLIR(mod, opts);
+        std::string mlirText;
+        const bool pipelineOK = tensorium_mlir::emitMLIR(mod, opts, &mlirText);
+        if (dumpMLIR)
+          std::cout << mlirText;
+        if (!emitMLIRPath.empty())
+          writeFile(emitMLIRPath, mlirText);
         if (!pipelineOK) {
           fileOK = false;
           printDiagnostic(std::cerr, path, currentSource, DiagnosticLevel::Error,
@@ -427,12 +475,19 @@ int main(int argc, char **argv) {
           if (failOnMLIRPipelineFailure)
             return 1;
         }
-        std::cerr << "==============================\n";
+        if (dumpMLIR)
+          std::cerr << "==============================\n";
       }
-      if (dumpLLVMIR) {
-        std::cerr << "\n=== LLVM IR DUMP (" << path << ") ===\n";
+      if (dumpLLVMIR || !emitLLVMIRPath.empty()) {
+        if (dumpLLVMIR)
+          std::cerr << "\n=== LLVM IR DUMP (" << path << ") ===\n";
         auto opts = makeMLIRGenOptions();
-        const bool pipelineOK = tensorium_mlir::emitLLVMIR(mod, opts);
+        std::string llvmIRText;
+        const bool pipelineOK = tensorium_mlir::emitLLVMIR(mod, opts, &llvmIRText);
+        if (dumpLLVMIR)
+          std::cout << llvmIRText;
+        if (pipelineOK && !emitLLVMIRPath.empty())
+          writeFile(emitLLVMIRPath, llvmIRText);
         if (!pipelineOK) {
           fileOK = false;
           printDiagnostic(std::cerr, path, currentSource, DiagnosticLevel::Error,
@@ -441,7 +496,8 @@ int main(int argc, char **argv) {
           if (failOnMLIRPipelineFailure)
             return 1;
         }
-        std::cerr << "==============================\n";
+        if (dumpLLVMIR)
+          std::cerr << "==============================\n";
       }
       if (runCpu) {
         tensorium::runtime::RunOptions opt;

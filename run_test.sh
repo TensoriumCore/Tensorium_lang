@@ -202,6 +202,31 @@ fi
 
 echo
 echo "=============================="
+echo " TEST EMIT ARTIFACT FLAGS"
+echo "=============================="
+EMIT_MLIR_OUT="$OUT/emit_scalar.mlir"
+EMIT_LLVM_OUT="$OUT/emit_scalar.ll"
+"$BIN" --emit-mlir "$EMIT_MLIR_OUT" tests/01_scalar_minimal.tn > /dev/null
+if [[ ! -s "$EMIT_MLIR_OUT" ]]; then
+  echo "ERROR: --emit-mlir did not produce output file"
+  exit 1
+fi
+if ! grep -q "module" "$EMIT_MLIR_OUT"; then
+  echo "ERROR: --emit-mlir output does not look like MLIR module"
+  exit 1
+fi
+"$BIN" --emit-llvm "$EMIT_LLVM_OUT" tests/01_scalar_minimal.tn > /dev/null
+if [[ ! -s "$EMIT_LLVM_OUT" ]]; then
+  echo "ERROR: --emit-llvm did not produce output file"
+  exit 1
+fi
+if ! grep -q "define" "$EMIT_LLVM_OUT"; then
+  echo "ERROR: --emit-llvm output does not look like LLVM IR"
+  exit 1
+fi
+
+echo
+echo "=============================="
 echo " RUN EXTERN DECL TESTS"
 echo "=============================="
 

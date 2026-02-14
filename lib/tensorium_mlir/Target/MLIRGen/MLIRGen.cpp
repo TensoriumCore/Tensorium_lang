@@ -1,4 +1,5 @@
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
+#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "MLIRGenExpr.h"
 #include "MLIRGenInitialData.h"
 #include "MLIRGenPipeline.h"
@@ -15,9 +16,11 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
+#include <numeric>
 
 namespace tensorium_mlir {
 namespace {
@@ -63,6 +66,8 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 
   std::vector<unsigned> initArgIndices = collectInitArgIndices(module, fields);
   std::vector<unsigned> rhsArgIndices = collectRhsArgIndices(module, fields);
+  std::vector<unsigned> allArgIndices(fields.size());
+  std::iota(allArgIndices.begin(), allArgIndices.end(), 0u);
 
   auto buildTypeFromIndices = [&](const std::vector<unsigned> &indices) {
     llvm::SmallVector<mlir::Type, 8> types;
@@ -73,11 +78,11 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   };
 
   auto initFunc = mlir::func::FuncOp::create(
-      loc, "tensorium_init", buildTypeFromIndices(initArgIndices));
+      loc, tensorium_mlir::abi::kSymbolInit, buildTypeFromIndices(initArgIndices));
   auto rhsFunc = mlir::func::FuncOp::create(
-      loc, "tensorium_rhs", buildTypeFromIndices(rhsArgIndices));
+      loc, tensorium_mlir::abi::kSymbolRhs, buildTypeFromIndices(rhsArgIndices));
   auto entryFunc = mlir::func::FuncOp::create(
-      loc, "tensorium_entry", b.getFunctionType(allArgTypes, {}));
+      loc, tensorium_mlir::abi::kSymbolEntry, b.getFunctionType(allArgTypes, {}));
 
   auto mapFieldArgs = [&](mlir::Block *block, const std::vector<unsigned> &indices) {
     llvm::DenseMap<llvm::StringRef, mlir::Value> fieldArg;
@@ -85,6 +90,36 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
       fieldArg[fields[indices[i]].name] = block->getArgument(i);
     return fieldArg;
   };
+
+  auto makeFieldNamesAttr = [&](const std::vector<unsigned> &indices) {
+    llvm::SmallVector<mlir::Attribute> attrs;
+    attrs.reserve(indices.size());
+    for (unsigned idx : indices)
+      attrs.push_back(b.getStringAttr(fields[idx].name));
+    return b.getArrayAttr(attrs);
+  };
+
+  auto setCommonABIAttrs = [&](mlir::func::FuncOp fn, llvm::StringRef kind) {
+    fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
+                b.getI64IntegerAttr(
+                    tensorium_mlir::abi::kGeneratedKernelABIVersion));
+    fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
+    fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
+                b.getStringAttr(
+                    tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+    fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
+                b.getStringAttr(tensorium_mlir::abi::kMemrefABI1DStridedF64));
+  };
+
+  setCommonABIAttrs(initFunc, tensorium_mlir::abi::kKindInitSource);
+  setCommonABIAttrs(rhsFunc, tensorium_mlir::abi::kKindRhsSource);
+  setCommonABIAttrs(entryFunc, tensorium_mlir::abi::kKindEntrySource);
+  initFunc->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+                    makeFieldNamesAttr(initArgIndices));
+  rhsFunc->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+                   makeFieldNamesAttr(rhsArgIndices));
+  entryFunc->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+                     makeFieldNamesAttr(allArgIndices));
 
   auto *initBlock = initFunc.addEntryBlock();
   b.setInsertionPointToEnd(initBlock);
@@ -110,11 +145,21 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   for (unsigned idx : rhsArgIndices)
     rhsCallArgs.push_back(entryBlock->getArgument(idx));
 
-  mlir::func::CallOp::create(b, loc, "tensorium_init", mlir::TypeRange{},
+  mlir::func::CallOp::create(b, loc, tensorium_mlir::abi::kSymbolInit, mlir::TypeRange{},
                              initCallArgs);
-  mlir::func::CallOp::create(b, loc, "tensorium_rhs", mlir::TypeRange{},
+  mlir::func::CallOp::create(b, loc, tensorium_mlir::abi::kSymbolRhs, mlir::TypeRange{},
                              rhsCallArgs);
   mlir::func::ReturnOp::create(b, loc);
+
+  moduleOp->getOperation()->setAttr(
+      tensorium_mlir::abi::kAttrABIVersion,
+      b.getI64IntegerAttr(tensorium_mlir::abi::kGeneratedKernelABIVersion));
+  moduleOp->getOperation()->setAttr(
+      tensorium_mlir::abi::kAttrMemoryLayout,
+      b.getStringAttr(tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+  moduleOp->getOperation()->setAttr(
+      tensorium_mlir::abi::kAttrMemrefABI,
+      b.getStringAttr(tensorium_mlir::abi::kMemrefABI1DStridedF64));
 
   if (module.simulation) {
     moduleOp->getOperation()->setAttr(
@@ -158,11 +203,20 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 }
 
 bool emitMLIR(const tensorium::backend::ModuleIR &module,
-              const MLIRGenOptions &opts) {
+              const MLIRGenOptions &opts, std::string *mlirText) {
   mlir::MLIRContext ctx;
   bool pipelineOk = true;
   auto moduleOp = buildMLIRModule(module, ctx, opts, &pipelineOk);
-  moduleOp->print(llvm::outs());
+  std::string buffer;
+  llvm::raw_string_ostream stream(buffer);
+  moduleOp->print(stream);
+  stream.flush();
+
+  if (mlirText) {
+    *mlirText = std::move(buffer);
+  } else {
+    llvm::outs() << buffer;
+  }
   return pipelineOk;
 }
 

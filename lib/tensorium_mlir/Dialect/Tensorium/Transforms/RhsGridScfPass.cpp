@@ -1,4 +1,5 @@
 #include "tensorium_mlir/Dialect/Tensorium/Transform/Passes.h"
+#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -23,6 +24,7 @@
 #include <vector>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/StringSet.h>
+#include <llvm/ADT/SetVector.h>
 
 using namespace mlir;
 
@@ -85,6 +87,44 @@ parseStringArrayAttr(const std::optional<ArrayAttr> &arr) {
   if (!arr)
     return {};
   return parseStringArrayAttr(*arr);
+}
+
+static ArrayAttr makeStringArrayAttr(OpBuilder &b,
+                                     const std::vector<std::string> &values) {
+  SmallVector<Attribute> attrs;
+  attrs.reserve(values.size());
+  for (const auto &value : values)
+    attrs.push_back(b.getStringAttr(value));
+  return b.getArrayAttr(attrs);
+}
+
+static ArrayAttr makeI64ArrayAttr(OpBuilder &b,
+                                  const std::vector<int64_t> &values) {
+  SmallVector<Attribute> attrs;
+  attrs.reserve(values.size());
+  for (int64_t value : values)
+    attrs.push_back(b.getI64IntegerAttr(value));
+  return b.getArrayAttr(attrs);
+}
+
+static LogicalResult collectRhsWriteArgIndices(func::FuncOp rhs,
+                                               std::vector<int64_t> &out) {
+  llvm::SmallSetVector<int64_t, 8> indices;
+  for (Operation &op : rhs.getBody().front().without_terminator()) {
+    auto dt = dyn_cast<DtAssignOp>(&op);
+    if (!dt)
+      continue;
+    auto fieldArg = dyn_cast<BlockArgument>(dt.getField());
+    if (!fieldArg || fieldArg.getOwner() != &rhs.getBody().front()) {
+      dt.emitError("rhs-grid-abi: dt_assign field must be rhs block argument");
+      return failure();
+    }
+    indices.insert(static_cast<int64_t>(fieldArg.getArgNumber()));
+  }
+
+  out.assign(indices.begin(), indices.end());
+  std::sort(out.begin(), out.end());
+  return success();
 }
 
 static bool parseEinsumOutIndices(EinsumOp op, std::vector<std::string> &out) {
@@ -719,11 +759,12 @@ struct RhsGridScfPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto rhs = module.lookupSymbol<func::FuncOp>("tensorium_rhs");
+    auto rhs =
+        module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolRhs);
     if (!rhs)
       return;
 
-    if (module.lookupSymbol<func::FuncOp>("tensorium_rhs_grid_scf"))
+    if (module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolRhsGridScf))
       return;
 
     OpBuilder b(&getContext());
@@ -732,6 +773,20 @@ struct RhsGridScfPass
     Type f64 = b.getF64Type();
     Type dynMemF64 = MemRefType::get({ShapedType::kDynamic}, f64);
     std::vector<std::string> paramNames = collectRhsParamNames(rhs);
+    std::vector<std::string> fieldNames =
+        parseStringArrayAttr(rhs->getAttrOfType<ArrayAttr>(
+            tensorium_mlir::abi::kAttrFieldNames));
+    if (fieldNames.size() != rhs.getNumArguments()) {
+      rhs.emitError("rhs-grid-scf: missing or invalid ABI field_names metadata "
+                    "on tensorium_rhs");
+      signalPassFailure();
+      return;
+    }
+    std::vector<int64_t> writeFieldArgIndices;
+    if (failed(collectRhsWriteArgIndices(rhs, writeFieldArgIndices))) {
+      signalPassFailure();
+      return;
+    }
 
     SmallVector<Type> args;
     args.push_back(idxTy); // nx
@@ -752,7 +807,25 @@ struct RhsGridScfPass
     }
 
     auto fnTy = b.getFunctionType(args, {});
-    auto outFn = func::FuncOp::create(loc, "tensorium_rhs_grid_scf", fnTy);
+    auto outFn =
+        func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolRhsGridScf, fnTy);
+    auto setCommonABIAttrs = [&](func::FuncOp fn, StringRef kind) {
+      fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
+                  b.getI64IntegerAttr(
+                      tensorium_mlir::abi::kGeneratedKernelABIVersion));
+      fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
+      fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
+                  b.getStringAttr(
+                      tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+      fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
+                  b.getStringAttr(
+                      tensorium_mlir::abi::kMemrefABI1DStridedF64));
+    };
+    setCommonABIAttrs(outFn, tensorium_mlir::abi::kKindRhsGridScf);
+    outFn->setAttr(tensorium_mlir::abi::kAttrParamNames,
+                   makeStringArrayAttr(b, paramNames));
+    outFn->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+                   makeStringArrayAttr(b, fieldNames));
     Block *entry = outFn.addEntryBlock();
     b.setInsertionPointToEnd(entry);
 
@@ -764,6 +837,19 @@ struct RhsGridScfPass
     Value dz = entry->getArgument(5);
     const unsigned paramBase = 6;
     const unsigned fieldBase = paramBase + static_cast<unsigned>(paramNames.size());
+    std::vector<int64_t> writeArgIndices;
+    writeArgIndices.reserve(writeFieldArgIndices.size());
+    std::vector<std::string> writeFieldNames;
+    writeFieldNames.reserve(writeFieldArgIndices.size());
+    for (int64_t fieldIdx : writeFieldArgIndices) {
+      writeArgIndices.push_back(static_cast<int64_t>(fieldBase) + fieldIdx);
+      if (fieldIdx >= 0 && static_cast<std::size_t>(fieldIdx) < fieldNames.size())
+        writeFieldNames.push_back(fieldNames[static_cast<std::size_t>(fieldIdx)]);
+    }
+    outFn->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
+                   makeI64ArrayAttr(b, writeArgIndices));
+    outFn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
+                   makeStringArrayAttr(b, writeFieldNames));
 
     llvm::StringMap<Value> paramScalars;
     for (unsigned i = 0; i < paramNames.size(); ++i)
@@ -838,11 +924,13 @@ struct RhsGridAffinePass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto rhs = module.lookupSymbol<func::FuncOp>("tensorium_rhs");
+    auto rhs =
+        module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolRhs);
     if (!rhs)
       return;
 
-    if (module.lookupSymbol<func::FuncOp>("tensorium_rhs_grid_affine"))
+    if (module.lookupSymbol<func::FuncOp>(
+            tensorium_mlir::abi::kSymbolRhsGridAffine))
       return;
 
     OpBuilder b(&getContext());
@@ -851,6 +939,20 @@ struct RhsGridAffinePass
     Type f64 = b.getF64Type();
     Type dynMemF64 = MemRefType::get({ShapedType::kDynamic}, f64);
     std::vector<std::string> paramNames = collectRhsParamNames(rhs);
+    std::vector<std::string> fieldNames =
+        parseStringArrayAttr(rhs->getAttrOfType<ArrayAttr>(
+            tensorium_mlir::abi::kAttrFieldNames));
+    if (fieldNames.size() != rhs.getNumArguments()) {
+      rhs.emitError("rhs-grid-affine: missing or invalid ABI field_names "
+                    "metadata on tensorium_rhs");
+      signalPassFailure();
+      return;
+    }
+    std::vector<int64_t> writeFieldArgIndices;
+    if (failed(collectRhsWriteArgIndices(rhs, writeFieldArgIndices))) {
+      signalPassFailure();
+      return;
+    }
 
     SmallVector<Type> args;
     args.push_back(idxTy); // nx
@@ -872,7 +974,26 @@ struct RhsGridAffinePass
     }
 
     auto fnTy = b.getFunctionType(args, {});
-    auto outFn = func::FuncOp::create(loc, "tensorium_rhs_grid_affine", fnTy);
+    auto outFn = func::FuncOp::create(loc,
+                                      tensorium_mlir::abi::kSymbolRhsGridAffine,
+                                      fnTy);
+    auto setCommonABIAttrs = [&](func::FuncOp fn, StringRef kind) {
+      fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
+                  b.getI64IntegerAttr(
+                      tensorium_mlir::abi::kGeneratedKernelABIVersion));
+      fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
+      fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
+                  b.getStringAttr(
+                      tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+      fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
+                  b.getStringAttr(
+                      tensorium_mlir::abi::kMemrefABI1DStridedF64));
+    };
+    setCommonABIAttrs(outFn, tensorium_mlir::abi::kKindRhsGridAffine);
+    outFn->setAttr(tensorium_mlir::abi::kAttrParamNames,
+                   makeStringArrayAttr(b, paramNames));
+    outFn->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+                   makeStringArrayAttr(b, fieldNames));
     Block *entry = outFn.addEntryBlock();
     b.setInsertionPointToEnd(entry);
 
@@ -884,6 +1005,19 @@ struct RhsGridAffinePass
     Value dz = entry->getArgument(5);
     const unsigned paramBase = 6;
     const unsigned fieldBase = paramBase + static_cast<unsigned>(paramNames.size());
+    std::vector<int64_t> writeArgIndices;
+    writeArgIndices.reserve(writeFieldArgIndices.size());
+    std::vector<std::string> writeFieldNames;
+    writeFieldNames.reserve(writeFieldArgIndices.size());
+    for (int64_t fieldIdx : writeFieldArgIndices) {
+      writeArgIndices.push_back(static_cast<int64_t>(fieldBase) + fieldIdx);
+      if (fieldIdx >= 0 && static_cast<std::size_t>(fieldIdx) < fieldNames.size())
+        writeFieldNames.push_back(fieldNames[static_cast<std::size_t>(fieldIdx)]);
+    }
+    outFn->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
+                   makeI64ArrayAttr(b, writeArgIndices));
+    outFn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
+                   makeStringArrayAttr(b, writeFieldNames));
 
     llvm::StringMap<Value> paramScalars;
     for (unsigned i = 0; i < paramNames.size(); ++i)

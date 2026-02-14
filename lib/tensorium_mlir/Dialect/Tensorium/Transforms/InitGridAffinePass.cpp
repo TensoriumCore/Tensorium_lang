@@ -1,4 +1,5 @@
 #include "tensorium_mlir/Dialect/Tensorium/Transform/Passes.h"
+#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -38,11 +39,12 @@ struct InitGridAffinePass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto initPoint = module.lookupSymbol<func::FuncOp>("tensorium_init_point");
+    auto initPoint =
+        module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolInitPoint);
     if (!initPoint)
       return;
 
-    if (module.lookupSymbol<func::FuncOp>("tensorium_init_grid_affine"))
+    if (module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolInitGridAffine))
       return;
 
     OpBuilder b(&getContext());
@@ -80,7 +82,46 @@ struct InitGridAffinePass
 
     auto gridTy = b.getFunctionType(gridArgTypes, {});
 
-    auto gridFn = func::FuncOp::create(loc, "tensorium_init_grid_affine", gridTy);
+    auto gridFn =
+        func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolInitGridAffine, gridTy);
+    auto makeStrArrayAttr = [&](const std::vector<std::string> &names) {
+      SmallVector<StringRef> refs;
+      refs.reserve(names.size());
+      for (const auto &name : names)
+        refs.push_back(name);
+      return b.getStrArrayAttr(refs);
+    };
+    auto makeI64ArrayAttr = [&](const std::vector<int64_t> &values) {
+      SmallVector<Attribute> attrs;
+      attrs.reserve(values.size());
+      for (int64_t value : values)
+        attrs.push_back(b.getI64IntegerAttr(value));
+      return b.getArrayAttr(attrs);
+    };
+    auto setCommonABIAttrs = [&](func::FuncOp fn, StringRef kind) {
+      fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
+                  b.getI64IntegerAttr(
+                      tensorium_mlir::abi::kGeneratedKernelABIVersion));
+      fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
+      fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
+                  b.getStringAttr(
+                      tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+      fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
+                  b.getStringAttr(
+                      tensorium_mlir::abi::kMemrefABI1DStridedF64));
+    };
+    setCommonABIAttrs(gridFn, tensorium_mlir::abi::kKindInitGridAffine);
+    gridFn->setAttr(tensorium_mlir::abi::kAttrParamNames,
+                    makeStrArrayAttr(paramNames));
+    gridFn->setAttr(tensorium_mlir::abi::kAttrCoordNames,
+                    makeStrArrayAttr(coordNames));
+    gridFn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
+                    makeStrArrayAttr({"alpha", "gamma", "gammaU"}));
+    const int64_t firstOutputArg =
+        static_cast<int64_t>(paramNames.size() + coordNames.size());
+    gridFn->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
+                    makeI64ArrayAttr(
+                        {firstOutputArg, firstOutputArg + 1, firstOutputArg + 2}));
     Block *entry = gridFn.addEntryBlock();
     b.setInsertionPointToEnd(entry);
 

@@ -80,3 +80,10 @@ All test programs are located in tests/.
 - Target: MLIR (future LLVM / Linalg lowering)
 
 Tensor rules are explicit and must never be inferred implicitly.
+
+## Generated Kernel ABI
+
+The frozen C/C++ ABI contract for generated `tensorium_init*` and
+`tensorium_rhs*` functions is documented in:
+
+- `docs/generated_kernel_abi.md`

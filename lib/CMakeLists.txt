@@ -234,3 +234,13 @@ target_link_libraries(tensorium_mlir_backend INTERFACE
   tensoriumMlirIR
   tensoriumMlirSemantic
 )
+
+add_library(tensoriumCompilerAPI
+  API/Compiler.cpp
+)
+tensorium_configure_mlir_target(tensoriumCompilerAPI)
+target_link_libraries(tensoriumCompilerAPI PUBLIC
+  tensoriumLowering
+  tensoriumValidation
+  tensoriumMlirCodegen
+)
