@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace tensorium {
 
@@ -16,6 +17,32 @@ static bool isScalarDesc(const TensorTypeDesc &desc) {
   return desc.up == 0 && desc.down == 0 && desc.kind == TensorKind::Scalar;
 }
 
+static constexpr const char *kErrMissingSimulationBlock =
+    "E1001: missing simulation block in executable mode";
+
+static constexpr const char *kWarnMissingSimulationBlock =
+    "W1001: missing simulation block in symbolic mode";
+
+static constexpr const char *kWarnInverseMetricMissing =
+    "W1002: inverse_metric field is missing while metrics are declared";
+
+static constexpr const char *kWarnMetricMissing =
+    "W1003: metric field is missing while inverse_metric fields are declared";
+
+namespace {
+struct LocalScopeGuard {
+  std::unordered_map<std::string, bool> &locals;
+  std::unordered_map<std::string, bool> saved;
+
+  LocalScopeGuard(std::unordered_map<std::string, bool> &localsIn,
+                  std::unordered_map<std::string, bool> replacement)
+      : locals(localsIn), saved(localsIn) {
+    locals = std::move(replacement);
+  }
+
+  ~LocalScopeGuard() { locals = std::move(saved); }
+};
+} // namespace
 
 void SemanticAnalyzer::validateSpatialIndex(const std::string &idx) {
   if (!core::isSpatialIndexName(idx)) {
@@ -142,9 +169,7 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       return iv;
     }
 
-    auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Parameter);
-    iv->tensorKind = TensorKind::Scalar;
-    return iv;
+    throw std::runtime_error("Unknown identifier: " + v->name);
   }
 
   if (auto b = dynamic_cast<const BinaryExpr *>(e))
@@ -248,7 +273,18 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
     }
   }
 
+  std::unordered_set<std::string> metricNames;
+  for (const auto &metric : prog.metrics) {
+    if (!metricNames.insert(metric.name).second) {
+      throw std::runtime_error("Metric redeclared: " + metric.name);
+    }
+  }
+
   for (const auto &f : prog.fields) {
+    if (metricNames.count(f.name)) {
+      throw std::runtime_error("Name collision: field '" + f.name +
+                               "' conflicts with metric '" + f.name + "'");
+    }
     if (fields.count(f.name))
       throw std::runtime_error("Field redeclared: " + f.name);
     enforceMetricFieldRules(f);
@@ -260,19 +296,24 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
   }
 
   if (metricFieldCount > 0 && inverseMetricFieldCount == 0) {
-    std::cerr << "[Tensorium] warning: inverse_metric field is missing while metrics are declared\n";
+    warnings.push_back(kWarnInverseMetricMissing);
   }
   if (inverseMetricFieldCount > 0 && metricFieldCount == 0) {
-    std::cerr << "[Tensorium] warning: metric field is missing while inverse_metric fields are declared\n";
+    warnings.push_back(kWarnMetricMissing);
   }
 
   for (const auto &m : prog.metrics) {
     for (const auto &entry : m.entries) {
       if (entry.lhs.indices.empty())
-        locals[entry.lhs.base] = true;
+        metricScalarLocals[entry.lhs.base] = true;
     }
   }
   for (const auto &m : prog.metrics) {
+    if (fields.count(m.name)) {
+      throw std::runtime_error("Name collision: metric '" + m.name +
+                               "' conflicts with existing field '" + m.name +
+                               "'");
+    }
     FieldDecl fd;
     fd.kind = TensorKind::CovTensor2;
     fd.name = m.name;
@@ -283,10 +324,15 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
   }
   if (!prog.simulation) {
     if (mode == CompilationMode::Executable) {
-      throw std::runtime_error("missing simulation block");
+      throw std::runtime_error(
+          std::string(kErrMissingSimulationBlock) +
+          ". Add `simulation { dimension = <N> resolution = [...] time { dt = ... "
+          "integrator = ... } spatial { scheme = ... derivative = ... order = ... } }` "
+          "or use --symbolic.");
     }
     simulationMissing = true;
-    std::cerr << "[Tensorium] warning: missing simulation block (symbolic mode)\n";
+    warnings.push_back(std::string(kWarnMissingSimulationBlock) +
+                       "; proceeding without simulation metadata");
   } else {
     validateSimulation(*prog.simulation);
   }
@@ -297,6 +343,7 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
 }
 
 IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
+  LocalScopeGuard localsScope(locals, metricScalarLocals);
   coordIndex.clear();
 
   IndexedMetric out;
@@ -332,6 +379,7 @@ IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
 }
 
 IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
+  LocalScopeGuard localsScope(locals, std::unordered_map<std::string, bool>{});
   coordIndex.clear();
 
   IndexedEvolution out;

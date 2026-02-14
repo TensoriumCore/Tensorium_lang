@@ -44,6 +44,7 @@ VALID_TESTS=(
   tests/23_bssn_like_with_riemann_contract.tn
   tests/24_Ricci_conformal_flat.tn
   tests/25_deriv_stencil.tn
+  tests/semantic/diff/05_laplacian_executable_not_supported.tn
   tests/50_large_tensor_mix.tn
   tests/51_large_tensor_flux.tn
   tests/56_metric_decl_ok.tn
@@ -98,10 +99,25 @@ SEMANTIC_DIFF_VALID_TESTS=(
   tests/semantic/diff/01_partial_scalar.tn
   tests/semantic/diff/02_partial_vector_rank_plus_one.tn
   tests/semantic/diff/03_covariant_with_gamma.tn
+  tests/semantic/diff/05_laplacian_executable_not_supported.tn
 )
 
 SEMANTIC_DIFF_ERROR_TESTS=(
   "tests/semantic/diff/04_covariant_without_gamma_error.tn|Covariant derivative requires connection tensor Gamma"
+)
+
+SEMANTIC_SIMULATION_ERROR_TESTS=(
+  "tests/semantic/simulation/01_missing_block.tn|E1001: missing simulation block in executable mode"
+)
+
+SEMANTIC_SIMULATION_SYMBOLIC_WARN_TESTS=(
+  "tests/semantic/simulation/01_missing_block.tn|W1001: missing simulation block in symbolic mode"
+)
+
+SEMANTIC_ROBUSTNESS_ERROR_TESTS=(
+  "tests/semantic/robustness/01_unknown_identifier_strict.tn|Unknown identifier: alph"
+  "tests/semantic/robustness/02_evolution_scope_isolated.tn|Unknown identifier: tmp"
+  "tests/semantic/robustness/03_field_metric_name_collision.tn|Name collision: field 'g' conflicts with metric 'g'"
 )
 
 INITIAL_DATA_ERROR_TESTS=(
@@ -161,13 +177,19 @@ echo "=============================="
 
 for f in "${VALID_TESTS[@]}"; do
   echo "[OK EXPECTED] $f"
-  "$BIN" "${PIPELINE_DISS[@]}" --dump-mlir "$f" \
+  "$BIN" --mlir-best-effort "${PIPELINE_DISS[@]}" --dump-mlir "$f" \
     > "$OUT/$(basename "$f").mlir"
 done
 
 PRIMARY_MLIR="$OUT/$(basename ${VALID_TESTS[0]}).mlir"
 if ! grep -q "tensorium.field" "$PRIMARY_MLIR"; then
   echo "ERROR: expected tensorium.field types in $PRIMARY_MLIR"
+  exit 1
+fi
+
+LAPLACIAN_MLIR="$OUT/$(basename tests/semantic/diff/05_laplacian_executable_not_supported.tn).mlir"
+if ! grep -q "tensorium.contract" "$LAPLACIAN_MLIR"; then
+  echo "ERROR: expected tensorium.contract in laplacian lowering output"
   exit 1
 fi
 
@@ -271,6 +293,76 @@ done
 
 echo
 echo "=============================="
+echo " RUN SEMANTIC SIMULATION TESTS"
+echo "=============================="
+
+for entry in "${SEMANTIC_SIMULATION_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SEMANTIC FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected simulation diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+for entry in "${SEMANTIC_SIMULATION_SYMBOLIC_WARN_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SYMBOLIC WARN EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if ! "$BIN" --symbolic "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: symbolic mode unexpectedly failed for $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected symbolic warning '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN SEMANTIC ROBUSTNESS TESTS"
+echo "=============================="
+
+for entry in "${SEMANTIC_ROBUSTNESS_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SEMANTIC FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected robustness diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
 echo " RUN GR FIXTURE CHECKS"
 echo "=============================="
 
@@ -298,6 +390,28 @@ for f in "${INITIAL_DATA_VALID_TESTS[@]}"; do
   echo "[INITIAL_DATA OK EXPECTED] $f"
   "$BIN" "${PIPELINE_BASE[@]}" "$f" > /dev/null
 done
+
+echo
+echo "=============================="
+echo " RUN INITIAL DATA PARAM LOWERING CHECK"
+echo "=============================="
+
+RN_INIT_FIXTURE=tests/fixtures/gr/reissner_nordstrom_3d.tn
+RN_INIT_OUT="$OUT/reissner_nordstrom_init.mlir"
+"$BIN" --tensorium-metric-lower --tensorium-init-std-lower --dump-mlir \
+  "$RN_INIT_FIXTURE" > "$RN_INIT_OUT"
+if ! grep -q "tensorium_init_point" "$RN_INIT_OUT"; then
+  echo "ERROR: expected tensorium_init_point after init-to-std lowering"
+  exit 1
+fi
+if ! grep -q "tensorium.init.param_names" "$RN_INIT_OUT"; then
+  echo "ERROR: expected param metadata on tensorium_init_point"
+  exit 1
+fi
+if ! grep -q "\"Q\"" "$RN_INIT_OUT"; then
+  echo "ERROR: expected Q runtime parameter in init lowering metadata"
+  exit 1
+fi
 
 echo
 echo "=============================="
@@ -428,6 +542,45 @@ for f in "${SYMBOLIC_TENSOR_FAIL_TESTS[@]}"; do
   fi
   rm -f "$TMP_ERR"
 done
+
+echo
+echo "=============================="
+echo " RUN BSSN DEFAULT LLVM PIPELINE"
+echo "=============================="
+
+BSSN_DEFAULT_LL="$OUT/07_bssn_reduced.default.ll"
+RAW_BSSN_LL="$(mktemp)"
+"$BIN" --dump-llvm-ir tests/07_bssn_reduced.tn > "$RAW_BSSN_LL"
+awk '
+  /^\[Tensorium\]/ {exit}
+  {print}
+' "$RAW_BSSN_LL" > "$BSSN_DEFAULT_LL"
+rm -f "$RAW_BSSN_LL"
+if ! grep -q "define void @tensorium_rhs_grid_affine" "$BSSN_DEFAULT_LL"; then
+  echo "ERROR: expected default LLVM pipeline to lower BSSN RHS grid kernel"
+  exit 1
+fi
+
+echo
+echo "=============================="
+echo " RUN BSSN RHS LLVM SMOKE"
+echo "=============================="
+
+bash tools/dev/test_bssn_reduced_ll.sh
+
+echo
+echo "=============================="
+echo " RUN BSSN RK2 LLVM SMOKE"
+echo "=============================="
+
+bash tools/dev/test_bssn_reduced_rk2_ll.sh
+
+echo
+echo "=============================="
+echo " RUN BSSN MINIMAL LLVM SMOKE"
+echo "=============================="
+
+bash tools/dev/test_bssn_minimal_ll.sh
 
 echo
 echo "=============================="

@@ -77,21 +77,29 @@ static tensorium_mlir::MLIRGenOptions makeExecutablePipelineOpts() {
 }
 
 static ::mlir::OwningOpRef<::mlir::ModuleOp>
-buildMLIRModuleFromFileWithOpts(const std::string &path, CompilationMode mode,
-                                ::mlir::MLIRContext &ctx,
-                                const tensorium_mlir::MLIRGenOptions &opts) {
-  backend::ModuleIR mod = buildModuleFromFile(path, mode);
+buildMLIRModuleFromSourceWithOpts(const std::string &source,
+                                  CompilationMode mode,
+                                  ::mlir::MLIRContext &ctx,
+                                  const tensorium_mlir::MLIRGenOptions &opts) {
+  backend::ModuleIR mod = buildModuleFromSource(source, mode);
   validation::canonicalizeDifferentialIR(mod);
   validation::canonicalizeEinsteinIR(mod);
   auto verify = validation::verifyIR(mod);
   if (!verify.ok()) {
     std::ostringstream oss;
-    oss << "IR verification failed for " << path;
+    oss << "IR verification failed for inline source";
     for (const auto &diag : verify.diags)
       oss << "\n  - " << diag.message;
     throw std::runtime_error(oss.str());
   }
   return tensorium_mlir::buildMLIRModule(mod, ctx, opts);
+}
+
+static ::mlir::OwningOpRef<::mlir::ModuleOp>
+buildMLIRModuleFromFileWithOpts(const std::string &path, CompilationMode mode,
+                                ::mlir::MLIRContext &ctx,
+                                const tensorium_mlir::MLIRGenOptions &opts) {
+  return buildMLIRModuleFromSourceWithOpts(readFile(path), mode, ctx, opts);
 }
 
 static ::mlir::OwningOpRef<::mlir::ModuleOp>
@@ -1934,6 +1942,126 @@ static bool testSchwarzschildRhsGridScfLowering() {
   return true;
 }
 
+static bool testRhsGridScfRejectsImplicitParams() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridScfPass = true;
+
+  const std::string source = R"(
+field scalar phi
+
+simulation {
+  dimension = 1
+  resolution = [16]
+  time { dt = 0.05 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution ParamImplicit {
+  dt phi = M * phi
+}
+)";
+
+  try {
+    (void)buildMLIRModuleFromSourceWithOpts(source, CompilationMode::Executable,
+                                            ctx, opts);
+    std::cerr << "FAIL: implicit parameter 'M' should be rejected in strict "
+                 "semantic mode\n";
+    return false;
+  } catch (const std::exception &ex) {
+    const std::string msg = ex.what();
+    if (msg.find("Unknown identifier: M") == std::string::npos) {
+      std::cerr << "FAIL: expected unknown-identifier error for implicit "
+                   "parameter, got: "
+                << msg << "\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool testRhsGridScfLoweringSupportsCoords() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridScfPass = true;
+
+  const std::string source = R"(
+field vector beta[i]
+
+simulation {
+  dimension = 3
+  resolution = [8, 8, 8]
+  time { dt = 0.01 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution CoordInRhs {
+  dt beta[i] = i * beta[i]
+}
+)";
+
+  auto module = buildMLIRModuleFromSourceWithOpts(
+      source, CompilationMode::Executable, ctx, opts);
+
+  auto rhsGrid =
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_scf");
+  if (!rhsGrid) {
+    std::cerr << "FAIL: missing tensorium_rhs_grid_scf for coord lowering test\n";
+    return false;
+  }
+
+  if (rhsGrid.getNumArguments() != 7) {
+    std::cerr << "FAIL: expected tensorium_rhs_grid_scf to have 7 args "
+                 "(nx,ny,nz,dx,dy,dz,beta), got "
+              << rhsGrid.getNumArguments() << "\n";
+    return false;
+  }
+
+  auto memTy = llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(6).getType());
+  if (!memTy || memTy.getRank() != 1 ||
+      memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
+      !memTy.getElementType().isF64()) {
+    std::cerr << "FAIL: rhs-grid-scf arg 6 must be memref<?xf64>\n";
+    return false;
+  }
+
+  bool hasTensoriumOp = false;
+  bool hasIndexToFloat = false;
+  bool spacingArgUsed = false;
+  rhsGrid.walk([&](::mlir::Operation *op) {
+    if (op != rhsGrid.getOperation() &&
+        op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+    }
+    if (op->getName().getStringRef() == "arith.sitofp")
+      hasIndexToFloat = true;
+    if (op->getName().getStringRef() != "arith.mulf")
+      return;
+    for (::mlir::Value operand : op->getOperands()) {
+      if (operand == rhsGrid.getArgument(3))
+        spacingArgUsed = true;
+    }
+  });
+
+  if (hasTensoriumOp) {
+    std::cerr << "FAIL: rhs-grid-scf with coords must not keep tensorium ops\n";
+    return false;
+  }
+  if (!hasIndexToFloat) {
+    std::cerr << "FAIL: rhs-grid-scf must cast loop index to float for coord op\n";
+    return false;
+  }
+  if (!spacingArgUsed) {
+    std::cerr << "FAIL: rhs-grid-scf must use spacing argument when lowering coord op\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildRhsGridAffineLowering() {
   ::mlir::MLIRContext ctx;
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
@@ -3009,6 +3137,10 @@ int main() {
        &testSchwarzschildInitGridAffineLowering},
       {"testSchwarzschildRhsGridScfLowering",
        &testSchwarzschildRhsGridScfLowering},
+      {"testRhsGridScfRejectsImplicitParams",
+       &testRhsGridScfRejectsImplicitParams},
+      {"testRhsGridScfLoweringSupportsCoords",
+       &testRhsGridScfLoweringSupportsCoords},
       {"testSchwarzschildRhsGridAffineLowering",
        &testSchwarzschildRhsGridAffineLowering},
       {"testStripSourceFuncsAfterGridLowering",
