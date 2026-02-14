@@ -1,0 +1,20 @@
+field scalar phi
+
+simulation {
+  dimension = 1
+  resolution = [8]
+
+  time {
+    dt = 0.1
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution MissingIntegrator {
+  dt phi = phi
+}

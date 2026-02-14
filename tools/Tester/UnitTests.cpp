@@ -1982,6 +1982,49 @@ evolution ParamImplicit {
   return true;
 }
 
+static bool testRhsExplicitParamDeclarationAccepted() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+
+  const std::string source = R"(
+field scalar phi
+
+params { M }
+
+simulation {
+  dimension = 1
+  resolution = [16]
+  time { dt = 0.05 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution ParamDeclared {
+  dt phi = M * phi
+}
+)";
+
+  auto module = buildMLIRModuleFromSourceWithOpts(
+      source, CompilationMode::Executable, ctx, opts);
+  auto rhs = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhs) {
+    std::cerr << "FAIL: missing tensorium_rhs for explicit parameter test\n";
+    return false;
+  }
+
+  bool hasParamOp = false;
+  rhs.walk([&](::mlir::Operation *op) {
+    if (llvm::isa<tensorium::mlir::ParamOp>(op))
+      hasParamOp = true;
+  });
+
+  if (!hasParamOp) {
+    std::cerr << "FAIL: expected tensorium.param op for declared parameter\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testRhsGridScfLoweringSupportsCoords() {
   ::mlir::MLIRContext ctx;
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
@@ -3139,6 +3182,8 @@ int main() {
        &testSchwarzschildRhsGridScfLowering},
       {"testRhsGridScfRejectsImplicitParams",
        &testRhsGridScfRejectsImplicitParams},
+      {"testRhsExplicitParamDeclarationAccepted",
+       &testRhsExplicitParamDeclarationAccepted},
       {"testRhsGridScfLoweringSupportsCoords",
        &testRhsGridScfLoweringSupportsCoords},
       {"testSchwarzschildRhsGridAffineLowering",

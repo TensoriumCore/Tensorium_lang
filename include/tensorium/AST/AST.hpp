@@ -196,6 +196,7 @@ struct InitialDataDecl {
 };
 
 struct Program {
+  std::vector<std::string> params;
   std::vector<ExternDecl> externs;
   std::vector<FieldDecl> fields;
   std::vector<MetricDecl> metrics;

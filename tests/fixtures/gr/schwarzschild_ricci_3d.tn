@@ -7,6 +7,8 @@ field con_tensor2 gammaU[i,j]
 field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
 field cov_tensor2 Ricci[i,j]
 
+params { M }
+
 simulation {
   coordinates = spherical
   dimension = 3

@@ -100,6 +100,8 @@ Token Lexer::next() {
       return {TokenType::KwSpacetime, t, tokLine, tokCol};
     if (t == "metric")
       return {TokenType::KwMetric, t, tokLine, tokCol};
+    if (t == "params")
+      return {TokenType::KwParams, t, tokLine, tokCol};
     if (t == "inverse_metric")
       return {TokenType::KwInverseMetric, t, tokLine, tokCol};
     if (t == "evolution")

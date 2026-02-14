@@ -21,6 +21,7 @@ class Parser {
   TensorAccess parseLHS();
   Assignment parseAssignment();
   TensorTypeDesc parseTensorTypeDesc();
+  std::vector<std::string> parseParamsBlock();
   ExternDecl parseExternDecl();
   FieldDecl parseFieldDecl();
   MetricDecl parseMetric();

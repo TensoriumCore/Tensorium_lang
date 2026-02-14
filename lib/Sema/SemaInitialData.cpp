@@ -96,15 +96,23 @@ void SemanticAnalyzer::validateInitialDataExpr(const Expr *expr,
   }
 
   if (auto v = dynamic_cast<const VarExpr *>(expr)) {
-    if (!prog.simulation)
-      return;
-    if (isCoordinateAlias(v->name) &&
-        !isAllowedCoordinateName(*prog.simulation, v->name)) {
+    if (!prog.simulation) {
       throw std::runtime_error("initial_data " + context +
-                               " uses coordinate '" + v->name +
-                               "' incompatible with simulation coordinates");
+                               " requires simulation metadata");
     }
-    return;
+    if (isCoordinateAlias(v->name)) {
+      if (!isAllowedCoordinateName(*prog.simulation, v->name)) {
+        throw std::runtime_error("initial_data " + context +
+                                 " uses coordinate '" + v->name +
+                                 "' incompatible with simulation coordinates");
+      }
+      return;
+    }
+    if (params.count(v->name))
+      return;
+    throw std::runtime_error("initial_data " + context +
+                             " uses unknown identifier '" + v->name +
+                             "' (declare it in params { ... })");
   }
 
   if (auto b = dynamic_cast<const BinaryExpr *>(expr)) {

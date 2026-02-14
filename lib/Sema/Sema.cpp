@@ -160,6 +160,13 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       return iv;
     }
 
+    if (params.count(v->name)) {
+      auto iv =
+          std::make_unique<IndexedVar>(v->name, IndexedVarKind::Parameter);
+      iv->tensorKind = TensorKind::Scalar;
+      return iv;
+    }
+
     if (auto itf = fields.find(v->name); itf != fields.end()) {
       const FieldDecl *fd = itf->second;
       auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Field);
@@ -263,6 +270,12 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
 
 SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
     : prog(p), mode(m) {
+  for (const auto &paramName : prog.params) {
+    if (!params.insert(paramName).second) {
+      throw std::runtime_error("Parameter redeclared: " + paramName);
+    }
+  }
+
   for (const auto &ext : prog.externs) {
     if (!externSignatures.emplace(ext.name, &ext).second) {
       throw std::runtime_error("Extern function redeclared: " + ext.name);
@@ -275,12 +288,21 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
 
   std::unordered_set<std::string> metricNames;
   for (const auto &metric : prog.metrics) {
+    if (params.count(metric.name)) {
+      throw std::runtime_error("Name collision: parameter '" + metric.name +
+                               "' conflicts with metric '" + metric.name +
+                               "'");
+    }
     if (!metricNames.insert(metric.name).second) {
       throw std::runtime_error("Metric redeclared: " + metric.name);
     }
   }
 
   for (const auto &f : prog.fields) {
+    if (params.count(f.name)) {
+      throw std::runtime_error("Name collision: parameter '" + f.name +
+                               "' conflicts with field '" + f.name + "'");
+    }
     if (metricNames.count(f.name)) {
       throw std::runtime_error("Name collision: field '" + f.name +
                                "' conflicts with metric '" + f.name + "'");
@@ -394,6 +416,11 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
   for (const auto &tmp : evo.tempAssignments) {
     if (!tmp.lhs.indices.empty()) {
       continue;
+    }
+
+    if (params.count(tmp.lhs.base)) {
+      throw std::runtime_error("Cannot redeclare parameter '" + tmp.lhs.base +
+                               "' as local");
     }
 
     if (fields.count(tmp.lhs.base)) {

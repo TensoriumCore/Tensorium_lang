@@ -49,6 +49,7 @@ VALID_TESTS=(
   tests/51_large_tensor_flux.tn
   tests/56_metric_decl_ok.tn
   tests/31_temp_valid_scalar.tn
+  tests/semantic/robustness/04_explicit_parameter_declaration.tn
 )
 
 EXTERN_TESTS=(
@@ -108,6 +109,10 @@ SEMANTIC_DIFF_ERROR_TESTS=(
 
 SEMANTIC_SIMULATION_ERROR_TESTS=(
   "tests/semantic/simulation/01_missing_block.tn|E1001: missing simulation block in executable mode"
+  "tests/semantic/simulation/02_missing_time_block.tn|simulation block requires 'time { dt = ... integrator = ... }'"
+  "tests/semantic/simulation/03_missing_spatial_block.tn|simulation block requires 'spatial { scheme = ... derivative = ... order = ... }'"
+  "tests/semantic/simulation/04_time_missing_integrator.tn|time block requires 'integrator = euler|rk3|rk4'"
+  "tests/semantic/simulation/05_duplicate_dimension_entry.tn|duplicate 'dimension' entry in simulation block"
 )
 
 SEMANTIC_SIMULATION_SYMBOLIC_WARN_TESTS=(
@@ -118,6 +123,8 @@ SEMANTIC_ROBUSTNESS_ERROR_TESTS=(
   "tests/semantic/robustness/01_unknown_identifier_strict.tn|Unknown identifier: alph"
   "tests/semantic/robustness/02_evolution_scope_isolated.tn|Unknown identifier: tmp"
   "tests/semantic/robustness/03_field_metric_name_collision.tn|Name collision: field 'g' conflicts with metric 'g'"
+  "tests/semantic/robustness/05_initial_data_unknown_parameter.tn|uses unknown identifier 'M'"
+  "tests/semantic/robustness/06_temp_use_before_def_validate.tn|temporary 'K' referenced before definition"
 )
 
 INITIAL_DATA_ERROR_TESTS=(
