@@ -20,6 +20,22 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace tensorium_mlir {
+namespace {
+
+llvm::StringRef coordSystemToAttr(tensorium::backend::CoordSystem coords) {
+  using tensorium::backend::CoordSystem;
+  switch (coords) {
+  case CoordSystem::Cartesian:
+    return "cartesian";
+  case CoordSystem::Spherical:
+    return "spherical";
+  case CoordSystem::Cylindrical:
+    return "cylindrical";
+  }
+  return "cartesian";
+}
+
+} // namespace
 
 mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
@@ -103,6 +119,9 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   if (module.simulation) {
     moduleOp->getOperation()->setAttr(
         "tensorium.sim.dim", b.getI64IntegerAttr(module.simulation->dimension));
+    moduleOp->getOperation()->setAttr(
+        "tensorium.sim.coords",
+        b.getStringAttr(coordSystemToAttr(module.simulation->coords)));
   }
   moduleOp->push_back(initFunc);
   moduleOp->push_back(rhsFunc);

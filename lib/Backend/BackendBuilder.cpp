@@ -115,6 +115,12 @@ static void collectIndexCounts(const tensorium::IndexedExpr *e,
   }
 
   if (auto *c = dynamic_cast<const IndexedCall *>(e)) {
+    if (c->callee == "contract") {
+      // Explicit contraction is self-contained; counting indices inside it
+      // would incorrectly trigger an additional implicit contraction outside.
+      return;
+    }
+
     for (const auto &arg : c->args)
       collectIndexCounts(arg.get(), counts);
 

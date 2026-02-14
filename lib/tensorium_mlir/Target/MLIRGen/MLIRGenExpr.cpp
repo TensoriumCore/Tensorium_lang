@@ -119,6 +119,31 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
       return itLocal->second;
     }
 
+    if (v->vkind == VarKind::Param) {
+      if (desiredType.getRank() != 0) {
+        emitUnsupportedExprError(
+            loc, "parameter '" + v->name + "' must lower as scalar");
+      }
+      return tensorium::mlir::ParamOp::create(b, loc, desiredType,
+                                              b.getStringAttr(v->name))
+          .getResult();
+    }
+
+    if (v->vkind == VarKind::Coord) {
+      if (desiredType.getRank() != 0) {
+        emitUnsupportedExprError(
+            loc, "coordinate '" + v->name + "' must lower as scalar");
+      }
+      return tensorium::mlir::CoordOp::create(b, loc, desiredType,
+                                              b.getStringAttr(v->name))
+          .getResult();
+    }
+
+    if (v->vkind != VarKind::Field) {
+      emitUnsupportedExprError(loc,
+                               "unsupported variable kind in MLIR emission");
+    }
+
     return emitFieldRefByName(b, loc, v->name, v->tensorIndexNames, fieldArg);
   }
   case ExprIR::Kind::Binary: {
@@ -161,6 +186,47 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
       auto arg0 = emitExpr(b, loc, c->args[0].get(), fieldArg, localTemps);
       return tensorium::mlir::ContractOp::create(b, loc, desiredType, arg0)
           .getResult();
+    }
+    if (c->callee == "laplacian") {
+      if (c->args.size() != 1) {
+        emitUnsupportedExprError(
+            loc, "laplacian() expects exactly one argument in MLIR emission");
+      }
+
+      auto arg0 = emitExpr(b, loc, c->args[0].get(), fieldArg, localTemps);
+      auto argTy = mlir::dyn_cast<tensorium::mlir::FieldType>(arg0.getType());
+      if (!argTy || argTy.getRank() != 0) {
+        emitUnsupportedExprError(
+            loc, "laplacian() lowering expects scalar argument");
+      }
+      if (desiredType.getRank() != 0) {
+        emitUnsupportedExprError(
+            loc, "laplacian() lowering expects scalar result type");
+      }
+
+      tensorium::ir::TensorType gradDesc;
+      gradDesc.up = 0;
+      gradDesc.down = 1;
+      auto gradTy = asFieldType(b, gradDesc);
+
+      tensorium::ir::TensorType hessianDesc;
+      hessianDesc.up = 0;
+      hessianDesc.down = 2;
+      auto hessianTy = asFieldType(b, hessianDesc);
+
+      auto firstDeriv =
+          tensorium::mlir::DerivOp::create(b, loc, gradTy, arg0);
+      firstDeriv->setAttr("index", b.getStringAttr("i"));
+
+      auto secondDeriv = tensorium::mlir::DerivOp::create(
+          b, loc, hessianTy, firstDeriv.getResult());
+      secondDeriv->setAttr("index", b.getStringAttr("i"));
+
+      auto lap =
+          tensorium::mlir::ContractOp::create(b, loc, desiredType,
+                                              secondDeriv.getResult());
+      lap->setAttr("sum_indices", makeIndexArrayAttr(b, {"i"}));
+      return lap.getResult();
     }
     if (c->isExtern)
       emitExternLoweringError(loc, c->callee);

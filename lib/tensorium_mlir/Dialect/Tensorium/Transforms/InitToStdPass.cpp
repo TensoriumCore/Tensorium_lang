@@ -9,12 +9,57 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
 
+#include <algorithm>
 #include <array>
+#include <string>
+#include <vector>
+#include <llvm/ADT/StringSet.h>
 
 using namespace mlir;
 
 namespace tensorium::mlir {
 namespace {
+
+enum class CoordFamily { Unknown, Cartesian, Spherical, Cylindrical };
+
+static std::vector<std::string> defaultCoordsForFamily(CoordFamily family,
+                                                       int dim) {
+  const int clampedDim = std::max(1, std::min(3, dim));
+  std::vector<std::string> out;
+  out.reserve(static_cast<std::size_t>(clampedDim));
+  if (family == CoordFamily::Cartesian) {
+    static const char *k[] = {"x", "y", "z"};
+    for (int i = 0; i < clampedDim; ++i)
+      out.push_back(k[i]);
+    return out;
+  }
+  if (family == CoordFamily::Cylindrical) {
+    static const char *k[] = {"rho", "phi", "z"};
+    for (int i = 0; i < clampedDim; ++i)
+      out.push_back(k[i]);
+    return out;
+  }
+  if (family == CoordFamily::Spherical) {
+    static const char *k[] = {"r", "theta", "phi"};
+    for (int i = 0; i < clampedDim; ++i)
+      out.push_back(k[i]);
+    return out;
+  }
+  return out;
+}
+
+static CoordFamily parseCoordFamilyAttr(StringAttr attr) {
+  if (!attr)
+    return CoordFamily::Unknown;
+  const StringRef v = attr.getValue();
+  if (v == "cartesian")
+    return CoordFamily::Cartesian;
+  if (v == "spherical")
+    return CoordFamily::Spherical;
+  if (v == "cylindrical")
+    return CoordFamily::Cylindrical;
+  return CoordFamily::Unknown;
+}
 
 struct InitToStdPass
     : public PassWrapper<InitToStdPass, OperationPass<ModuleOp>> {
@@ -42,20 +87,80 @@ struct InitToStdPass
     Type mem1 = MemRefType::get({1}, f64);
     Type mem9 = MemRefType::get({9}, f64);
 
-    auto loweredTy =
-        b.getFunctionType({f64, f64, f64, f64, mem1, mem9, mem9}, {});
+    llvm::StringSet<> seenParams;
+    llvm::StringSet<> seenCoords;
+    std::vector<std::string> paramNames;
+    std::vector<std::string> coordNames;
+    CoordFamily family = parseCoordFamilyAttr(
+        module->getAttrOfType<StringAttr>("tensorium.sim.coords"));
+    for (Operation &op : srcBlock.without_terminator()) {
+      if (auto p = dyn_cast<ParamOp>(&op)) {
+        if (seenParams.insert(p.getName()).second)
+          paramNames.push_back(p.getName().str());
+      } else if (auto c = dyn_cast<CoordOp>(&op)) {
+        const std::string name = c.getName().str();
+        if (seenCoords.insert(c.getName()).second)
+          coordNames.push_back(name);
+        if (family == CoordFamily::Unknown) {
+          if (name == "x" || name == "y" || name == "z")
+            family = CoordFamily::Cartesian;
+          else if (name == "rho")
+            family = CoordFamily::Cylindrical;
+          else if (name == "r" || name == "theta" || name == "phi")
+            family = CoordFamily::Spherical;
+        }
+      }
+    }
+    if (paramNames.empty()) {
+      paramNames.push_back("M");
+    } else if (auto it = std::find(paramNames.begin(), paramNames.end(), "M");
+               it != paramNames.end() && it != paramNames.begin()) {
+      std::rotate(paramNames.begin(), it, it + 1);
+    }
+    if (family != CoordFamily::Unknown) {
+      int dim = 3;
+      if (auto dimAttr = module->getAttrOfType<IntegerAttr>("tensorium.sim.dim"))
+        dim = static_cast<int>(dimAttr.getInt());
+      coordNames = defaultCoordsForFamily(family, dim);
+    }
+
+    SmallVector<Type> loweredArgTypes;
+    loweredArgTypes.reserve(paramNames.size() + coordNames.size() + 3);
+    for (std::size_t i = 0; i < paramNames.size(); ++i)
+      loweredArgTypes.push_back(f64);
+    for (std::size_t i = 0; i < coordNames.size(); ++i)
+      loweredArgTypes.push_back(f64);
+    loweredArgTypes.push_back(mem1);
+    loweredArgTypes.push_back(mem9);
+    loweredArgTypes.push_back(mem9);
+
+    auto loweredTy = b.getFunctionType(loweredArgTypes, {});
     auto lowered =
         func::FuncOp::create(loc, "tensorium_init_point", loweredTy);
+    auto makeStrArrayAttr = [&](const std::vector<std::string> &names) {
+      SmallVector<StringRef> refs;
+      refs.reserve(names.size());
+      for (const auto &name : names)
+        refs.push_back(name);
+      return b.getStrArrayAttr(refs);
+    };
+    lowered->setAttr("tensorium.init.param_names",
+                     makeStrArrayAttr(paramNames));
+    lowered->setAttr("tensorium.init.coord_names",
+                     makeStrArrayAttr(coordNames));
     Block *dstBlock = lowered.addEntryBlock();
     b.setInsertionPointToEnd(dstBlock);
 
-    Value mArg = dstBlock->getArgument(0);
-    Value rArg = dstBlock->getArgument(1);
-    Value thetaArg = dstBlock->getArgument(2);
-    Value phiArg = dstBlock->getArgument(3);
-    Value alphaOut = dstBlock->getArgument(4);
-    Value gammaOut = dstBlock->getArgument(5);
-    Value gammaUOut = dstBlock->getArgument(6);
+    unsigned argIdx = 0;
+    llvm::StringMap<Value> paramArgs;
+    llvm::StringMap<Value> coordArgs;
+    for (const auto &name : paramNames)
+      paramArgs[name] = dstBlock->getArgument(argIdx++);
+    for (const auto &name : coordNames)
+      coordArgs[name] = dstBlock->getArgument(argIdx++);
+    Value alphaOut = dstBlock->getArgument(argIdx++);
+    Value gammaOut = dstBlock->getArgument(argIdx++);
+    Value gammaUOut = dstBlock->getArgument(argIdx++);
 
     DenseMap<Value, Value> scalarVals;
     DenseMap<Value, std::array<Value, 3>> covectorVals;
@@ -85,29 +190,26 @@ struct InitToStdPass
       }
 
       if (auto p = dyn_cast<ParamOp>(&op)) {
-        if (p.getName() == "M") {
-          scalarVals[p.getResult()] = mArg;
-          continue;
+        auto it = paramArgs.find(p.getName());
+        if (it == paramArgs.end()) {
+          op.emitError("init-to-std: missing runtime parameter")
+              << " '" << p.getName() << "'";
+          signalPassFailure();
+          return;
         }
-        op.emitError("init-to-std: unsupported runtime parameter")
-            << " '" << p.getName() << "'";
-        signalPassFailure();
-        return;
+        scalarVals[p.getResult()] = it->second;
+        continue;
       }
 
       if (auto c = dyn_cast<CoordOp>(&op)) {
-        if (c.getName() == "r")
-          scalarVals[c.getResult()] = rArg;
-        else if (c.getName() == "theta")
-          scalarVals[c.getResult()] = thetaArg;
-        else if (c.getName() == "phi")
-          scalarVals[c.getResult()] = phiArg;
-        else {
-          op.emitError("init-to-std: unsupported coordinate symbol")
+        auto it = coordArgs.find(c.getName());
+        if (it == coordArgs.end()) {
+          op.emitError("init-to-std: missing coordinate value")
               << " '" << c.getName() << "'";
           signalPassFailure();
           return;
         }
+        scalarVals[c.getResult()] = it->second;
         continue;
       }
 

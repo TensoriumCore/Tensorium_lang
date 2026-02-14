@@ -12,6 +12,7 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
@@ -21,6 +22,7 @@
 #include <unordered_set>
 #include <vector>
 #include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/StringSet.h>
 
 using namespace mlir;
 
@@ -127,15 +129,37 @@ static std::vector<std::string> getContractedNames(ContractOp op,
   return names;
 }
 
+static std::vector<std::string> collectRhsParamNames(func::FuncOp rhs) {
+  llvm::StringSet<> seen;
+  rhs.walk([&](ParamOp p) { seen.insert(p.getName()); });
+
+  std::vector<std::string> out;
+  out.reserve(seen.size());
+  for (const auto &entry : seen)
+    out.push_back(entry.getKey().str());
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
 class RhsScalarizer {
 public:
+  struct PendingStore {
+    Value memref;
+    Value flat;
+    Value value;
+  };
+
   RhsScalarizer(OpBuilder &b, Location loc, func::FuncOp srcRhs,
                 Value nx, Value ny, Value nz, Value dx, Value dy, Value dz,
                 Value ix, Value iy, Value iz,
-                llvm::ArrayRef<Value> fieldMemrefs)
+                llvm::ArrayRef<Value> inputFieldMemrefs,
+                llvm::ArrayRef<Value> outputFieldMemrefs,
+                const llvm::StringMap<Value> &paramScalarsIn)
       : b(b), loc(loc), srcRhs(srcRhs), nx(nx), ny(ny), nz(nz), dx(dx), dy(dy),
-        dz(dz), ix(ix), iy(iy), iz(iz), fieldMemrefs(fieldMemrefs.begin(),
-                                                     fieldMemrefs.end()) {
+        dz(dz), ix(ix), iy(iy), iz(iz),
+        inputFieldMemrefs(inputFieldMemrefs.begin(), inputFieldMemrefs.end()),
+        outputFieldMemrefs(outputFieldMemrefs.begin(), outputFieldMemrefs.end()),
+        paramScalars(paramScalarsIn) {
     nPoints = arith::MulIOp::create(b, loc, nx, ny);
     nPoints = arith::MulIOp::create(b, loc, nPoints, nz);
   }
@@ -147,7 +171,7 @@ public:
       return failure();
     }
 
-    if (fieldArg.getArgNumber() >= fieldMemrefs.size()) {
+    if (fieldArg.getArgNumber() >= outputFieldMemrefs.size()) {
       dt.emitError("rhs-grid-scf: dt_assign field argument index out of range");
       return failure();
     }
@@ -186,11 +210,18 @@ public:
       Value base = arith::MulIOp::create(b, loc, cComp, nPoints);
       Value flat = arith::AddIOp::create(b, loc, base, linear);
       Value outVal = rhs.comps[*rhsCompOr];
-      memref::StoreOp::create(b, loc, outVal, fieldMemrefs[fieldArg.getArgNumber()],
-                              ValueRange{flat});
+      pendingStores.push_back(
+          PendingStore{outputFieldMemrefs[fieldArg.getArgNumber()], flat, outVal});
     }
 
     return success();
+  }
+
+  void flushPendingStores() {
+    for (const PendingStore &s : pendingStores) {
+      memref::StoreOp::create(b, loc, s.value, s.memref, ValueRange{s.flat});
+    }
+    pendingStores.clear();
   }
 
 private:
@@ -217,7 +248,7 @@ private:
         ref.emitError("rhs-grid-scf: ref source must be rhs block argument");
         return failure();
       }
-      if (srcArg.getArgNumber() >= fieldMemrefs.size()) {
+      if (srcArg.getArgNumber() >= inputFieldMemrefs.size()) {
         ref.emitError("rhs-grid-scf: ref source arg index out of range");
         return failure();
       }
@@ -256,8 +287,39 @@ private:
         Value base = arith::MulIOp::create(b, loc, cComp, nPoints);
         Value flat = arith::AddIOp::create(b, loc, base, lin);
         out.comps.push_back(memref::LoadOp::create(
-            b, loc, fieldMemrefs[srcArg.getArgNumber()], ValueRange{flat}));
+            b, loc, inputFieldMemrefs[srcArg.getArgNumber()], ValueRange{flat}));
       }
+      return out;
+    }
+
+    if (auto p = dyn_cast_or_null<ParamOp>(v.getDefiningOp())) {
+      auto it = paramScalars.find(p.getName());
+      if (it == paramScalars.end()) {
+        p.emitError("rhs-grid-scf: missing runtime scalar argument for param '")
+            << p.getName() << "'";
+        return failure();
+      }
+      TensorScalars out;
+      out.indices.clear();
+      out.comps.push_back(it->second);
+      return out;
+    }
+
+    if (auto c = dyn_cast_or_null<CoordOp>(v.getDefiningOp())) {
+      auto axis = coordAxis(c.getName());
+      if (!axis) {
+        c.emitError("rhs-grid-scf: unsupported coordinate symbol '")
+            << c.getName() << "'";
+        return failure();
+      }
+
+      Value idx = *axis == 0 ? ix : (*axis == 1 ? iy : iz);
+      Value spacing = *axis == 0 ? dx : (*axis == 1 ? dy : dz);
+      Value coord = arith::MulFOp::create(b, loc, indexToF64(idx), spacing);
+
+      TensorScalars out;
+      out.indices.clear();
+      out.comps.push_back(coord);
       return out;
     }
 
@@ -445,16 +507,6 @@ private:
       return out;
     }
 
-    if (auto p = dyn_cast_or_null<ParamOp>(v.getDefiningOp())) {
-      p.emitError("rhs-grid-scf: param in RHS is not supported in this pass");
-      return failure();
-    }
-
-    if (auto c = dyn_cast_or_null<CoordOp>(v.getDefiningOp())) {
-      c.emitError("rhs-grid-scf: coord in RHS is not supported in this pass");
-      return failure();
-    }
-
     if (auto *op = v.getDefiningOp()) {
       op->emitError("rhs-grid-scf: unsupported op in RHS scalarization: ")
           << op->getName().getStringRef();
@@ -621,6 +673,21 @@ private:
     return arith::AddIOp::create(b, loc, xyz, z);
   }
 
+  Value indexToF64(Value idx) {
+    Value i64 = arith::IndexCastOp::create(b, loc, b.getI64Type(), idx);
+    return arith::SIToFPOp::create(b, loc, b.getF64Type(), i64);
+  }
+
+  std::optional<unsigned> coordAxis(llvm::StringRef name) const {
+    if (name == "x" || name == "r" || name == "rho" || name == "i")
+      return 0u;
+    if (name == "y" || name == "theta" || name == "j")
+      return 1u;
+    if (name == "z" || name == "phi" || name == "k")
+      return 2u;
+    return std::nullopt;
+  }
+
   OpBuilder &b;
   Location loc;
   func::FuncOp srcRhs;
@@ -633,8 +700,11 @@ private:
   Value ix;
   Value iy;
   Value iz;
-  SmallVector<Value> fieldMemrefs;
+  SmallVector<Value> inputFieldMemrefs;
+  SmallVector<Value> outputFieldMemrefs;
+  llvm::StringMap<Value> paramScalars;
   Value nPoints;
+  SmallVector<PendingStore> pendingStores;
   static constexpr unsigned spatialDim = 3;
 };
 
@@ -661,6 +731,7 @@ struct RhsGridScfPass
     Type idxTy = b.getIndexType();
     Type f64 = b.getF64Type();
     Type dynMemF64 = MemRefType::get({ShapedType::kDynamic}, f64);
+    std::vector<std::string> paramNames = collectRhsParamNames(rhs);
 
     SmallVector<Type> args;
     args.push_back(idxTy); // nx
@@ -669,6 +740,8 @@ struct RhsGridScfPass
     args.push_back(f64);   // dx
     args.push_back(f64);   // dy
     args.push_back(f64);   // dz
+    for (std::size_t i = 0; i < paramNames.size(); ++i)
+      args.push_back(f64); // runtime scalar param
     for (Type argTy : rhs.getFunctionType().getInputs()) {
       if (!isa<FieldType>(argTy)) {
         rhs.emitError("rhs-grid-scf: expected tensorium.field arg in tensorium_rhs");
@@ -689,11 +762,28 @@ struct RhsGridScfPass
     Value dx = entry->getArgument(3);
     Value dy = entry->getArgument(4);
     Value dz = entry->getArgument(5);
+    const unsigned paramBase = 6;
+    const unsigned fieldBase = paramBase + static_cast<unsigned>(paramNames.size());
+
+    llvm::StringMap<Value> paramScalars;
+    for (unsigned i = 0; i < paramNames.size(); ++i)
+      paramScalars[paramNames[i]] = entry->getArgument(paramBase + i);
 
     SmallVector<Value> fieldMemrefs;
     fieldMemrefs.reserve(rhs.getNumArguments());
     for (unsigned i = 0; i < rhs.getNumArguments(); ++i)
-      fieldMemrefs.push_back(entry->getArgument(6 + i));
+      fieldMemrefs.push_back(entry->getArgument(fieldBase + i));
+
+    SmallVector<Value> snapshotMemrefs;
+    snapshotMemrefs.reserve(fieldMemrefs.size());
+    Value zeroIdx = arith::ConstantIndexOp::create(b, loc, 0);
+    for (Value mem : fieldMemrefs) {
+      Value size = memref::DimOp::create(b, loc, mem, zeroIdx);
+      auto snap = memref::AllocOp::create(
+          b, loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
+      memref::CopyOp::create(b, loc, mem, snap);
+      snapshotMemrefs.push_back(snap);
+    }
 
     Value c1 = arith::ConstantIndexOp::create(b, loc, 1);
     Value c2 = arith::ConstantIndexOp::create(b, loc, 2);
@@ -714,7 +804,7 @@ struct RhsGridScfPass
       Value iz = loopZ.getInductionVar();
 
       RhsScalarizer scalarizer(ib, loc, rhs, nx, ny, nz, dx, dy, dz, ix, iy, iz,
-                               fieldMemrefs);
+                               snapshotMemrefs, fieldMemrefs, paramScalars);
 
       for (Operation &op : rhs.getBody().front().without_terminator()) {
         if (auto dt = dyn_cast<DtAssignOp>(&op)) {
@@ -724,9 +814,12 @@ struct RhsGridScfPass
           }
         }
       }
+      scalarizer.flushPendingStores();
     }
 
     b.setInsertionPointAfter(loopX);
+    for (Value snap : snapshotMemrefs)
+      memref::DeallocOp::create(b, loc, snap);
     func::ReturnOp::create(b, loc);
 
     module.push_back(outFn);
@@ -757,6 +850,7 @@ struct RhsGridAffinePass
     Type idxTy = b.getIndexType();
     Type f64 = b.getF64Type();
     Type dynMemF64 = MemRefType::get({ShapedType::kDynamic}, f64);
+    std::vector<std::string> paramNames = collectRhsParamNames(rhs);
 
     SmallVector<Type> args;
     args.push_back(idxTy); // nx
@@ -765,6 +859,8 @@ struct RhsGridAffinePass
     args.push_back(f64);   // dx
     args.push_back(f64);   // dy
     args.push_back(f64);   // dz
+    for (std::size_t i = 0; i < paramNames.size(); ++i)
+      args.push_back(f64); // runtime scalar param
     for (Type argTy : rhs.getFunctionType().getInputs()) {
       if (!isa<FieldType>(argTy)) {
         rhs.emitError(
@@ -786,11 +882,28 @@ struct RhsGridAffinePass
     Value dx = entry->getArgument(3);
     Value dy = entry->getArgument(4);
     Value dz = entry->getArgument(5);
+    const unsigned paramBase = 6;
+    const unsigned fieldBase = paramBase + static_cast<unsigned>(paramNames.size());
+
+    llvm::StringMap<Value> paramScalars;
+    for (unsigned i = 0; i < paramNames.size(); ++i)
+      paramScalars[paramNames[i]] = entry->getArgument(paramBase + i);
 
     SmallVector<Value> fieldMemrefs;
     fieldMemrefs.reserve(rhs.getNumArguments());
     for (unsigned i = 0; i < rhs.getNumArguments(); ++i)
-      fieldMemrefs.push_back(entry->getArgument(6 + i));
+      fieldMemrefs.push_back(entry->getArgument(fieldBase + i));
+
+    SmallVector<Value> snapshotMemrefs;
+    snapshotMemrefs.reserve(fieldMemrefs.size());
+    Value zeroIdx = arith::ConstantIndexOp::create(b, loc, 0);
+    for (Value mem : fieldMemrefs) {
+      Value size = memref::DimOp::create(b, loc, mem, zeroIdx);
+      auto snap = memref::AllocOp::create(
+          b, loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
+      memref::CopyOp::create(b, loc, mem, snap);
+      snapshotMemrefs.push_back(snap);
+    }
 
     Value c2 = arith::ConstantIndexOp::create(b, loc, 2);
     Value ubX = arith::SubIOp::create(b, loc, nx, c2);
@@ -817,7 +930,7 @@ struct RhsGridAffinePass
       Value iz = loopZ.getInductionVar();
 
       RhsScalarizer scalarizer(ib, loc, rhs, nx, ny, nz, dx, dy, dz, ix, iy,
-                               iz, fieldMemrefs);
+                               iz, snapshotMemrefs, fieldMemrefs, paramScalars);
 
       for (Operation &op : rhs.getBody().front().without_terminator()) {
         if (auto dt = dyn_cast<DtAssignOp>(&op)) {
@@ -827,9 +940,12 @@ struct RhsGridAffinePass
           }
         }
       }
+      scalarizer.flushPendingStores();
     }
 
     b.setInsertionPointAfter(loopX);
+    for (Value snap : snapshotMemrefs)
+      memref::DeallocOp::create(b, loc, snap);
     func::ReturnOp::create(b, loc);
 
     module.push_back(outFn);
