@@ -1,0 +1,23 @@
+field scalar phi
+
+simulation {
+  dimension = 1
+  resolution = [4]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution TempOrderValidate {
+  L = K
+  K = phi * phi
+  dt phi = L
+}

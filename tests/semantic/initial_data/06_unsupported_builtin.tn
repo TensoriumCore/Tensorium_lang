@@ -1,5 +1,7 @@
 field metric g[mu,nu]
 
+params { M }
+
 simulation {
   coordinates = spherical
   dimension = 3

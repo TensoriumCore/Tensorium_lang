@@ -7,6 +7,7 @@ add_library(tensoriumCore
   Runtime/Eval.cpp
   Sema/CallSupport.cpp
   Sema/Sema.cpp
+  Sema/SemaInitialData.cpp
 )
 
 target_include_directories(tensoriumCore PUBLIC
@@ -206,7 +207,11 @@ target_link_libraries(tensoriumMlirTransforms PUBLIC
 add_library(tensoriumMlirCodegen
   tensorium_mlir/Target/MLIRGen/InitEvaluator.cpp
   tensorium_mlir/Target/MLIRGen/RhsEvaluator.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenShared.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenInitialData.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenExpr.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenPipeline.cpp
   tensorium_mlir/Init/Registry.cpp
   tensorium_mlir/Init/Passes.cpp
   tensorium_mlir/Pipeline/Pipeline.cpp
@@ -228,4 +233,14 @@ target_link_libraries(tensorium_mlir_backend INTERFACE
   tensoriumMlirTransforms
   tensoriumMlirIR
   tensoriumMlirSemantic
+)
+
+add_library(tensoriumCompilerAPI
+  API/Compiler.cpp
+)
+tensorium_configure_mlir_target(tensoriumCompilerAPI)
+target_link_libraries(tensoriumCompilerAPI PUBLIC
+  tensoriumLowering
+  tensoriumValidation
+  tensoriumMlirCodegen
 )

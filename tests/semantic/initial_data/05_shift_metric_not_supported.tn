@@ -6,6 +6,8 @@ field scalar H
 field cov_tensor2 gamma[i,j]
 field con_tensor2 gammaU[i,j]
 
+params { M }
+
 simulation {
   coordinates = spherical
   dimension = 3

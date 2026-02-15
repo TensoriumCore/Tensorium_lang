@@ -12,6 +12,8 @@ bool isExecutableBuiltin(std::string_view name) {
     return true;
   if (name == "divergence" || name == "div")
     return true;
+  if (name == "laplacian")
+    return true;
   if (name == "covariant_derivative")
     return true;
   if (name.size() == 7 && name.rfind("nabla_", 0) == 0 &&

@@ -22,7 +22,7 @@ Token Lexer::next() {
     }
     if (*src == '#') {
       while (*src && *src != '\n')
-        ++src;
+        advanceChar();
       continue;
     }
     break;
@@ -31,117 +31,119 @@ Token Lexer::next() {
     return {TokenType::End, "", line, col};
 
   char c = *src;
+  const int tokLine = line;
+  const int tokCol = col;
   switch (c) {
   case '(':
     advanceChar();
-    return {TokenType::LParen, "(", line, col - 1};
+    return {TokenType::LParen, "(", tokLine, tokCol};
   case ')':
     advanceChar();
-    return {TokenType::RParen, ")", line, col - 1};
+    return {TokenType::RParen, ")", tokLine, tokCol};
   case '{':
     advanceChar();
-    return {TokenType::LBrace, "{", line, col - 1};
+    return {TokenType::LBrace, "{", tokLine, tokCol};
   case '}':
     advanceChar();
-    return {TokenType::RBrace, "}", line, col - 1};
+    return {TokenType::RBrace, "}", tokLine, tokCol};
   case '[':
     advanceChar();
-    return {TokenType::LBracket, "[", line, col - 1};
+    return {TokenType::LBracket, "[", tokLine, tokCol};
   case ']':
     advanceChar();
-    return {TokenType::RBracket, "]", line, col - 1};
+    return {TokenType::RBracket, "]", tokLine, tokCol};
   case ',':
     advanceChar();
-    return {TokenType::Comma, ",", line, col - 1};
+    return {TokenType::Comma, ",", tokLine, tokCol};
   case ';':
     advanceChar();
-    return {TokenType::Semicolon, ";", line, col - 1};
+    return {TokenType::Semicolon, ";", tokLine, tokCol};
   case '=':
     advanceChar();
-    return {TokenType::Equals, "=", line, col - 1};
+    return {TokenType::Equals, "=", tokLine, tokCol};
   case '+':
     advanceChar();
-    return {TokenType::Plus, "+", line, col - 1};
+    return {TokenType::Plus, "+", tokLine, tokCol};
   case '-':
     if (*(src + 1) == '>') {
-      int tokLine = line;
-      int tokCol = col;
       advanceChar();
       advanceChar();
       return {TokenType::Arrow, "->", tokLine, tokCol};
     }
     advanceChar();
-    return {TokenType::Minus, "-", line, col - 1};
+    return {TokenType::Minus, "-", tokLine, tokCol};
   case '*':
     advanceChar();
-    return {TokenType::Star, "*", line, col - 1};
+    return {TokenType::Star, "*", tokLine, tokCol};
   case '/':
     advanceChar();
-    return {TokenType::Slash, "/", line, col - 1};
+    return {TokenType::Slash, "/", tokLine, tokCol};
   case '^':
     advanceChar();
-    return {TokenType::Caret, "^", line, col - 1};
+    return {TokenType::Caret, "^", tokLine, tokCol};
   }
 
   if (isdigit((unsigned char)c) ||
       (c == '.' && isdigit((unsigned char)*(src + 1)))) {
-    const char *s = src;
+    const char *start = src;
     while (isdigit((unsigned char)*src) || *src == '.')
-      ++src;
-    return {TokenType::Number, std::string(s, src), line, col};
+      advanceChar();
+    return {TokenType::Number, std::string(start, src), tokLine, tokCol};
   }
 
   if (isalpha((unsigned char)c)) {
-    const char *s = src;
+    const char *start = src;
     while (isalnum((unsigned char)*src) || *src == '_')
-      ++src;
-    std::string t(s, src);
+      advanceChar();
+    std::string t(start, src);
     if (t == "spacetime")
-      return {TokenType::KwSpacetime, t, line, col};
+      return {TokenType::KwSpacetime, t, tokLine, tokCol};
     if (t == "metric")
-      return {TokenType::KwMetric, t, line, col};
+      return {TokenType::KwMetric, t, tokLine, tokCol};
+    if (t == "params")
+      return {TokenType::KwParams, t, tokLine, tokCol};
     if (t == "inverse_metric")
-      return {TokenType::KwInverseMetric, t, line, col};
+      return {TokenType::KwInverseMetric, t, tokLine, tokCol};
     if (t == "evolution")
-      return {TokenType::KwEvolution, t, line, col};
+      return {TokenType::KwEvolution, t, tokLine, tokCol};
     if (t == "dt")
-      return {TokenType::KwDt, t, line, col};
+      return {TokenType::KwDt, t, tokLine, tokCol};
     if (t == "field")
-      return {TokenType::KwField, t, line, col};
+      return {TokenType::KwField, t, tokLine, tokCol};
     if (t == "extern")
-      return {TokenType::KwExtern, t, line, col};
+      return {TokenType::KwExtern, t, tokLine, tokCol};
     if (t == "scalar")
-      return {TokenType::KwScalar, t, line, col};
+      return {TokenType::KwScalar, t, tokLine, tokCol};
     if (t == "vector")
-      return {TokenType::KwVector, t, line, col};
+      return {TokenType::KwVector, t, tokLine, tokCol};
     if (t == "covector")
-      return {TokenType::KwCovector, t, line, col};
+      return {TokenType::KwCovector, t, tokLine, tokCol};
     if (t == "cov_tensor2")
-      return {TokenType::KwCovTensor2, t, line, col};
+      return {TokenType::KwCovTensor2, t, tokLine, tokCol};
     if (t == "con_tensor2")
-      return {TokenType::KwConTensor2, t, line, col};
+      return {TokenType::KwConTensor2, t, tokLine, tokCol};
     if (t == "cov_tensor3")
-      return {TokenType::KwCovTensor3, t, line, col};
+      return {TokenType::KwCovTensor3, t, tokLine, tokCol};
     if (t == "con_tensor3")
-      return {TokenType::KwConTensor3, t, line, col};
+      return {TokenType::KwConTensor3, t, tokLine, tokCol};
     if (t == "cov_tensor4")
-      return {TokenType::KwCovTensor4, t, line, col};
+      return {TokenType::KwCovTensor4, t, tokLine, tokCol};
     if (t == "con_tensor4")
-      return {TokenType::KwConTensor4, t, line, col};
+      return {TokenType::KwConTensor4, t, tokLine, tokCol};
     if (t == "simulation")
-      return {TokenType::KwSimulation, t, line, col};
+      return {TokenType::KwSimulation, t, tokLine, tokCol};
     if (t == "initial_data")
-      return {TokenType::KwInitialData, t, line, col};
+      return {TokenType::KwInitialData, t, tokLine, tokCol};
     if (t == "metric4")
-      return {TokenType::KwMetric4, t, line, col};
+      return {TokenType::KwMetric4, t, tokLine, tokCol};
     if (t == "time")
-      return {TokenType::KwTime, t, line, col};
+      return {TokenType::KwTime, t, tokLine, tokCol};
     if (t == "spatial")
-      return {TokenType::KwSpatial, t, line, col};
-    return {TokenType::Identifier, t, line, col};
+      return {TokenType::KwSpatial, t, tokLine, tokCol};
+    return {TokenType::Identifier, t, tokLine, tokCol};
   }
   std::string u(1, c);
   advanceChar();
-  return {TokenType::Unknown, u, line, col - 1};
+  return {TokenType::Unknown, u, tokLine, tokCol};
 }
 } // namespace tensorium

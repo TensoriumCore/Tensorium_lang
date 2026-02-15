@@ -55,6 +55,15 @@ void printExpr(const Expr *e) {
 
 void printProgram(const Program &prog) {
   std::cout << "=== Program AST ===\n";
+  if (!prog.params.empty()) {
+    std::cout << "\nParams:\n  params {";
+    for (size_t i = 0; i < prog.params.size(); ++i) {
+      std::cout << prog.params[i];
+      if (i + 1 < prog.params.size())
+        std::cout << ", ";
+    }
+    std::cout << "}\n";
+  }
   if (!prog.externs.empty()) {
     std::cout << "\nExtern Functions:\n";
     auto printTensorType = [](const TensorTypeDesc &t) {

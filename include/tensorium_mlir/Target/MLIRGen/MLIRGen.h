@@ -50,7 +50,8 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
                 bool *pipelineSuccess = nullptr);
 
 bool emitMLIR(const tensorium::backend::ModuleIR &module,
-              const MLIRGenOptions &opts = {});
+              const MLIRGenOptions &opts = {},
+              std::string *mlirText = nullptr);
 
 bool emitLLVMIR(const tensorium::backend::ModuleIR &module,
                 const MLIRGenOptions &opts = {},

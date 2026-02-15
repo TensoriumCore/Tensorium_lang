@@ -1,0 +1,25 @@
+field scalar g
+
+metric g(i,j) {
+  g[i,j] = 1
+}
+
+simulation {
+  dimension = 2
+  resolution = [8, 8]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution Collision {
+  dt g = g
+}

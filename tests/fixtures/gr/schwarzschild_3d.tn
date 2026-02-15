@@ -8,6 +8,8 @@ field cov_tensor2 gamma[i,j]
 field con_tensor2 gammaU[i,j]
 field cov_tensor2 K[i,j]
 
+params { M }
+
 simulation {
   coordinates = spherical
   dimension = 3

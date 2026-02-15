@@ -44,10 +44,12 @@ VALID_TESTS=(
   tests/23_bssn_like_with_riemann_contract.tn
   tests/24_Ricci_conformal_flat.tn
   tests/25_deriv_stencil.tn
+  tests/semantic/diff/05_laplacian_executable_not_supported.tn
   tests/50_large_tensor_mix.tn
   tests/51_large_tensor_flux.tn
   tests/56_metric_decl_ok.tn
   tests/31_temp_valid_scalar.tn
+  tests/semantic/robustness/04_explicit_parameter_declaration.tn
 )
 
 EXTERN_TESTS=(
@@ -98,10 +100,31 @@ SEMANTIC_DIFF_VALID_TESTS=(
   tests/semantic/diff/01_partial_scalar.tn
   tests/semantic/diff/02_partial_vector_rank_plus_one.tn
   tests/semantic/diff/03_covariant_with_gamma.tn
+  tests/semantic/diff/05_laplacian_executable_not_supported.tn
 )
 
 SEMANTIC_DIFF_ERROR_TESTS=(
   "tests/semantic/diff/04_covariant_without_gamma_error.tn|Covariant derivative requires connection tensor Gamma"
+)
+
+SEMANTIC_SIMULATION_ERROR_TESTS=(
+  "tests/semantic/simulation/01_missing_block.tn|E1001: missing simulation block in executable mode"
+  "tests/semantic/simulation/02_missing_time_block.tn|simulation block requires 'time { dt = ... integrator = ... }'"
+  "tests/semantic/simulation/03_missing_spatial_block.tn|simulation block requires 'spatial { scheme = ... derivative = ... order = ... }'"
+  "tests/semantic/simulation/04_time_missing_integrator.tn|time block requires 'integrator = euler|rk3|rk4'"
+  "tests/semantic/simulation/05_duplicate_dimension_entry.tn|duplicate 'dimension' entry in simulation block"
+)
+
+SEMANTIC_SIMULATION_SYMBOLIC_WARN_TESTS=(
+  "tests/semantic/simulation/01_missing_block.tn|W1001: missing simulation block in symbolic mode"
+)
+
+SEMANTIC_ROBUSTNESS_ERROR_TESTS=(
+  "tests/semantic/robustness/01_unknown_identifier_strict.tn|Unknown identifier: alph"
+  "tests/semantic/robustness/02_evolution_scope_isolated.tn|Unknown identifier: tmp"
+  "tests/semantic/robustness/03_field_metric_name_collision.tn|Name collision: field 'g' conflicts with metric 'g'"
+  "tests/semantic/robustness/05_initial_data_unknown_parameter.tn|uses unknown identifier 'M'"
+  "tests/semantic/robustness/06_temp_use_before_def_validate.tn|temporary 'K' referenced before definition"
 )
 
 INITIAL_DATA_ERROR_TESTS=(
@@ -124,9 +147,13 @@ GR_FIXTURES=(
   tests/fixtures/gr/schwarzschild_2d.tn
   tests/fixtures/gr/schwarzschild_3d.tn
   tests/fixtures/gr/schwarzschild_christoffel_3d.tn
+  tests/fixtures/gr/schwarzschild_ricci_3d.tn
+  tests/fixtures/gr/minkowski_ricci_3d.tn
   tests/fixtures/gr/reissner_nordstrom_3d.tn
+  tests/fixtures/gr/reissner_nordstrom_christoffel_3d.tn
   tests/fixtures/gr/spatial_offdiag_3d.tn
   tests/fixtures/gr/kerr_like_3d.tn
+  tests/fixtures/gr/kerr_like_christoffel_3d.tn
 )
 
 SYMBOLIC_VALID_TESTS=(
@@ -157,13 +184,44 @@ echo "=============================="
 
 for f in "${VALID_TESTS[@]}"; do
   echo "[OK EXPECTED] $f"
-  "$BIN" "${PIPELINE_DISS[@]}" --dump-mlir "$f" \
+  "$BIN" --mlir-best-effort "${PIPELINE_DISS[@]}" --dump-mlir "$f" \
     > "$OUT/$(basename "$f").mlir"
 done
 
 PRIMARY_MLIR="$OUT/$(basename ${VALID_TESTS[0]}).mlir"
 if ! grep -q "tensorium.field" "$PRIMARY_MLIR"; then
   echo "ERROR: expected tensorium.field types in $PRIMARY_MLIR"
+  exit 1
+fi
+
+LAPLACIAN_MLIR="$OUT/$(basename tests/semantic/diff/05_laplacian_executable_not_supported.tn).mlir"
+if ! grep -q "tensorium.contract" "$LAPLACIAN_MLIR"; then
+  echo "ERROR: expected tensorium.contract in laplacian lowering output"
+  exit 1
+fi
+
+echo
+echo "=============================="
+echo " TEST EMIT ARTIFACT FLAGS"
+echo "=============================="
+EMIT_MLIR_OUT="$OUT/emit_scalar.mlir"
+EMIT_LLVM_OUT="$OUT/emit_scalar.ll"
+"$BIN" --emit-mlir "$EMIT_MLIR_OUT" tests/01_scalar_minimal.tn > /dev/null
+if [[ ! -s "$EMIT_MLIR_OUT" ]]; then
+  echo "ERROR: --emit-mlir did not produce output file"
+  exit 1
+fi
+if ! grep -q "module" "$EMIT_MLIR_OUT"; then
+  echo "ERROR: --emit-mlir output does not look like MLIR module"
+  exit 1
+fi
+"$BIN" --emit-llvm "$EMIT_LLVM_OUT" tests/01_scalar_minimal.tn > /dev/null
+if [[ ! -s "$EMIT_LLVM_OUT" ]]; then
+  echo "ERROR: --emit-llvm did not produce output file"
+  exit 1
+fi
+if ! grep -q "define" "$EMIT_LLVM_OUT"; then
+  echo "ERROR: --emit-llvm output does not look like LLVM IR"
   exit 1
 fi
 
@@ -267,6 +325,76 @@ done
 
 echo
 echo "=============================="
+echo " RUN SEMANTIC SIMULATION TESTS"
+echo "=============================="
+
+for entry in "${SEMANTIC_SIMULATION_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SEMANTIC FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected simulation diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+for entry in "${SEMANTIC_SIMULATION_SYMBOLIC_WARN_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SYMBOLIC WARN EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if ! "$BIN" --symbolic "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: symbolic mode unexpectedly failed for $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected symbolic warning '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
+echo " RUN SEMANTIC ROBUSTNESS TESTS"
+echo "=============================="
+
+for entry in "${SEMANTIC_ROBUSTNESS_ERROR_TESTS[@]}"; do
+  f=${entry%%|*}
+  msg=${entry#*|}
+  echo "[SEMANTIC FAIL EXPECTED] $f"
+  TMP_ERR=$(mktemp)
+  if "$BIN" --validate "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: $f was expected to fail but passed"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "$msg" "$TMP_ERR"; then
+    echo "ERROR: expected robustness diagnostic '$msg' in $f"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+echo
+echo "=============================="
 echo " RUN GR FIXTURE CHECKS"
 echo "=============================="
 
@@ -294,6 +422,28 @@ for f in "${INITIAL_DATA_VALID_TESTS[@]}"; do
   echo "[INITIAL_DATA OK EXPECTED] $f"
   "$BIN" "${PIPELINE_BASE[@]}" "$f" > /dev/null
 done
+
+echo
+echo "=============================="
+echo " RUN INITIAL DATA PARAM LOWERING CHECK"
+echo "=============================="
+
+RN_INIT_FIXTURE=tests/fixtures/gr/reissner_nordstrom_3d.tn
+RN_INIT_OUT="$OUT/reissner_nordstrom_init.mlir"
+"$BIN" --tensorium-metric-lower --tensorium-init-std-lower --dump-mlir \
+  "$RN_INIT_FIXTURE" > "$RN_INIT_OUT"
+if ! grep -q "tensorium_init_point" "$RN_INIT_OUT"; then
+  echo "ERROR: expected tensorium_init_point after init-to-std lowering"
+  exit 1
+fi
+if ! grep -q "tensorium.init.param_names" "$RN_INIT_OUT"; then
+  echo "ERROR: expected param metadata on tensorium_init_point"
+  exit 1
+fi
+if ! grep -q "\"Q\"" "$RN_INIT_OUT"; then
+  echo "ERROR: expected Q runtime parameter in init lowering metadata"
+  exit 1
+fi
 
 echo
 echo "=============================="
@@ -427,11 +577,54 @@ done
 
 echo
 echo "=============================="
+echo " RUN BSSN DEFAULT LLVM PIPELINE"
+echo "=============================="
+
+BSSN_DEFAULT_LL="$OUT/07_bssn_reduced.default.ll"
+RAW_BSSN_LL="$(mktemp)"
+"$BIN" --dump-llvm-ir tests/07_bssn_reduced.tn > "$RAW_BSSN_LL"
+awk '
+  /^\[Tensorium\]/ {exit}
+  {print}
+' "$RAW_BSSN_LL" > "$BSSN_DEFAULT_LL"
+rm -f "$RAW_BSSN_LL"
+if ! grep -q "define void @tensorium_rhs_grid_affine" "$BSSN_DEFAULT_LL"; then
+  echo "ERROR: expected default LLVM pipeline to lower BSSN RHS grid kernel"
+  exit 1
+fi
+
+echo
+echo "=============================="
+echo " RUN BSSN RHS LLVM SMOKE"
+echo "=============================="
+
+bash tools/dev/test_bssn_reduced_ll.sh
+
+echo
+echo "=============================="
+echo " RUN BSSN RK2 LLVM SMOKE"
+echo "=============================="
+
+bash tools/dev/test_bssn_reduced_rk2_ll.sh
+
+echo
+echo "=============================="
+echo " RUN BSSN MINIMAL LLVM SMOKE"
+echo "=============================="
+
+bash tools/dev/test_bssn_minimal_ll.sh
+
+echo
+echo "=============================="
 echo " RUN LLVM IR COMPILE+RUN SMOKE"
 echo "=============================="
 
 bash tools/dev/test_schwarzschild_ll.sh
 bash tools/dev/test_schwarzschild_christoffel_ll.sh
+bash tools/dev/test_reissner_christoffel_ll.sh
+bash tools/dev/test_kerr_like_christoffel_ll.sh
+bash tools/dev/test_minkowski_ricci_ll.sh
+bash tools/dev/test_covariant_rank1_ll.sh
 
 echo
 echo "=============================="

@@ -1,4 +1,5 @@
 #include "tensorium/Backend/BackendBuilder.hpp"
+#include "tensorium/API/Compiler.hpp"
 #include "tensorium/Core/IndexSet.h"
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
@@ -7,6 +8,7 @@
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
+#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 #include "tensorium_mlir/Target/MLIRGen/RhsEvaluator.h"
@@ -17,6 +19,7 @@
 #include "mlir/IR/Operation.h"
 
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <functional>
 #include <fstream>
@@ -77,21 +80,29 @@ static tensorium_mlir::MLIRGenOptions makeExecutablePipelineOpts() {
 }
 
 static ::mlir::OwningOpRef<::mlir::ModuleOp>
-buildMLIRModuleFromFileWithOpts(const std::string &path, CompilationMode mode,
-                                ::mlir::MLIRContext &ctx,
-                                const tensorium_mlir::MLIRGenOptions &opts) {
-  backend::ModuleIR mod = buildModuleFromFile(path, mode);
+buildMLIRModuleFromSourceWithOpts(const std::string &source,
+                                  CompilationMode mode,
+                                  ::mlir::MLIRContext &ctx,
+                                  const tensorium_mlir::MLIRGenOptions &opts) {
+  backend::ModuleIR mod = buildModuleFromSource(source, mode);
   validation::canonicalizeDifferentialIR(mod);
   validation::canonicalizeEinsteinIR(mod);
   auto verify = validation::verifyIR(mod);
   if (!verify.ok()) {
     std::ostringstream oss;
-    oss << "IR verification failed for " << path;
+    oss << "IR verification failed for inline source";
     for (const auto &diag : verify.diags)
       oss << "\n  - " << diag.message;
     throw std::runtime_error(oss.str());
   }
   return tensorium_mlir::buildMLIRModule(mod, ctx, opts);
+}
+
+static ::mlir::OwningOpRef<::mlir::ModuleOp>
+buildMLIRModuleFromFileWithOpts(const std::string &path, CompilationMode mode,
+                                ::mlir::MLIRContext &ctx,
+                                const tensorium_mlir::MLIRGenOptions &opts) {
+  return buildMLIRModuleFromSourceWithOpts(readFile(path), mode, ctx, opts);
 }
 
 static ::mlir::OwningOpRef<::mlir::ModuleOp>
@@ -254,6 +265,127 @@ static std::string joinStringArrayAttr(::mlir::ArrayAttr arr) {
     first = false;
   }
   return out;
+}
+
+static std::vector<std::string>
+parseStringArrayAttr(::mlir::ArrayAttr arr) {
+  std::vector<std::string> out;
+  if (!arr)
+    return out;
+  out.reserve(arr.size());
+  for (::mlir::Attribute attr : arr) {
+    auto s = llvm::dyn_cast<::mlir::StringAttr>(attr);
+    if (s)
+      out.push_back(s.getValue().str());
+  }
+  return out;
+}
+
+static std::vector<int64_t> parseI64ArrayAttr(::mlir::ArrayAttr arr) {
+  std::vector<int64_t> out;
+  if (!arr)
+    return out;
+  out.reserve(arr.size());
+  for (::mlir::Attribute attr : arr) {
+    auto i = llvm::dyn_cast<::mlir::IntegerAttr>(attr);
+    if (i)
+      out.push_back(i.getInt());
+  }
+  return out;
+}
+
+static bool verifyCommonGeneratedABIAttrs(::mlir::func::FuncOp fn,
+                                          const char *expectedKind,
+                                          std::string &error) {
+  if (!fn) {
+    error = "missing function for ABI check";
+    return false;
+  }
+
+  auto version = fn->getAttrOfType<::mlir::IntegerAttr>(
+      tensorium_mlir::abi::kAttrABIVersion);
+  if (!version ||
+      version.getInt() != tensorium_mlir::abi::kGeneratedKernelABIVersion) {
+    error = std::string("invalid ABI version on ") +
+            fn.getSymName().str();
+    return false;
+  }
+
+  auto kind = fn->getAttrOfType<::mlir::StringAttr>(
+      tensorium_mlir::abi::kAttrABIKind);
+  if (!kind || kind.getValue() != expectedKind) {
+    error = std::string("invalid ABI kind on ") + fn.getSymName().str();
+    return false;
+  }
+
+  auto memLayout = fn->getAttrOfType<::mlir::StringAttr>(
+      tensorium_mlir::abi::kAttrMemoryLayout);
+  if (!memLayout ||
+      memLayout.getValue() != tensorium_mlir::abi::kMemLayoutSoAComponentMajor) {
+    error = std::string("invalid memory layout attr on ") +
+            fn.getSymName().str();
+    return false;
+  }
+
+  auto memrefABI = fn->getAttrOfType<::mlir::StringAttr>(
+      tensorium_mlir::abi::kAttrMemrefABI);
+  if (!memrefABI ||
+      memrefABI.getValue() != tensorium_mlir::abi::kMemrefABI1DStridedF64) {
+    error = std::string("invalid memref ABI attr on ") +
+            fn.getSymName().str();
+    return false;
+  }
+
+  return true;
+}
+
+static std::string trimCopy(const std::string &s) {
+  std::size_t begin = 0;
+  while (begin < s.size() && std::isspace(static_cast<unsigned char>(s[begin])))
+    ++begin;
+  std::size_t end = s.size();
+  while (end > begin &&
+         std::isspace(static_cast<unsigned char>(s[end - 1])))
+    --end;
+  return s.substr(begin, end - begin);
+}
+
+static bool llvmFunctionArgTypeTokens(const std::string &llvmIR,
+                                      const std::string &name,
+                                      std::vector<std::string> &typesOut) {
+  typesOut.clear();
+  const std::string needle = "define void @" + name + "(";
+  const std::size_t pos = llvmIR.find(needle);
+  if (pos == std::string::npos)
+    return false;
+
+  const std::size_t open = llvmIR.find('(', pos);
+  const std::size_t close = llvmIR.find(')', open);
+  if (open == std::string::npos || close == std::string::npos || close <= open)
+    return false;
+
+  const std::string args = llvmIR.substr(open + 1, close - open - 1);
+  if (trimCopy(args).empty())
+    return true;
+
+  std::size_t start = 0;
+  while (start < args.size()) {
+    std::size_t comma = args.find(',', start);
+    std::string piece =
+        trimCopy(args.substr(start, comma == std::string::npos
+                                       ? std::string::npos
+                                       : comma - start));
+    if (!piece.empty()) {
+      std::size_t space = piece.find(' ');
+      typesOut.push_back(piece.substr(0, space));
+    }
+
+    if (comma == std::string::npos)
+      break;
+    start = comma + 1;
+  }
+
+  return true;
 }
 
 static std::string typeShapeKey(::mlir::Type ty) {
@@ -1934,6 +2066,169 @@ static bool testSchwarzschildRhsGridScfLowering() {
   return true;
 }
 
+static bool testRhsGridScfRejectsImplicitParams() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridScfPass = true;
+
+  const std::string source = R"(
+field scalar phi
+
+simulation {
+  dimension = 1
+  resolution = [16]
+  time { dt = 0.05 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution ParamImplicit {
+  dt phi = M * phi
+}
+)";
+
+  try {
+    (void)buildMLIRModuleFromSourceWithOpts(source, CompilationMode::Executable,
+                                            ctx, opts);
+    std::cerr << "FAIL: implicit parameter 'M' should be rejected in strict "
+                 "semantic mode\n";
+    return false;
+  } catch (const std::exception &ex) {
+    const std::string msg = ex.what();
+    if (msg.find("Unknown identifier: M") == std::string::npos) {
+      std::cerr << "FAIL: expected unknown-identifier error for implicit "
+                   "parameter, got: "
+                << msg << "\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool testRhsExplicitParamDeclarationAccepted() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+
+  const std::string source = R"(
+field scalar phi
+
+params { M }
+
+simulation {
+  dimension = 1
+  resolution = [16]
+  time { dt = 0.05 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution ParamDeclared {
+  dt phi = M * phi
+}
+)";
+
+  auto module = buildMLIRModuleFromSourceWithOpts(
+      source, CompilationMode::Executable, ctx, opts);
+  auto rhs = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhs) {
+    std::cerr << "FAIL: missing tensorium_rhs for explicit parameter test\n";
+    return false;
+  }
+
+  bool hasParamOp = false;
+  rhs.walk([&](::mlir::Operation *op) {
+    if (llvm::isa<tensorium::mlir::ParamOp>(op))
+      hasParamOp = true;
+  });
+
+  if (!hasParamOp) {
+    std::cerr << "FAIL: expected tensorium.param op for declared parameter\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testRhsGridScfLoweringSupportsCoords() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridScfPass = true;
+
+  const std::string source = R"(
+field vector beta[i]
+
+simulation {
+  dimension = 3
+  resolution = [8, 8, 8]
+  time { dt = 0.01 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution CoordInRhs {
+  dt beta[i] = i * beta[i]
+}
+)";
+
+  auto module = buildMLIRModuleFromSourceWithOpts(
+      source, CompilationMode::Executable, ctx, opts);
+
+  auto rhsGrid =
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_scf");
+  if (!rhsGrid) {
+    std::cerr << "FAIL: missing tensorium_rhs_grid_scf for coord lowering test\n";
+    return false;
+  }
+
+  if (rhsGrid.getNumArguments() != 7) {
+    std::cerr << "FAIL: expected tensorium_rhs_grid_scf to have 7 args "
+                 "(nx,ny,nz,dx,dy,dz,beta), got "
+              << rhsGrid.getNumArguments() << "\n";
+    return false;
+  }
+
+  auto memTy = llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(6).getType());
+  if (!memTy || memTy.getRank() != 1 ||
+      memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
+      !memTy.getElementType().isF64()) {
+    std::cerr << "FAIL: rhs-grid-scf arg 6 must be memref<?xf64>\n";
+    return false;
+  }
+
+  bool hasTensoriumOp = false;
+  bool hasIndexToFloat = false;
+  bool spacingArgUsed = false;
+  rhsGrid.walk([&](::mlir::Operation *op) {
+    if (op != rhsGrid.getOperation() &&
+        op->getName().getDialectNamespace() == "tensorium") {
+      hasTensoriumOp = true;
+    }
+    if (op->getName().getStringRef() == "arith.sitofp")
+      hasIndexToFloat = true;
+    if (op->getName().getStringRef() != "arith.mulf")
+      return;
+    for (::mlir::Value operand : op->getOperands()) {
+      if (operand == rhsGrid.getArgument(3))
+        spacingArgUsed = true;
+    }
+  });
+
+  if (hasTensoriumOp) {
+    std::cerr << "FAIL: rhs-grid-scf with coords must not keep tensorium ops\n";
+    return false;
+  }
+  if (!hasIndexToFloat) {
+    std::cerr << "FAIL: rhs-grid-scf must cast loop index to float for coord op\n";
+    return false;
+  }
+  if (!spacingArgUsed) {
+    std::cerr << "FAIL: rhs-grid-scf must use spacing argument when lowering coord op\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildRhsGridAffineLowering() {
   ::mlir::MLIRContext ctx;
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
@@ -2024,6 +2319,222 @@ static bool testSchwarzschildRhsGridAffineLowering() {
   return true;
 }
 
+static bool testGeneratedKernelABIMetadata() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
+      opts);
+
+  auto modVersion = module->getOperation()->getAttrOfType<::mlir::IntegerAttr>(
+      tensorium_mlir::abi::kAttrABIVersion);
+  if (!modVersion ||
+      modVersion.getInt() != tensorium_mlir::abi::kGeneratedKernelABIVersion) {
+    std::cerr << "FAIL: module missing generated ABI version attr\n";
+    return false;
+  }
+  auto modLayout = module->getOperation()->getAttrOfType<::mlir::StringAttr>(
+      tensorium_mlir::abi::kAttrMemoryLayout);
+  if (!modLayout ||
+      modLayout.getValue() != tensorium_mlir::abi::kMemLayoutSoAComponentMajor) {
+    std::cerr << "FAIL: module missing generated memory layout attr\n";
+    return false;
+  }
+  auto modMemref = module->getOperation()->getAttrOfType<::mlir::StringAttr>(
+      tensorium_mlir::abi::kAttrMemrefABI);
+  if (!modMemref ||
+      modMemref.getValue() != tensorium_mlir::abi::kMemrefABI1DStridedF64) {
+    std::cerr << "FAIL: module missing generated memref ABI attr\n";
+    return false;
+  }
+
+  auto init = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolInit);
+  auto rhs = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolRhs);
+  auto entry = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolEntry);
+  auto initPoint = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolInitPoint);
+  auto initGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolInitGridAffine);
+  auto rhsGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolRhsGridAffine);
+
+  std::string abiErr;
+  if (!verifyCommonGeneratedABIAttrs(init, tensorium_mlir::abi::kKindInitSource,
+                                     abiErr) ||
+      !verifyCommonGeneratedABIAttrs(rhs, tensorium_mlir::abi::kKindRhsSource,
+                                     abiErr) ||
+      !verifyCommonGeneratedABIAttrs(entry,
+                                     tensorium_mlir::abi::kKindEntrySource,
+                                     abiErr) ||
+      !verifyCommonGeneratedABIAttrs(initPoint,
+                                     tensorium_mlir::abi::kKindInitPoint,
+                                     abiErr) ||
+      !verifyCommonGeneratedABIAttrs(initGrid,
+                                     tensorium_mlir::abi::kKindInitGridAffine,
+                                     abiErr) ||
+      !verifyCommonGeneratedABIAttrs(rhsGrid,
+                                     tensorium_mlir::abi::kKindRhsGridAffine,
+                                     abiErr)) {
+    std::cerr << "FAIL: " << abiErr << "\n";
+    return false;
+  }
+
+  auto expectEqVec = [](const std::vector<std::string> &got,
+                        const std::vector<std::string> &expected) {
+    return got == expected;
+  };
+
+  auto initPointParams = parseStringArrayAttr(
+      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrParamNames));
+  auto initPointCoords = parseStringArrayAttr(
+      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrCoordNames));
+  auto initPointOutputs = parseStringArrayAttr(
+      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrOutputNames));
+  auto initPointWrites = parseI64ArrayAttr(
+      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrWriteArgIndices));
+  if (!expectEqVec(initPointParams, {"M"}) ||
+      !expectEqVec(initPointCoords, {"r", "theta", "phi"}) ||
+      !expectEqVec(initPointOutputs, {"alpha", "gamma", "gammaU"}) ||
+      initPointWrites != std::vector<int64_t>({4, 5, 6})) {
+    std::cerr << "FAIL: init_point ABI metadata does not match expected ABI v1\n";
+    return false;
+  }
+
+  auto initGridOutputs = parseStringArrayAttr(
+      initGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrOutputNames));
+  auto initGridWrites = parseI64ArrayAttr(
+      initGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrWriteArgIndices));
+  if (!expectEqVec(initGridOutputs, {"alpha", "gamma", "gammaU"}) ||
+      initGridWrites != std::vector<int64_t>({4, 5, 6})) {
+    std::cerr << "FAIL: init_grid_affine ABI metadata does not match expected ABI v1\n";
+    return false;
+  }
+
+  auto rhsFieldNames = parseStringArrayAttr(
+      rhs->getAttrOfType<::mlir::ArrayAttr>(tensorium_mlir::abi::kAttrFieldNames));
+  auto rhsGridFieldNames = parseStringArrayAttr(
+      rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrFieldNames));
+  auto rhsGridOutputs = parseStringArrayAttr(
+      rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrOutputNames));
+  auto rhsGridWrites = parseI64ArrayAttr(
+      rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrWriteArgIndices));
+  if (!expectEqVec(rhsFieldNames,
+                   {"alpha", "phi", "H", "gamma", "gammaU", "K"})) {
+    std::cerr << "FAIL: unexpected tensorium_rhs field order in ABI metadata\n";
+    return false;
+  }
+  if (rhsGridFieldNames != rhsFieldNames ||
+      !expectEqVec(rhsGridOutputs, {"H", "K"}) ||
+      rhsGridWrites != std::vector<int64_t>({8, 11})) {
+    std::cerr << "FAIL: rhs_grid_affine ABI metadata mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testLoweredGridLLVMABISignature() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  backend::ModuleIR mod =
+      buildModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
+                          CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  auto verify = validation::verifyIR(mod);
+  if (!verify.ok()) {
+    std::cerr << "FAIL: IR verification failed before ABI LLVM signature test\n";
+    return false;
+  }
+
+  std::string llvmIR;
+  if (!tensorium_mlir::emitLLVMIR(mod, opts, &llvmIR)) {
+    std::cerr << "FAIL: emitLLVMIR failed for ABI LLVM signature test\n";
+    return false;
+  }
+
+  auto checkMemrefGroups = [&](const std::vector<std::string> &types,
+                               std::size_t base, std::size_t groups) {
+    static const std::array<const char *, 5> kMemRefGroup = {
+        "ptr", "ptr", "i64", "i64", "i64"};
+    if (types.size() < base + groups * kMemRefGroup.size())
+      return false;
+    for (std::size_t g = 0; g < groups; ++g) {
+      for (std::size_t i = 0; i < kMemRefGroup.size(); ++i) {
+        if (types[base + g * kMemRefGroup.size() + i] != kMemRefGroup[i])
+          return false;
+      }
+    }
+    return true;
+  };
+
+  std::vector<std::string> initPointTypes;
+  if (!llvmFunctionArgTypeTokens(
+          llvmIR, tensorium_mlir::abi::kSymbolInitPoint, initPointTypes)) {
+    std::cerr << "FAIL: missing LLVM signature for tensorium_init_point\n";
+    return false;
+  }
+  if (initPointTypes.size() != 19 || initPointTypes[0] != "double" ||
+      initPointTypes[1] != "double" || initPointTypes[2] != "double" ||
+      initPointTypes[3] != "double" ||
+      !checkMemrefGroups(initPointTypes, 4, 3)) {
+    std::cerr << "FAIL: tensorium_init_point LLVM ABI signature mismatch\n";
+    return false;
+  }
+
+  std::vector<std::string> initGridTypes;
+  if (!llvmFunctionArgTypeTokens(
+          llvmIR, tensorium_mlir::abi::kSymbolInitGridAffine, initGridTypes)) {
+    std::cerr << "FAIL: missing LLVM signature for tensorium_init_grid_affine\n";
+    return false;
+  }
+  if (initGridTypes.size() != 31 || initGridTypes[0] != "double" ||
+      !checkMemrefGroups(initGridTypes, 1, 6)) {
+    std::cerr << "FAIL: tensorium_init_grid_affine LLVM ABI signature mismatch\n";
+    return false;
+  }
+
+  std::vector<std::string> rhsGridTypes;
+  if (!llvmFunctionArgTypeTokens(
+          llvmIR, tensorium_mlir::abi::kSymbolRhsGridAffine, rhsGridTypes)) {
+    std::cerr << "FAIL: missing LLVM signature for tensorium_rhs_grid_affine\n";
+    return false;
+  }
+  if (rhsGridTypes.size() != 36 || rhsGridTypes[0] != "i64" ||
+      rhsGridTypes[1] != "i64" || rhsGridTypes[2] != "i64" ||
+      rhsGridTypes[3] != "double" || rhsGridTypes[4] != "double" ||
+      rhsGridTypes[5] != "double" || !checkMemrefGroups(rhsGridTypes, 6, 6)) {
+    std::cerr << "FAIL: tensorium_rhs_grid_affine LLVM ABI signature mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testStripSourceFuncsAfterGridLowering() {
   ::mlir::MLIRContext ctx;
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
@@ -2070,6 +2581,33 @@ static bool testStripSourceFuncsAfterGridLowering() {
   return true;
 }
 
+static bool testStripSourceFuncsRhsOnly() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/covariant_rank1_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+
+  if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs")) {
+    std::cerr << "FAIL: rhs-only strip-source-funcs must remove tensorium_rhs\n";
+    return false;
+  }
+  if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry")) {
+    std::cerr
+        << "FAIL: rhs-only strip-source-funcs must remove tensorium_entry\n";
+    return false;
+  }
+  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_affine")) {
+    std::cerr
+        << "FAIL: rhs-only strip-source-funcs missing tensorium_rhs_grid_affine\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testLoweredGridModuleLLVMIREmission() {
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableMetricLoweringPass = true;
@@ -2108,6 +2646,76 @@ static bool testLoweredGridModuleLLVMIREmission() {
       llvmIR.find("@tensorium_init(") != std::string::npos ||
       llvmIR.find("@tensorium_rhs(") != std::string::npos) {
     std::cerr << "FAIL: LLVM IR should not expose source tensorium_init/rhs/entry symbols\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testCompilerApiCompileFileToLLVMIR() {
+  tensorium::api::CompileOptions compileOpts;
+  compileOpts.mode = CompilationMode::Executable;
+
+  tensorium_mlir::MLIRGenOptions mlirOpts = makeExecutablePipelineOpts();
+  mlirOpts.enableMetricLoweringPass = true;
+  mlirOpts.enableInitStdLoweringPass = true;
+  mlirOpts.enableInitGridAffinePass = true;
+  mlirOpts.enableRhsGridAffinePass = true;
+  mlirOpts.enableStripSourceFuncsPass = true;
+  mlirOpts.enableStencilLoweringPass = false;
+
+  std::string llvmIR;
+  try {
+    llvmIR = tensorium::api::compileFileToLLVMIR("tests/01_scalar_minimal.tn",
+                                                  compileOpts, mlirOpts);
+  } catch (const std::exception &ex) {
+    std::cerr << "FAIL: compiler API compileFileToLLVMIR threw: " << ex.what()
+              << "\n";
+    return false;
+  }
+
+  if (llvmIR.find("tensorium_rhs_grid_affine") == std::string::npos) {
+    std::cerr
+        << "FAIL: compiler API LLVM output missing tensorium_rhs_grid_affine\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testCompilerApiSymbolicWarningPropagation() {
+  const std::string source = R"(
+field scalar phi
+
+evolution NoSimulation {
+  dt phi = phi
+}
+)";
+
+  tensorium::api::CompileOptions compileOpts;
+  compileOpts.mode = CompilationMode::Symbolic;
+
+  tensorium::api::CompileResult result;
+  try {
+    result = tensorium::api::parseAndValidateSource(source, compileOpts);
+  } catch (const std::exception &ex) {
+    std::cerr << "FAIL: compiler API parseAndValidateSource threw: "
+              << ex.what() << "\n";
+    return false;
+  }
+
+  bool sawMissingSimulationWarning = false;
+  for (const auto &warn : result.warnings) {
+    if (warn.find("W1001: missing simulation block in symbolic mode") !=
+        std::string::npos) {
+      sawMissingSimulationWarning = true;
+      break;
+    }
+  }
+
+  if (!sawMissingSimulationWarning) {
+    std::cerr << "FAIL: compiler API did not return missing-simulation warning "
+                 "in symbolic mode\n";
     return false;
   }
 
@@ -2641,6 +3249,136 @@ static bool testSchwarzschildChristoffelNumericPoint() {
   return true;
 }
 
+static bool testCovariantDerivativeRankOneNumericPoint() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/covariant_rank1_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+
+  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhsFunc) {
+    std::cerr << "FAIL: missing @tensorium_rhs for covariant derivative test\n";
+    return false;
+  }
+
+  if (rhsFunc.getNumArguments() != 5) {
+    std::cerr << "FAIL: expected @tensorium_rhs(Christoffel,V,W,nablaV,nablaW) "
+                 "signature\n";
+    return false;
+  }
+
+  bool hasCovariantDerivAttr = false;
+  rhsFunc.walk([&](tensorium::mlir::DerivOp deriv) {
+    if (auto cov = deriv->getAttrOfType<::mlir::BoolAttr>("covariant")) {
+      if (cov.getValue())
+        hasCovariantDerivAttr = true;
+    }
+  });
+  if (hasCovariantDerivAttr) {
+    std::cerr << "FAIL: covariant derivatives must be lowered to explicit "
+                 "Christoffel terms (no covariant deriv attrs)\n";
+    return false;
+  }
+
+  constexpr std::size_t nr = 9;
+  constexpr std::size_t nt = 9;
+  constexpr std::size_t np = 9;
+  constexpr std::size_t nPoints = nr * nt * np;
+  constexpr std::size_t center = 4;
+  const auto linearIndex = [](std::size_t ir, std::size_t it, std::size_t ip) {
+    return (ir * nt + it) * np + ip;
+  };
+  const std::size_t p0 = linearIndex(center, center, center);
+  const auto comp3 = [](unsigned a, unsigned b, unsigned c) {
+    return a * 9 + b * 3 + c;
+  };
+  const auto comp2 = [](unsigned a, unsigned b) { return a * 3 + b; };
+
+  std::array<std::vector<double>, 27> christoffel;
+  std::array<std::vector<double>, 3> covectorV;
+  std::array<std::vector<double>, 3> vectorW;
+  std::array<std::vector<double>, 9> outNablaV;
+  std::array<std::vector<double>, 9> outNablaW;
+  std::array<double *, 27> christoffelPtrs{};
+  std::array<double *, 3> covectorVPtrs{};
+  std::array<double *, 3> vectorWPtrs{};
+  std::array<double *, 9> outNablaVPtrs{};
+  std::array<double *, 9> outNablaWPtrs{};
+
+  for (unsigned c = 0; c < 27; ++c) {
+    christoffel[c].assign(nPoints, 0.0);
+    christoffelPtrs[c] = christoffel[c].data();
+  }
+  for (unsigned c = 0; c < 3; ++c) {
+    covectorV[c].assign(nPoints, 0.0);
+    vectorW[c].assign(nPoints, 0.0);
+    covectorVPtrs[c] = covectorV[c].data();
+    vectorWPtrs[c] = vectorW[c].data();
+  }
+  for (unsigned c = 0; c < 9; ++c) {
+    outNablaV[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    outNablaW[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    outNablaVPtrs[c] = outNablaV[c].data();
+    outNablaWPtrs[c] = outNablaW[c].data();
+  }
+
+  // Non-zero components:
+  // Gamma^0_{0 1} = 2.0  -> contributes to covector correction term.
+  // Gamma^0_{1 2} = 3.0  -> contributes to vector correction term.
+  for (std::size_t p = 0; p < nPoints; ++p) {
+    christoffel[comp3(0, 0, 1)][p] = 2.0;
+    christoffel[comp3(0, 1, 2)][p] = 3.0;
+
+    covectorV[0][p] = 1.0;
+    covectorV[1][p] = 2.0;
+    covectorV[2][p] = 3.0;
+
+    vectorW[0][p] = 4.0;
+    vectorW[1][p] = 5.0;
+    vectorW[2][p] = 6.0;
+  }
+
+  tensorium_mlir::RhsEvalDescriptor desc;
+  desc.grid.spatialDim = 3;
+  desc.grid.extents = {nr, nt, np};
+  desc.grid.spacing = {1.0, 1.0, 1.0};
+  desc.point = {center, center, center};
+  desc.args.resize(5);
+  desc.args[0].components.assign(christoffelPtrs.begin(), christoffelPtrs.end());
+  desc.args[1].components.assign(covectorVPtrs.begin(), covectorVPtrs.end());
+  desc.args[2].components.assign(vectorWPtrs.begin(), vectorWPtrs.end());
+  desc.args[3].components.assign(outNablaVPtrs.begin(), outNablaVPtrs.end());
+  desc.args[4].components.assign(outNablaWPtrs.begin(), outNablaWPtrs.end());
+
+  auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
+  if (!evalRes.ok) {
+    std::cerr << "FAIL: rhs evaluator failed for covariant derivative test: "
+              << evalRes.message << "\n";
+    return false;
+  }
+
+  const double nablaV_01 = outNablaV[comp2(0, 1)][p0];
+  const double nablaW_01 = outNablaW[comp2(0, 1)][p0];
+  const double expectedNablaV_01 = -2.0; // -Gamma^m_{0 1} V_m = -2*1
+  const double expectedNablaW_01 = 18.0; // +Gamma^0_{1 m} W^m = +3*6
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Covariant rank-1 point\n"
+            << "  nabla_j(V_i) component [0,1] got=" << nablaV_01
+            << " expected=" << expectedNablaV_01 << "\n"
+            << "  nabla_j(W^i) component [0,1] got=" << nablaW_01
+            << " expected=" << expectedNablaW_01 << "\n";
+
+  if (!almostEqual(nablaV_01, expectedNablaV_01, 1e-10, 1e-10) ||
+      !almostEqual(nablaW_01, expectedNablaW_01, 1e-10, 1e-10)) {
+    std::cerr << "FAIL: covariant derivative rank-1 numeric mismatch\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSchwarzschildChristoffelMLIRStructure() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile(
@@ -2852,12 +3590,25 @@ int main() {
        &testSchwarzschildInitGridAffineLowering},
       {"testSchwarzschildRhsGridScfLowering",
        &testSchwarzschildRhsGridScfLowering},
+      {"testRhsGridScfRejectsImplicitParams",
+       &testRhsGridScfRejectsImplicitParams},
+      {"testRhsExplicitParamDeclarationAccepted",
+       &testRhsExplicitParamDeclarationAccepted},
+      {"testRhsGridScfLoweringSupportsCoords",
+       &testRhsGridScfLoweringSupportsCoords},
       {"testSchwarzschildRhsGridAffineLowering",
        &testSchwarzschildRhsGridAffineLowering},
+      {"testGeneratedKernelABIMetadata", &testGeneratedKernelABIMetadata},
+      {"testLoweredGridLLVMABISignature", &testLoweredGridLLVMABISignature},
       {"testStripSourceFuncsAfterGridLowering",
        &testStripSourceFuncsAfterGridLowering},
+      {"testStripSourceFuncsRhsOnly", &testStripSourceFuncsRhsOnly},
       {"testLoweredGridModuleLLVMIREmission",
        &testLoweredGridModuleLLVMIREmission},
+      {"testCompilerApiCompileFileToLLVMIR",
+       &testCompilerApiCompileFileToLLVMIR},
+      {"testCompilerApiSymbolicWarningPropagation",
+       &testCompilerApiSymbolicWarningPropagation},
       {"testSchwarzschildInitThetaZeroNoNaN",
        &testSchwarzschildInitThetaZeroNoNaN},
       {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},
@@ -2868,6 +3619,8 @@ int main() {
       {"testKerrLikeReconstructMetricPoint",
        &testKerrLikeReconstructMetricPoint},
       {"testKerrLikeHasNonZeroBetaPhi", &testKerrLikeHasNonZeroBetaPhi},
+      {"testCovariantDerivativeRankOneNumericPoint",
+       &testCovariantDerivativeRankOneNumericPoint},
       {"testSchwarzschildChristoffelNumericPoint",
        &testSchwarzschildChristoffelNumericPoint},
       {"testSchwarzschildChristoffelMLIRStructure",

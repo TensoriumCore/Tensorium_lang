@@ -1,17 +1,32 @@
 #include "tensorium/Parse/Parser.hpp"
+#include "tensorium/Basic/Diagnostics.hpp"
+#include "tensorium/Basic/Token.hpp"
+#include <algorithm>
 #include <stdexcept>
 
 namespace tensorium {
 Parser::Parser(Lexer &l) : lex(l) { advance(); }
 void Parser::advance() { cur = lex.next(); }
 void Parser::expect(TokenType type) {
-  if (cur.type != type)
-    syntaxError("Expected " + std::to_string((int)type));
+  if (cur.type != type) {
+    std::string got;
+    if (cur.type == TokenType::End) {
+      got = "end of file";
+    } else if (cur.type == TokenType::Unknown) {
+      got = "unknown token '" + cur.text + "'";
+    } else {
+      got = "'" + cur.text + "'";
+    }
+    syntaxError("expected " + std::string(tokenTypeName(type)) + ", got " + got);
+  }
   advance();
 }
 void Parser::syntaxError(const std::string &msg) {
-  throw std::runtime_error("Syntax: " + msg + " at " +
-                           std::to_string(cur.line));
+  SourceLocation loc;
+  loc.line = std::max(1, cur.line);
+  loc.column = std::max(1, cur.column);
+  loc.length = std::max<int>(1, static_cast<int>(cur.text.size()));
+  throw DiagnosticError(DiagnosticLevel::Error, msg, loc, "E0001");
 }
 
 std::unique_ptr<Expr> Parser::parseExpr() { return parseAddExpr(); }
@@ -264,6 +279,30 @@ TensorTypeDesc Parser::parseTensorTypeDesc() {
 
   syntaxError("Expected tensor type");
   return desc;
+}
+
+std::vector<std::string> Parser::parseParamsBlock() {
+  expect(TokenType::KwParams);
+  expect(TokenType::LBrace);
+
+  std::vector<std::string> out;
+  while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+    if (cur.type != TokenType::Identifier)
+      syntaxError("params block expects parameter identifier");
+    out.push_back(cur.text);
+    advance();
+
+    if (cur.type == TokenType::Comma || cur.type == TokenType::Semicolon) {
+      advance();
+      continue;
+    }
+    if (cur.type != TokenType::RBrace) {
+      syntaxError("expected ',' or '}' in params block");
+    }
+  }
+
+  expect(TokenType::RBrace);
+  return out;
 }
 
 ExternDecl Parser::parseExternDecl() {
@@ -643,20 +682,31 @@ TimeConfig Parser::parseTimeBlock() {
   expect(TokenType::LBrace);
 
   TimeConfig cfg;
+  bool hasDt = false;
+  bool hasIntegrator = false;
 
   while (cur.type != TokenType::RBrace) {
+    if (cur.type == TokenType::Semicolon) {
+      advance();
+      continue;
+    }
 
     if (cur.text == "dt") {
+      if (hasDt)
+        syntaxError("duplicate 'dt' entry in time block");
       advance();
       expect(TokenType::Equals);
       if (cur.type != TokenType::Number)
         syntaxError("dt expects a number");
       cfg.dt = std::stod(cur.text);
+      hasDt = true;
       advance();
       continue;
     }
 
     if (cur.text == "integrator") {
+      if (hasIntegrator)
+        syntaxError("duplicate 'integrator' entry in time block");
       advance();
       expect(TokenType::Equals);
 
@@ -669,6 +719,7 @@ TimeConfig Parser::parseTimeBlock() {
       else
         syntaxError("unknown time integrator");
 
+      hasIntegrator = true;
       advance();
       continue;
     }
@@ -677,6 +728,10 @@ TimeConfig Parser::parseTimeBlock() {
   }
 
   expect(TokenType::RBrace);
+  if (!hasDt)
+    syntaxError("time block requires 'dt = <number>'");
+  if (!hasIntegrator)
+    syntaxError("time block requires 'integrator = euler|rk3|rk4'");
   return cfg;
 }
 
@@ -685,10 +740,19 @@ SpatialConfig Parser::parseSpatialBlock() {
   expect(TokenType::LBrace);
 
   SpatialConfig cfg;
+  bool hasScheme = false;
+  bool hasDerivative = false;
+  bool hasOrder = false;
 
   while (cur.type != TokenType::RBrace) {
+    if (cur.type == TokenType::Semicolon) {
+      advance();
+      continue;
+    }
 
     if (cur.text == "scheme") {
+      if (hasScheme)
+        syntaxError("duplicate 'scheme' entry in spatial block");
       advance();
       expect(TokenType::Equals);
 
@@ -699,11 +763,14 @@ SpatialConfig Parser::parseSpatialBlock() {
       else
         syntaxError("unknown spatial scheme");
 
+      hasScheme = true;
       advance();
       continue;
     }
 
     if (cur.text == "derivative") {
+      if (hasDerivative)
+        syntaxError("duplicate 'derivative' entry in spatial block");
       advance();
       expect(TokenType::Equals);
 
@@ -714,11 +781,14 @@ SpatialConfig Parser::parseSpatialBlock() {
       else
         syntaxError("unknown derivative scheme");
 
+      hasDerivative = true;
       advance();
       continue;
     }
 
     if (cur.text == "order") {
+      if (hasOrder)
+        syntaxError("duplicate 'order' entry in spatial block");
       advance();
       expect(TokenType::Equals);
 
@@ -726,6 +796,7 @@ SpatialConfig Parser::parseSpatialBlock() {
         syntaxError("order expects an integer");
 
       cfg.order = std::stoi(cur.text);
+      hasOrder = true;
       advance();
       continue;
     }
@@ -734,6 +805,12 @@ SpatialConfig Parser::parseSpatialBlock() {
   }
 
   expect(TokenType::RBrace);
+  if (!hasScheme)
+    syntaxError("spatial block requires 'scheme = fd|spectral'");
+  if (!hasDerivative)
+    syntaxError("spatial block requires 'derivative = centered|upwind'");
+  if (!hasOrder)
+    syntaxError("spatial block requires 'order = <int>'");
   return cfg;
 }
 
@@ -765,10 +842,21 @@ SimulationConfig Parser::parseSimulation() {
   expect(TokenType::LBrace);
 
   SimulationConfig cfg;
+  bool hasCoordinates = false;
+  bool hasDimension = false;
+  bool hasResolution = false;
+  bool hasTime = false;
+  bool hasSpatial = false;
 
   while (cur.type != TokenType::RBrace) {
+    if (cur.type == TokenType::Semicolon) {
+      advance();
+      continue;
+    }
 
     if (cur.text == "coordinates") {
+      if (hasCoordinates)
+        syntaxError("duplicate 'coordinates' entry in simulation block");
       advance();
       expect(TokenType::Equals);
 
@@ -781,19 +869,25 @@ SimulationConfig Parser::parseSimulation() {
       else
         syntaxError("unknown coordinate system");
 
+      hasCoordinates = true;
       advance();
       continue;
     }
 
     if (cur.text == "dimension") {
+      if (hasDimension)
+        syntaxError("duplicate 'dimension' entry in simulation block");
       advance();
       expect(TokenType::Equals);
       cfg.dimension = std::stoi(cur.text);
       expect(TokenType::Number);
+      hasDimension = true;
       continue;
     }
 
     if (cur.text == "resolution") {
+      if (hasResolution)
+        syntaxError("duplicate 'resolution' entry in simulation block");
       advance();
       expect(TokenType::Equals);
       expect(TokenType::LBracket);
@@ -809,16 +903,23 @@ SimulationConfig Parser::parseSimulation() {
       }
 
       expect(TokenType::RBracket);
+      hasResolution = true;
       continue;
     }
 
     if (cur.type == TokenType::KwTime) {
+      if (hasTime)
+        syntaxError("duplicate 'time' block in simulation");
       cfg.time = parseTimeBlock();
+      hasTime = true;
       continue;
     }
 
     if (cur.type == TokenType::KwSpatial) {
+      if (hasSpatial)
+        syntaxError("duplicate 'spatial' block in simulation");
       cfg.spatial = parseSpatialBlock();
+      hasSpatial = true;
       continue;
     }
 
@@ -826,12 +927,26 @@ SimulationConfig Parser::parseSimulation() {
   }
 
   expect(TokenType::RBrace);
+  if (!hasDimension)
+    syntaxError("simulation block requires 'dimension = <int>'");
+  if (!hasResolution)
+    syntaxError("simulation block requires 'resolution = [..]'");
+  if (!hasTime)
+    syntaxError("simulation block requires 'time { dt = ... integrator = ... }'");
+  if (!hasSpatial)
+    syntaxError(
+        "simulation block requires 'spatial { scheme = ... derivative = ... order = ... }'");
   return cfg;
 }
 
 Program Parser::parseProgram() {
   Program p;
   while (cur.type != TokenType::End) {
+    if (cur.type == TokenType::KwParams) {
+      auto params = parseParamsBlock();
+      p.params.insert(p.params.end(), params.begin(), params.end());
+      continue;
+    }
     if (cur.type == TokenType::KwField) {
       p.fields.push_back(parseFieldDecl());
       continue;

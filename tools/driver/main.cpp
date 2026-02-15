@@ -1,4 +1,5 @@
 #include "tensorium/AST/ASTPrinter.hpp"
+#include "tensorium/Basic/Diagnostics.hpp"
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"
@@ -28,6 +29,15 @@ static std::string readFile(const std::string &path) {
   std::ostringstream ss;
   ss << file.rdbuf();
   return ss.str();
+}
+
+static void writeFile(const std::string &path, const std::string &content) {
+  std::ofstream file(path);
+  if (!file)
+    throw std::runtime_error("cannot open output file: " + path);
+  file << content;
+  if (!file.good())
+    throw std::runtime_error("failed to write output file: " + path);
 }
 
 static void printIndexedType(const IndexedExpr *e) {
@@ -110,6 +120,8 @@ int main(int argc, char **argv) {
   double initAlpha = 2.0;
   bool dumpMLIR = false;
   bool dumpLLVMIR = false;
+  std::string emitMLIRPath;
+  std::string emitLLVMIRPath;
   bool enableNoOpPass = false;
   bool enableAnalysisPass = false;
   bool validateOnly = false;
@@ -130,7 +142,8 @@ int main(int argc, char **argv) {
   bool mlirDisableThreading = false;
   bool mlirPrintOpOnDiagnostic = false;
   bool mlirPrintIRAfterFailure = false;
-  bool failOnMLIRPipelineFailure = false;
+  bool failOnMLIRPipelineFailure = true;
+  ColorMode colorMode = ColorMode::Auto;
   CompilationMode compilationMode = CompilationMode::Executable;
 
   if (argc < 2) {
@@ -187,8 +200,28 @@ int main(int argc, char **argv) {
       enableDissipationPass = true;
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
+    } else if (arg.rfind("--emit-mlir=", 0) == 0) {
+      emitMLIRPath = arg.substr(std::string("--emit-mlir=").size());
+      if (emitMLIRPath.empty())
+        throw std::runtime_error("--emit-mlir requires a non-empty path");
+    } else if (arg == "--emit-mlir") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--emit-mlir expects a file path");
+      emitMLIRPath = argv[++i];
+      if (emitMLIRPath.empty())
+        throw std::runtime_error("--emit-mlir requires a non-empty path");
     } else if (arg == "--dump-llvm-ir") {
       dumpLLVMIR = true;
+    } else if (arg.rfind("--emit-llvm=", 0) == 0) {
+      emitLLVMIRPath = arg.substr(std::string("--emit-llvm=").size());
+      if (emitLLVMIRPath.empty())
+        throw std::runtime_error("--emit-llvm requires a non-empty path");
+    } else if (arg == "--emit-llvm") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--emit-llvm expects a file path");
+      emitLLVMIRPath = argv[++i];
+      if (emitLLVMIRPath.empty())
+        throw std::runtime_error("--emit-llvm requires a non-empty path");
     } else if (arg == "--mlir-disable-threading") {
       mlirDisableThreading = true;
     } else if (arg == "--mlir-print-op-on-diagnostic") {
@@ -197,6 +230,26 @@ int main(int argc, char **argv) {
       mlirPrintIRAfterFailure = true;
     } else if (arg == "--mlir-strict-pipeline") {
       failOnMLIRPipelineFailure = true;
+    } else if (arg == "--mlir-best-effort") {
+      failOnMLIRPipelineFailure = false;
+    } else if (arg == "--color=always") {
+      colorMode = ColorMode::Always;
+    } else if (arg == "--color=never") {
+      colorMode = ColorMode::Never;
+    } else if (arg == "--color=auto") {
+      colorMode = ColorMode::Auto;
+    } else if (arg == "--color") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--color expects one of: auto, always, never");
+      std::string modeArg = argv[++i];
+      if (modeArg == "always")
+        colorMode = ColorMode::Always;
+      else if (modeArg == "never")
+        colorMode = ColorMode::Never;
+      else if (modeArg == "auto")
+        colorMode = ColorMode::Auto;
+      else
+        throw std::runtime_error("--color expects one of: auto, always, never");
     } else if (arg == "--validate") {
       validateOnly = true;
     } else if (arg == "--steps") {
@@ -219,22 +272,68 @@ int main(int argc, char **argv) {
   }
 
   if (files.empty()) {
-    std::cerr << "error: no input files\n";
+    PrintDiagnosticOptions opts;
+    opts.colorMode = colorMode;
+    printDiagnostic(std::cerr, "<command line>", {},
+                    DiagnosticLevel::Error, "no input files", {},
+                    "E9001", opts);
     return 1;
   }
+
+  if ((!emitMLIRPath.empty() || !emitLLVMIRPath.empty()) &&
+      files.size() != 1) {
+    PrintDiagnosticOptions opts;
+    opts.colorMode = colorMode;
+    printDiagnostic(std::cerr, "<command line>", {}, DiagnosticLevel::Error,
+                    "--emit-mlir/--emit-llvm require exactly one input file",
+                    {}, "E9002", opts);
+    return 1;
+  }
+
+  const bool hasExplicitTensoriumPipelineSelection =
+      enableNoOpPass || enableAnalysisPass || enableEinsteinLoweringPass ||
+      enableEinsteinValidityPass || enableIndexAnalyzePass ||
+      enableEinsteinCanonicalizePass || enableEinsteinAnalyzeEinsumPass ||
+      enableMetricLoweringPass || enableInitStdLoweringPass ||
+      enableInitGridScfPass || enableInitGridAffinePass ||
+      enableRhsGridScfPass || enableRhsGridAffinePass ||
+      enableStripSourceFuncsPass || enableStencilLoweringPass ||
+      enableDissipationPass;
+
+  // Make LLVM IR emission usable out-of-the-box for executable kernels.
+  if ((dumpLLVMIR || !emitLLVMIRPath.empty()) &&
+      compilationMode == CompilationMode::Executable &&
+      !hasExplicitTensoriumPipelineSelection) {
+    enableMetricLoweringPass = true;
+    enableInitStdLoweringPass = true;
+    enableInitGridAffinePass = true;
+    enableRhsGridAffinePass = true;
+    enableStripSourceFuncsPass = true;
+  }
+
+  PrintDiagnosticOptions diagPrintOpts;
+  diagPrintOpts.colorMode = colorMode;
+  std::string currentPath;
+  std::string currentSource;
 
   try {
     for (const auto &path : files) {
       bool fileOK = true;
-      std::cout << "[Tensorium] parsing " << path << "\n";
+      currentPath = path;
+      currentSource.clear();
+      std::cerr << "[Tensorium] parsing " << path << "\n";
 
-      std::string src = readFile(path);
+      currentSource = readFile(path);
 
-      Lexer lex(src.c_str());
+      Lexer lex(currentSource.c_str());
       Parser parser(lex);
       Program prog = parser.parseProgram();
 
       SemanticAnalyzer sem(prog, compilationMode);
+      for (const auto &warn : sem.getWarnings()) {
+        printDiagnostic(std::cerr, path, currentSource,
+                        DiagnosticLevel::Warning, warn, {}, "", diagPrintOpts);
+      }
       std::vector<IndexedEvolution> indexedEvos;
 
       if (dumpIndexed) {
@@ -282,10 +381,11 @@ int main(int argc, char **argv) {
       tensorium::validation::canonicalizeEinsteinIR(mod);
       auto irResult = tensorium::validation::verifyIR(mod);
       for (const auto &d : irResult.diags) {
-        std::cerr << (d.kind == tensorium::validation::Diagnostic::Kind::Error
-                          ? "error: "
-                          : "warning: ")
-                  << d.message << "\n";
+        const auto level = d.kind == tensorium::validation::Diagnostic::Kind::Error
+                               ? DiagnosticLevel::Error
+                               : DiagnosticLevel::Warning;
+        printDiagnostic(std::cerr, path, currentSource, level, d.message, {}, "",
+                        diagPrintOpts);
       }
       if (!irResult.ok())
         return 1;
@@ -293,10 +393,11 @@ int main(int argc, char **argv) {
         auto result = tensorium::validation::validateProgram(mod);
 
         for (const auto &d : result.diags) {
-          std::cerr << (d.kind == tensorium::validation::Diagnostic::Kind::Error
-                            ? "error: "
-                            : "warning: ")
-                    << d.message << "\n";
+          const auto level = d.kind == tensorium::validation::Diagnostic::Kind::Error
+                                 ? DiagnosticLevel::Error
+                                 : DiagnosticLevel::Warning;
+          printDiagnostic(std::cerr, path, currentSource, level, d.message, {},
+                          "", diagPrintOpts);
         }
 
         if (!result.ok())
@@ -356,29 +457,47 @@ int main(int argc, char **argv) {
         return opts;
       };
 
-      if (dumpMLIR) {
-        std::cout << "\n=== MLIR DUMP (" << path << ") ===\n";
+      if (dumpMLIR || !emitMLIRPath.empty()) {
+        if (dumpMLIR)
+          std::cerr << "\n=== MLIR DUMP (" << path << ") ===\n";
         auto opts = makeMLIRGenOptions();
-        const bool pipelineOK = tensorium_mlir::emitMLIR(mod, opts);
+        std::string mlirText;
+        const bool pipelineOK = tensorium_mlir::emitMLIR(mod, opts, &mlirText);
+        if (dumpMLIR)
+          std::cout << mlirText;
+        if (!emitMLIRPath.empty())
+          writeFile(emitMLIRPath, mlirText);
         if (!pipelineOK) {
           fileOK = false;
-          std::cerr << "[Tensorium] MLIR pipeline failed: " << path << "\n";
+          printDiagnostic(std::cerr, path, currentSource, DiagnosticLevel::Error,
+                          "MLIR pipeline failed", {}, "E3101",
+                          diagPrintOpts);
           if (failOnMLIRPipelineFailure)
             return 1;
         }
-        std::cout << "==============================\n";
+        if (dumpMLIR)
+          std::cerr << "==============================\n";
       }
-      if (dumpLLVMIR) {
-        std::cout << "\n=== LLVM IR DUMP (" << path << ") ===\n";
+      if (dumpLLVMIR || !emitLLVMIRPath.empty()) {
+        if (dumpLLVMIR)
+          std::cerr << "\n=== LLVM IR DUMP (" << path << ") ===\n";
         auto opts = makeMLIRGenOptions();
-        const bool pipelineOK = tensorium_mlir::emitLLVMIR(mod, opts);
+        std::string llvmIRText;
+        const bool pipelineOK = tensorium_mlir::emitLLVMIR(mod, opts, &llvmIRText);
+        if (dumpLLVMIR)
+          std::cout << llvmIRText;
+        if (pipelineOK && !emitLLVMIRPath.empty())
+          writeFile(emitLLVMIRPath, llvmIRText);
         if (!pipelineOK) {
           fileOK = false;
-          std::cerr << "[Tensorium] LLVM IR pipeline failed: " << path << "\n";
+          printDiagnostic(std::cerr, path, currentSource, DiagnosticLevel::Error,
+                          "LLVM IR pipeline failed", {}, "E3102",
+                          diagPrintOpts);
           if (failOnMLIRPipelineFailure)
             return 1;
         }
-        std::cout << "==============================\n";
+        if (dumpLLVMIR)
+          std::cerr << "==============================\n";
       }
       if (runCpu) {
         tensorium::runtime::RunOptions opt;
@@ -401,8 +520,17 @@ int main(int argc, char **argv) {
         std::cout << "[Tensorium] FAILED: " << path << "\n";
     }
 
+  } catch (const DiagnosticError &d) {
+    const std::string contextPath =
+        currentPath.empty() ? "<command line>" : currentPath;
+    printDiagnostic(std::cerr, contextPath, currentSource, d.level(),
+                    d.message(), d.location(), d.code(), diagPrintOpts);
+    return 1;
   } catch (const std::exception &e) {
-    std::cerr << "Tensorium error: " << e.what() << "\n";
+    const std::string contextPath =
+        currentPath.empty() ? "<command line>" : currentPath;
+    printDiagnostic(std::cerr, contextPath, currentSource,
+                    DiagnosticLevel::Error, e.what(), {}, "", diagPrintOpts);
     return 1;
   }
 

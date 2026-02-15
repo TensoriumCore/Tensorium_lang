@@ -788,3 +788,88 @@ Planned commit sequence (one intention per commit):
     - prints full `Gamma^i_{jk}` matrices at the grid center and checks key
       Schwarzschild components against analytical values with finite-difference
       tolerance.
+  - additional metric cases (same `.tn -> lowered MLIR -> LLVM IR -> native` path):
+    - `tools/dev/test_reissner_christoffel_ll.sh`
+      with `tests/fixtures/gr/reissner_nordstrom_christoffel_3d.tn`
+      and analytical RN checks.
+    - `tools/dev/test_kerr_like_christoffel_ll.sh`
+      with `tests/fixtures/gr/kerr_like_christoffel_3d.tn`
+      and analytical checks on spatial Christoffel components.
+  - shell orchestration now uses a reusable driver helper:
+    - `tools/dev/test_metric_christoffel_ll.sh`.
+
+## 21) MLIRGen Scalability Refactor
+
+- Goal:
+  - remove "catch-all" growth in `MLIRGen.cpp` and separate concerns by stage.
+- New internal split:
+  - `lib/tensorium_mlir/Target/MLIRGen/MLIRGenShared.{h,cpp}`
+    - shared helpers (field extraction, argument collection, common diagnostics,
+      index/string attrs, field-type conversion).
+  - `lib/tensorium_mlir/Target/MLIRGen/MLIRGenInitialData.{h,cpp}`
+    - init-only emission (`metric4` / `decompose3p1_from_metric` / `init3p1` /
+      split bindings).
+  - `lib/tensorium_mlir/Target/MLIRGen/MLIRGenExpr.{h,cpp}`
+    - expression emission and RHS/evolution lowering.
+  - `lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp`
+    - orchestration only (`tensorium_init`/`tensorium_rhs`/`tensorium_entry`
+      assembly, pass-manager execution, MLIR/LLVM dump API).
+- Result:
+  - smaller units with explicit ownership,
+  - easier addition of new ops without touching module orchestration logic,
+  - lower merge-conflict surface for parallel work on init vs rhs pipelines.
+
+## 22) Covariant Derivative Rank-1 Lowering
+
+- Executable MLIR lowering now expands covariant derivatives explicitly for:
+  - scalar inputs (`nabla_j(phi)`),
+  - covectors (`nabla_j(V_i)`),
+  - vectors (`nabla_j(W^i)`).
+- Lowered form (no magic op semantics):
+  - scalar: `deriv(phi, j)`,
+  - covector: `deriv(V_i, j) - contract(Gamma^m_{i j} * V_m)`,
+  - vector: `deriv(W^i, j) + contract(Gamma^i_{j m} * W^m)`.
+- RHS signature minimization now also injects the connection field when
+  covariant derivatives are present, so executable lowering has a concrete
+  data source for `Gamma`.
+- New anti-false-green numeric test:
+  - fixture: `tests/fixtures/gr/covariant_rank1_3d.tn`,
+  - test: `testCovariantDerivativeRankOneNumericPoint` in
+    `tools/Tester/UnitTests.cpp`,
+  - validates the Christoffel correction sign/magnitude on both covector and
+    vector derivatives at an interior grid point via the generic RHS MLIR
+    evaluator.
+- Current limitation:
+  - executable lowering for contravariant derivative notation (`nabla^i(...)`)
+    is still intentionally rejected until inverse-metric raising semantics are
+    implemented.
+- Added end-to-end LLVM smoke for derivative execution:
+  - script: `tools/dev/test_covariant_rank1_ll.sh`,
+  - runner: `tools/dev/ll_rhs_runner_covariant_rank1.c`,
+  - flow: `.tn -> MLIR passes -> LLVM IR -> native executable`,
+  - runtime output prints full `nabla_j(V_i)` and `nabla_j(W^i)` 3x3 matrices
+  at the grid center and checks selected analytical components.
+
+## 23) Ricci Typing Fix (Contract + Derivative)
+
+- Fixed tensor-type inference for `contract(...)` on mixed-variance tensors.
+  - Previous behavior removed contracted rank by dropping lower indices first,
+    which could return wrong variance on expressions such as
+    `contract(d_k(Christoffel[k,i,j]))`.
+  - New behavior infers result variance from free-index variance roles
+    (contravariant/covariant) and validates rank consistency.
+- Added GR regression fixture:
+  - `tests/fixtures/gr/schwarzschild_ricci_3d.tn`
+  - Builds `Ricci[i,j]` directly from Christoffel symbols derived from
+    `metric4`/`split_3p1`.
+- Added the fixture to automated GR checks in `run_test.sh` to prevent future
+  regressions.
+- Added end-to-end LLVM smoke for Ricci execution with full matrix prints:
+  - script: `tools/dev/test_minkowski_ricci_ll.sh`,
+  - helper script: `tools/dev/test_metric_ricci_ll.sh`,
+  - runner: `tools/dev/ll_rhs_runner_minkowski_ricci.c`,
+  - flow: `.tn -> MLIR passes -> LLVM IR -> native executable`,
+  - runtime output prints reconstructed `g_uv`, `Gamma_ij`, `GammaU^ij`,
+    `Christoffel^i_{jk}` and `Ricci_ij` at the grid center,
+  - fixture: `tests/fixtures/gr/minkowski_ricci_3d.tn` (exact check:
+    `Christoffel = 0`, `Ricci = 0`).
