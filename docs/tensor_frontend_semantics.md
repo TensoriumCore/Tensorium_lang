@@ -98,6 +98,24 @@ identical variance” or “contract() expects at least one repeated index”).
 * The derivative index `i` is treated as free unless contracted later. The
   result type must match the LHS indices (e.g. `dt v[i] = d_i(phi)`).
 
+### Covariant Derivative `nabla_i(expr)` / `nabla^i(expr)`
+* `nabla_i(expr)` adds one covariant slot to the result rank.
+* `nabla^i(expr)` adds one contravariant slot to the result rank.
+* Scalar rules:
+  - `nabla_i(phi)` lowers to `d_i(phi)`.
+  - `nabla^i(phi)` lowers to a raised derivative using `inverse_metric`, i.e.
+    `contract(gammaU[i,j] * d_j(phi))`.
+* Non-scalar tensor rules:
+  - Argument must be an indexed tensor expression (for example `A[i,j]`, not
+    bare `A`).
+  - Expansion uses Christoffel terms slot-by-slot:
+    `+Gamma` correction for each contravariant slot, `-Gamma` correction for
+    each covariant slot.
+  - This expansion requires both a unique `metric` field and a unique
+    `inverse_metric` field.
+* Missing metric/inverse metric declarations or missing explicit argument
+  indices are front-end errors.
+
 ### Tensor Product
 * Binary `*` multiplies tensor ranks as described above. Index annotations are
   tracked so that contractions or additions know which indices are present.
@@ -110,7 +128,9 @@ identical variance” or “contract() expects at least one repeated index”).
   per contracted index, or by matching the remaining free indices if all are of
   the same variance.
 
-### Laplacian / Externs
+### Trace / Laplacian / Externs
+* `trace(expr)` is accepted as an explicit contraction builtin (`contract`-style
+  semantics).
 * `laplacian(expr)` demands a scalar argument and produces a scalar.
 * Extern calls must match the declared tensor signature exactly; both argument
   variance and return type are checked before lowering.
@@ -128,6 +148,13 @@ A program is considered **valid** when:
 4. Temporaries are defined before use and follow the same index rules.
 5. Externs are only called in executable mode if implementations exist and their
    tensor signatures match.
+6. `nabla` on non-scalars is only valid when `metric` and `inverse_metric` are
+   both declared and uniquely identifiable.
+7. Integer-only fields are provided with integer literals:
+   - `simulation.dimension`
+   - entries of `simulation.resolution`
+   - `simulation.spatial.order`
+   - `mixed_tensor(up=...,down=...)` attributes
 
 Examples:
 
@@ -214,6 +241,8 @@ hold:
   - `+`/`-` operate only on identical types.
   - `*` concatenates ranks, `/` divides by scalars.
   - `d_i` adds one covariant slot.
+  - `nabla_i` / `nabla^i` are expanded in Sema using metric-compatible
+    Christoffel terms.
   - `contract` removes repeated indices and fails if none exist.
 * Extern calls have matching argument variance and return types.
 
