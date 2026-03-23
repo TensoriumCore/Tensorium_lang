@@ -10,6 +10,14 @@
 
 namespace tensorium {
 
+static bool isLegacyNamedConnectionField(const std::string &name,
+                                         const FieldDecl *fd) {
+  if (!fd)
+    return false;
+  return (fd->up + fd->down) == 3 &&
+         (name == "Gamma" || name == "GammaU" || name == "Christoffel");
+}
+
 static std::unique_ptr<IndexedVar>
 makeVar(const std::string &name, const std::vector<std::string> &indices,
         const std::unordered_map<std::string, const FieldDecl *> &fields,
@@ -28,6 +36,37 @@ makeVar(const std::string &name, const std::vector<std::string> &indices,
   for (size_t i = 0; i < indices.size(); ++i) {
     bool isUp = static_cast<int>(i) < fd->up;
     v->tensorIndexIsUp.push_back(isUp);
+    v->tensorIndexOffsets.push_back(0);
+  }
+  checker.infer(v.get());
+  return v;
+}
+
+static std::unique_ptr<IndexedVar> makeConnectionVar(
+    const std::string &name, const std::vector<std::string> &indices,
+    const std::unordered_map<std::string, const FieldDecl *> &fields,
+    TensorTypeChecker &checker) {
+  auto it = fields.find(name);
+  if (it == fields.end())
+    throw std::runtime_error("Connection field not found: " + name);
+  const FieldDecl *fd = it->second;
+
+  const bool isCanonicalConnection = fd->up == 1 && fd->down == 2;
+  if (isCanonicalConnection)
+    return makeVar(name, indices, fields, checker);
+
+  if (!isLegacyNamedConnectionField(name, fd))
+    return makeVar(name, indices, fields, checker);
+
+  // Legacy 'con_tensor3 Gamma[..]' declarations are interpreted as
+  // connection tensors Gamma^i_{jk} for covariant-derivative expansion.
+  auto v = std::make_unique<IndexedVar>(name, IndexedVarKind::Field);
+  v->tensorKind = TensorKind::MixedTensor;
+  v->up = 1;
+  v->down = 2;
+  v->tensorIndexNames = indices;
+  for (size_t i = 0; i < indices.size(); ++i) {
+    v->tensorIndexIsUp.push_back(i == 0);
     v->tensorIndexOffsets.push_back(0);
   }
   checker.infer(v.get());
@@ -135,15 +174,19 @@ static std::pair<std::string, std::string> resolveMetricNames(
 
 static std::string resolveConnectionFieldName(
     const std::unordered_map<std::string, const FieldDecl *> &fields) {
-  auto isConnection = [](const FieldDecl *fd) {
-    return fd && fd->up == 1 && fd->down == 2;
+  auto isConnection = [](const std::string &name, const FieldDecl *fd) {
+    if (!fd)
+      return false;
+    if (fd->up == 1 && fd->down == 2)
+      return true;
+    return isLegacyNamedConnectionField(name, fd);
   };
 
   auto pickNamed = [&](const std::string &name) -> std::string {
     auto it = fields.find(name);
     if (it == fields.end())
       return {};
-    if (!isConnection(it->second))
+    if (!isConnection(it->first, it->second))
       return {};
     return it->first;
   };
@@ -156,7 +199,7 @@ static std::string resolveConnectionFieldName(
   std::string candidate;
   int count = 0;
   for (const auto &kv : fields) {
-    if (!isConnection(kv.second))
+    if (!isConnection(kv.first, kv.second))
       continue;
     candidate = kv.first;
     ++count;
@@ -411,7 +454,7 @@ static std::unique_ptr<IndexedExpr> expandCovariantNablaWithConnectionForTensor(
       gammaIndices = {dummy, slotIdx, derivIdx};
     }
 
-    auto gamma = makeVar(connectionName, gammaIndices, fields, checker);
+    auto gamma = makeConnectionVar(connectionName, gammaIndices, fields, checker);
     auto shifted = cloneTensorWithReplacedIndex(tensorArg, slot, dummy, checker);
     auto correction = makeContract(
         makeBinaryChecked('*', std::move(gamma), std::move(shifted), checker),

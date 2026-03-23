@@ -8,6 +8,12 @@ simulation {
     dt = 0.1
     integrator = euler
   }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
 }
 evolution CheckScalarNabla {
     dt dphi[i] = nabla_i(phi)

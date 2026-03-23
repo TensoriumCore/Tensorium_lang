@@ -121,7 +121,7 @@ SEMANTIC_DIFF_VALID_TESTS=(
 )
 
 SEMANTIC_DIFF_ERROR_TESTS=(
-  "tests/semantic/diff/04_covariant_without_gamma_error.tn|Covariant derivative requires connection tensor Gamma"
+  "tests/semantic/diff/04_covariant_without_gamma_error.tn|nabla on non-scalar tensor requires either"
 )
 
 SEMANTIC_SIMULATION_ERROR_TESTS=(

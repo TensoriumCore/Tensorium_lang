@@ -248,6 +248,10 @@ class TensorTypeChecker {
         char idx = cal[2];
         auto &entry = analysis.entries[(unsigned char)idx];
         entry.count++;
+        if (insideExplicitContract)
+          entry.insideExplicitContraction = true;
+        else
+          entry.outsideExplicitContraction = true;
         // d_i(...) introduces a covariant derivative index.
         entry.variance.covariant += 1;
         return;
@@ -256,11 +260,16 @@ class TensorTypeChecker {
       bool contra = false;
       char nidx = 0;
       if (isCovariantDerivativeBuiltin(c, contra, nidx)) {
-        analysis.entries[(unsigned char)nidx].count++;
-        if (contra)
-          analysis.entries[(unsigned char)nidx].variance.contravariant += 1;
+        auto &entry = analysis.entries[(unsigned char)nidx];
+        entry.count++;
+        if (insideExplicitContract)
+          entry.insideExplicitContraction = true;
         else
-          analysis.entries[(unsigned char)nidx].variance.covariant += 1;
+          entry.outsideExplicitContraction = true;
+        if (contra)
+          entry.variance.contravariant += 1;
+        else
+          entry.variance.covariant += 1;
         return;
       }
 
