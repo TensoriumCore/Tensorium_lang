@@ -159,11 +159,13 @@ static void collectFreeIndices(const backend::ExprIR *expr,
   }
   case ExprIR::Kind::Contraction: {
     auto *ctr = static_cast<const backend::ContractionIR *>(expr);
-    collectFreeIndices(ctr->in.get(), free);
+    std::set<std::string> local;
+    collectFreeIndices(ctr->in.get(), local);
     for (const auto &name : ctr->summedIndices) {
       if (core::isTensorIndexName(name))
-        free.erase(name);
+        local.erase(name);
     }
+    free.insert(local.begin(), local.end());
     return;
   }
   case ExprIR::Kind::IndexRename: {
@@ -186,11 +188,13 @@ static void collectFreeIndices(const backend::ExprIR *expr,
   }
   case ExprIR::Kind::Trace: {
     auto *trace = static_cast<const backend::TraceIR *>(expr);
-    collectFreeIndices(trace->in.get(), free);
+    std::set<std::string> local;
+    collectFreeIndices(trace->in.get(), local);
     for (const auto &name : trace->tracedIndices) {
       if (core::isTensorIndexName(name))
-        free.erase(name);
+        local.erase(name);
     }
+    free.insert(local.begin(), local.end());
     return;
   }
   case ExprIR::Kind::PartialDerivative: {
@@ -214,9 +218,11 @@ static void collectFreeIndices(const backend::ExprIR *expr,
   }
   case ExprIR::Kind::Divergence: {
     auto *div = static_cast<const backend::DivergenceIR *>(expr);
-    collectFreeIndices(div->in.get(), free);
+    std::set<std::string> local;
+    collectFreeIndices(div->in.get(), local);
     if (core::isTensorIndexName(div->contractedIndex))
-      free.erase(div->contractedIndex);
+      local.erase(div->contractedIndex);
+    free.insert(local.begin(), local.end());
     return;
   }
   }

@@ -3692,6 +3692,147 @@ static bool testCovariantDerivativeAllCasesNumericPoint() {
   return true;
 }
 
+static bool testContravariantDerivativeAllCasesNumericPoint() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/contravariant_all_cases_3d.tn",
+      CompilationMode::Executable, ctx, opts);
+
+  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhsFunc) {
+    std::cerr << "FAIL: missing @tensorium_rhs for all-cases contravariant test\n";
+    return false;
+  }
+  if (rhsFunc.getNumArguments() != 8) {
+    std::cerr << "FAIL: expected @tensorium_rhs with 8 field arguments for "
+                 "all-cases contravariant test, got "
+              << rhsFunc.getNumArguments() << "\n";
+    return false;
+  }
+
+  constexpr std::size_t nr = 9;
+  constexpr std::size_t nt = 9;
+  constexpr std::size_t np = 9;
+  constexpr std::size_t nPoints = nr * nt * np;
+  constexpr std::size_t center = 4;
+  const auto linearIndex = [](std::size_t ir, std::size_t it, std::size_t ip) {
+    return (ir * nt + it) * np + ip;
+  };
+  const std::size_t p0 = linearIndex(center, center, center);
+  const auto comp3 = [](unsigned a, unsigned b, unsigned c) {
+    return a * 9 + b * 3 + c;
+  };
+  const auto comp2 = [](unsigned a, unsigned b) { return a * 3 + b; };
+
+  std::array<std::vector<double>, 27> christoffel;
+  std::array<std::vector<double>, 9> inverseMetric;
+  std::array<std::vector<double>, 3> covectorV;
+  std::array<std::vector<double>, 3> vectorW;
+  std::array<std::vector<double>, 9> mixedA;
+  std::array<std::vector<double>, 9> outNablaUpV;
+  std::array<std::vector<double>, 9> outNablaUpW;
+  std::array<std::vector<double>, 27> outNablaUpA;
+
+  std::array<double *, 27> christoffelPtrs{};
+  std::array<double *, 9> inverseMetricPtrs{};
+  std::array<double *, 3> covectorVPtrs{};
+  std::array<double *, 3> vectorWPtrs{};
+  std::array<double *, 9> mixedAPtrs{};
+  std::array<double *, 9> outNablaUpVPtrs{};
+  std::array<double *, 9> outNablaUpWPtrs{};
+  std::array<double *, 27> outNablaUpAPtrs{};
+
+  for (unsigned c = 0; c < 27; ++c) {
+    christoffel[c].assign(nPoints, 0.0);
+    outNablaUpA[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    christoffelPtrs[c] = christoffel[c].data();
+    outNablaUpAPtrs[c] = outNablaUpA[c].data();
+  }
+  for (unsigned c = 0; c < 9; ++c) {
+    inverseMetric[c].assign(nPoints, 0.0);
+    mixedA[c].assign(nPoints, 0.0);
+    outNablaUpV[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    outNablaUpW[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    inverseMetricPtrs[c] = inverseMetric[c].data();
+    mixedAPtrs[c] = mixedA[c].data();
+    outNablaUpVPtrs[c] = outNablaUpV[c].data();
+    outNablaUpWPtrs[c] = outNablaUpW[c].data();
+  }
+  for (unsigned c = 0; c < 3; ++c) {
+    covectorV[c].assign(nPoints, 0.0);
+    vectorW[c].assign(nPoints, 0.0);
+    covectorVPtrs[c] = covectorV[c].data();
+    vectorWPtrs[c] = vectorW[c].data();
+  }
+
+  for (std::size_t p = 0; p < nPoints; ++p) {
+    // Same setup as covariant numeric tests, then raise with identity gammaU.
+    christoffel[comp3(0, 0, 1)][p] = 2.0;
+    christoffel[comp3(0, 1, 2)][p] = 3.0;
+    christoffel[comp3(2, 2, 1)][p] = 5.0;
+
+    inverseMetric[comp2(0, 0)][p] = 1.0;
+    inverseMetric[comp2(1, 1)][p] = 1.0;
+    inverseMetric[comp2(2, 2)][p] = 1.0;
+
+    covectorV[0][p] = 1.0;
+    vectorW[2][p] = 6.0;
+
+    mixedA[comp2(2, 2)][p] = 7.0;
+    mixedA[comp2(0, 2)][p] = 11.0;
+  }
+
+  tensorium_mlir::RhsEvalDescriptor desc;
+  desc.grid.spatialDim = 3;
+  desc.grid.extents = {nr, nt, np};
+  desc.grid.spacing = {1.0, 1.0, 1.0};
+  desc.point = {center, center, center};
+  desc.args.resize(8);
+  desc.args[0].components.assign(christoffelPtrs.begin(), christoffelPtrs.end());
+  desc.args[1].components.assign(inverseMetricPtrs.begin(),
+                                 inverseMetricPtrs.end());
+  desc.args[2].components.assign(covectorVPtrs.begin(), covectorVPtrs.end());
+  desc.args[3].components.assign(vectorWPtrs.begin(), vectorWPtrs.end());
+  desc.args[4].components.assign(mixedAPtrs.begin(), mixedAPtrs.end());
+  desc.args[5].components.assign(outNablaUpVPtrs.begin(), outNablaUpVPtrs.end());
+  desc.args[6].components.assign(outNablaUpWPtrs.begin(), outNablaUpWPtrs.end());
+  desc.args[7].components.assign(outNablaUpAPtrs.begin(), outNablaUpAPtrs.end());
+
+  auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
+  if (!evalRes.ok) {
+    std::cerr << "FAIL: rhs evaluator failed for all-cases contravariant test: "
+              << evalRes.message << "\n";
+    return false;
+  }
+
+  const double nablaUpV_10 = outNablaUpV[comp2(1, 0)][p0];
+  const double nablaUpW_01 = outNablaUpW[comp2(0, 1)][p0];
+  const double nablaUpA_012 = outNablaUpA[comp3(0, 1, 2)][p0];
+
+  const double expectedNablaUpV_10 = -2.0;
+  const double expectedNablaUpW_01 = 18.0;
+  const double expectedNablaUpA_012 = -34.0;
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Contravariant all-cases fallback point\n"
+            << "  nabla^i(V_j) [1,0] got=" << nablaUpV_10
+            << " expected=" << expectedNablaUpV_10 << "\n"
+            << "  nabla^j(W^i) [0,1] got=" << nablaUpW_01
+            << " expected=" << expectedNablaUpW_01 << "\n"
+            << "  nabla^k(A^i_j) [0,1,2] got=" << nablaUpA_012
+            << " expected=" << expectedNablaUpA_012 << "\n";
+
+  if (!almostEqual(nablaUpV_10, expectedNablaUpV_10, 1e-10, 1e-10) ||
+      !almostEqual(nablaUpW_01, expectedNablaUpW_01, 1e-10, 1e-10) ||
+      !almostEqual(nablaUpA_012, expectedNablaUpA_012, 1e-10, 1e-10)) {
+    std::cerr << "FAIL: contravariant all-cases numeric mismatch\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSchwarzschildChristoffelMLIRStructure() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile(
@@ -3943,6 +4084,8 @@ int main() {
        &testCovariantDerivativeRankOneNumericPoint},
       {"testCovariantDerivativeAllCasesNumericPoint",
        &testCovariantDerivativeAllCasesNumericPoint},
+      {"testContravariantDerivativeAllCasesNumericPoint",
+       &testContravariantDerivativeAllCasesNumericPoint},
       {"testSchwarzschildChristoffelNumericPoint",
        &testSchwarzschildChristoffelNumericPoint},
       {"testSchwarzschildChristoffelMLIRStructure",

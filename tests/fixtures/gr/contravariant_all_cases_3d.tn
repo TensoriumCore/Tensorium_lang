@@ -1,0 +1,24 @@
+# Contravariant covariant-derivative fixture over explicit connection fallback.
+field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
+field inverse_metric gammaU[i,j]
+field covector V[i]
+field vector W[i]
+field mixed_tensor(up=1,down=1) A[i,j]
+
+field mixed_tensor(up=1,down=1) nablaUpV[i,j]
+field con_tensor2 nablaUpW[i,j]
+field mixed_tensor(up=2,down=1) nablaUpA[i,k,j]
+
+simulation {
+  coordinates = spherical
+  dimension = 3
+  resolution = [9,9,9]
+  time { dt = 0.01 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution ContravariantAllCases {
+  dt nablaUpV[i,j] = nabla^i(V[j])
+  dt nablaUpW[i,j] = nabla^j(W[i])
+  dt nablaUpA[i,k,j] = nabla^k(A[i,j])
+}

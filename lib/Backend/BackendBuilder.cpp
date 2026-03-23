@@ -116,8 +116,17 @@ static void collectIndexCounts(const tensorium::IndexedExpr *e,
 
   if (auto *c = dynamic_cast<const IndexedCall *>(e)) {
     if (c->callee == "contract") {
-      // Explicit contraction is self-contained; counting indices inside it
-      // would incorrectly trigger an additional implicit contraction outside.
+      // A contract(...) contributes only its free indices to the surrounding
+      // expression. This allows outer expressions to contract against those
+      // free indices (for example gammaU[j,k] * contract(...[i,k]...)).
+      if (c->args.empty())
+        return;
+      std::map<std::string, int> local;
+      collectIndexCounts(c->args[0].get(), local);
+      for (const auto &[idx, count] : local) {
+        if (count == 1)
+          counts[idx] += 1;
+      }
       return;
     }
 
