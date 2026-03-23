@@ -213,11 +213,18 @@ static ChristoffelTerms buildChristoffelTerms(
     const std::string &up, const std::string &d1, const std::string &d2,
     const std::string &g_name, const std::string &invg_name,
     const std::unordered_map<std::string, const FieldDecl *> &fields,
-    TensorTypeChecker &checker) {
+    TensorTypeChecker &checker,
+    const std::unordered_set<std::string> *reservedIndices = nullptr) {
   std::unordered_set<std::string> used;
   used.insert(up);
   used.insert(d1);
   used.insert(d2);
+  if (reservedIndices) {
+    for (const auto &idx : *reservedIndices) {
+      if (!idx.empty())
+        used.insert(idx);
+    }
+  }
   std::string dum = chooseFreshSpatialIndex(used, "Christoffel");
 
   auto termA = makeDeriv(
@@ -255,7 +262,8 @@ static std::unique_ptr<IndexedExpr> expandCovariantNablaForTensor(
     const std::string &derivIdx, const std::string &g_name,
     const std::string &invg_name,
     const std::unordered_map<std::string, const FieldDecl *> &fields,
-    TensorTypeChecker &checker) {
+    TensorTypeChecker &checker,
+    const std::unordered_set<std::string> *reservedIndices = nullptr) {
   if (tensorArg.tensorIndexNames.empty()) {
     throw std::runtime_error(
         "nabla on non-scalar tensor requires explicit indices");
@@ -270,6 +278,12 @@ static std::unique_ptr<IndexedExpr> expandCovariantNablaForTensor(
       baseUsed.insert(idx);
   }
   baseUsed.insert(derivIdx);
+  if (reservedIndices) {
+    for (const auto &idx : *reservedIndices) {
+      if (!idx.empty())
+        baseUsed.insert(idx);
+    }
+  }
 
   for (size_t slot = 0; slot < tensorArg.tensorIndexNames.size(); ++slot) {
     const std::string &slotIdx = tensorArg.tensorIndexNames[slot];
@@ -293,10 +307,12 @@ static std::unique_ptr<IndexedExpr> expandCovariantNablaForTensor(
     ChristoffelTerms gammaTerms;
     if (slotIsUp) {
       gammaTerms = buildChristoffelTerms(slotIdx, derivIdx, dummy, g_name,
-                                         invg_name, fields, checker);
+                                         invg_name, fields, checker,
+                                         &baseUsed);
     } else {
       gammaTerms = buildChristoffelTerms(dummy, derivIdx, slotIdx, g_name,
-                                         invg_name, fields, checker);
+                                         invg_name, fields, checker,
+                                         &baseUsed);
     }
 
     auto repA = cloneTensorWithReplacedIndex(tensorArg, slot, dummy, checker);
@@ -344,7 +360,8 @@ static std::unique_ptr<IndexedExpr> expandCovariantNablaWithConnectionForTensor(
     const IndexedVar &tensorArg, std::unique_ptr<IndexedExpr> tensorArgExpr,
     const std::string &derivIdx, const std::string &connectionName,
     const std::unordered_map<std::string, const FieldDecl *> &fields,
-    TensorTypeChecker &checker) {
+    TensorTypeChecker &checker,
+    const std::unordered_set<std::string> *reservedIndices = nullptr) {
   if (tensorArg.tensorIndexNames.empty()) {
     throw std::runtime_error(
         "nabla on non-scalar tensor requires explicit indices");
@@ -359,6 +376,12 @@ static std::unique_ptr<IndexedExpr> expandCovariantNablaWithConnectionForTensor(
       baseUsed.insert(idx);
   }
   baseUsed.insert(derivIdx);
+  if (reservedIndices) {
+    for (const auto &idx : *reservedIndices) {
+      if (!idx.empty())
+        baseUsed.insert(idx);
+    }
+  }
 
   for (size_t slot = 0; slot < tensorArg.tensorIndexNames.size(); ++slot) {
     const std::string &slotIdx = tensorArg.tensorIndexNames[slot];
@@ -775,14 +798,16 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       std::string covIdx = chooseFreshSpatialIndex(used, "nabla^ expansion");
 
       std::unique_ptr<IndexedExpr> covExpanded;
+      std::unordered_set<std::string> reservedForCovariantExpansion;
+      reservedForCovariantExpansion.insert(derivIdx);
       if (canExpandFromMetric) {
         covExpanded = expandCovariantNablaForTensor(
             tensorSnapshot, std::move(arg), covIdx, gName, invgName, fields,
-            checker);
+            checker, &reservedForCovariantExpansion);
       } else {
         covExpanded = expandCovariantNablaWithConnectionForTensor(
             tensorSnapshot, std::move(arg), covIdx, connectionName, fields,
-            checker);
+            checker, &reservedForCovariantExpansion);
       }
       auto out = raiseWithInverseMetric(std::move(covExpanded), derivIdx, covIdx,
                                         invgName, fields, checker);

@@ -280,11 +280,14 @@ class TensorTypeChecker {
 
     for (char idx : core::kTensorIndices) {
       const auto &entry = analysis.entries[(unsigned char)idx];
-      if (entry.count == 1)
+      const bool explicitOnly =
+          entry.insideExplicitContraction && !entry.outsideExplicitContraction;
+      const int effectiveCount = explicitOnly ? 0 : entry.count;
+      if (effectiveCount == 1)
         analysis.freeIndices.push_back(std::string(1, idx));
-      else if (entry.count == 2)
+      else if (effectiveCount == 2)
         analysis.summedIndices.push_back(std::string(1, idx));
-      else if (entry.count >= 3)
+      else if (effectiveCount >= 3)
         analysis.ambiguousIndices.push_back(std::string(1, idx));
     }
 
@@ -358,7 +361,9 @@ class TensorTypeChecker {
       }
       if (up == 0 || down == 0) {
         throw std::runtime_error(
-            "internal error: mixed-variance contraction rank underflow");
+            "internal error: mixed-variance contraction rank underflow on index '" +
+            name + "' (arg rank up=" + std::to_string(argType.up) +
+            ", down=" + std::to_string(argType.down) + ")");
       }
       --up;
       --down;

@@ -984,7 +984,7 @@ static bool testSchwarzschildCanonicalPatterns() {
 
   for (const auto &fixture : fixtures) {
     backend::ModuleIR mod =
-        buildModuleFromFile(fixture, CompilationMode::Executable);
+        buildModuleFromFile(fixture, CompilationMode::Symbolic);
     validation::canonicalizeDifferentialIR(mod);
     validation::canonicalizeEinsteinIR(mod);
 
@@ -3379,6 +3379,319 @@ static bool testCovariantDerivativeRankOneNumericPoint() {
   return true;
 }
 
+static bool testNablaMetricPathVarianceMatrix() {
+  const std::vector<std::string> fixtures = {
+      "tests/64_valid_nabla_contravariant_scalar.tn",
+      "tests/68_valid_nabla_covector.tn",
+      "tests/69_valid_nabla_mixed_tensor.tn",
+      "tests/70_valid_nabla_contravariant_vector.tn",
+      "tests/73_valid_nabla_contravariant_covector.tn",
+      "tests/74_valid_nabla_contravariant_mixed_tensor.tn",
+  };
+
+  for (const auto &fixture : fixtures) {
+    backend::ModuleIR mod =
+        buildModuleFromFile(fixture, CompilationMode::Executable);
+    validation::canonicalizeDifferentialIR(mod);
+    validation::canonicalizeEinsteinIR(mod);
+    if (!verifyCanonicalIR(mod, fixture))
+      return false;
+
+    IRStats stats;
+    for (const auto &evo : mod.evolutions) {
+      for (const auto &eq : evo.equations)
+        collectExprStats(eq.rhs.get(), stats);
+      for (const auto &tmp : evo.temporaries)
+        collectExprStats(tmp.rhs.get(), stats);
+    }
+
+    if (stats.covariant != 0) {
+      std::cerr << "FAIL(" << fixture
+                << "): nabla sugar must be expanded (no covariant nodes remain)\n";
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool testNablaConnectionFallbackCovariantOnly() {
+  static const char *kSource = R"(
+    field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
+    field covector V[i]
+    field vector W[i]
+    field mixed_tensor(up=1,down=1) A[i,j]
+    field cov_tensor2 nablaV[i,j]
+    field mixed_tensor(up=1,down=1) nablaW[i,j]
+    field mixed_tensor(up=1,down=2) nablaA[i,j,k]
+
+    simulation {
+      dimension = 3
+      resolution = [9,9,9]
+      time { dt = 0.01 integrator = euler }
+      spatial { scheme = fd derivative = centered order = 2 }
+    }
+
+    evolution FallbackCovariantOnly {
+      dt nablaV[i,j] = nabla_j(V[i])
+      dt nablaW[i,j] = nabla_j(W[i])
+      dt nablaA[i,j,k] = nabla_k(A[i,j])
+    }
+  )";
+
+  backend::ModuleIR mod =
+      buildModuleFromSource(kSource, CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  if (!verifyCanonicalIR(mod, "fallback_covariant_only"))
+    return false;
+
+  IRStats stats;
+  for (const auto &evo : mod.evolutions) {
+    for (const auto &eq : evo.equations)
+      collectExprStats(eq.rhs.get(), stats);
+    for (const auto &tmp : evo.temporaries)
+      collectExprStats(tmp.rhs.get(), stats);
+  }
+  if (stats.covariant != 0) {
+    std::cerr << "FAIL: fallback covariant-only program still contains "
+                 "covariant derivative IR nodes\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testNablaConnectionFallbackContravariantRequiresInverseMetric() {
+  static const char *kSource = R"(
+    field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
+    field vector W[i]
+    field con_tensor2 nablaUpW[i,j]
+
+    simulation {
+      dimension = 3
+      resolution = [9,9,9]
+      time { dt = 0.01 integrator = euler }
+      spatial { scheme = fd derivative = centered order = 2 }
+    }
+
+    evolution FallbackContravariantMissingInverse {
+      dt nablaUpW[i,j] = nabla^j(W[i])
+    }
+  )";
+
+  try {
+    (void)buildModuleFromSource(kSource, CompilationMode::Executable);
+  } catch (const std::exception &e) {
+    const std::string msg = e.what();
+    if (msg.find("inverse_metric") == std::string::npos) {
+      std::cerr << "FAIL: expected missing inverse_metric error, got: " << msg
+                << "\n";
+      return false;
+    }
+    return true;
+  }
+
+  std::cerr << "FAIL: expected contravariant nabla fallback to require "
+               "inverse_metric\n";
+  return false;
+}
+
+static bool testNablaConnectionFallbackContravariantNonScalarCompiles() {
+  static const char *kSource = R"(
+    field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
+    field inverse_metric gammaU[i,j]
+    field covector V[i]
+    field vector W[i]
+    field mixed_tensor(up=1,down=1) A[i,j]
+    field mixed_tensor(up=1,down=1) nablaUpV[i,j]
+    field con_tensor2 nablaUpW[i,j]
+    field mixed_tensor(up=2,down=1) nablaUpA[i,k,j]
+
+    simulation {
+      dimension = 3
+      resolution = [9,9,9]
+      time { dt = 0.01 integrator = euler }
+      spatial { scheme = fd derivative = centered order = 2 }
+    }
+
+    evolution FallbackContravariantNonScalar {
+      dt nablaUpV[i,j] = nabla^i(V[j])
+      dt nablaUpW[i,j] = nabla^j(W[i])
+      dt nablaUpA[i,k,j] = nabla^k(A[i,j])
+    }
+  )";
+
+  backend::ModuleIR mod =
+      buildModuleFromSource(kSource, CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  if (!verifyCanonicalIR(mod, "fallback_contravariant_nonscalar"))
+    return false;
+
+  IRStats stats;
+  for (const auto &evo : mod.evolutions) {
+    for (const auto &eq : evo.equations)
+      collectExprStats(eq.rhs.get(), stats);
+    for (const auto &tmp : evo.temporaries)
+      collectExprStats(tmp.rhs.get(), stats);
+  }
+  if (stats.covariant != 0) {
+    std::cerr << "FAIL: contravariant fallback program still contains "
+                 "covariant derivative IR nodes\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testCovariantDerivativeAllCasesNumericPoint() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/covariant_all_cases_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+
+  auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhsFunc) {
+    std::cerr << "FAIL: missing @tensorium_rhs for all-cases covariant test\n";
+    return false;
+  }
+  const unsigned rhsArgCount = rhsFunc.getNumArguments();
+  if (rhsArgCount != 7 && rhsArgCount != 8) {
+    std::cerr << "FAIL: expected @tensorium_rhs with 7 or 8 field arguments for "
+                 "all-cases covariant test, got "
+              << rhsArgCount << "\n";
+    return false;
+  }
+
+  constexpr std::size_t nr = 9;
+  constexpr std::size_t nt = 9;
+  constexpr std::size_t np = 9;
+  constexpr std::size_t nPoints = nr * nt * np;
+  constexpr std::size_t center = 4;
+  const auto linearIndex = [](std::size_t ir, std::size_t it, std::size_t ip) {
+    return (ir * nt + it) * np + ip;
+  };
+  const std::size_t p0 = linearIndex(center, center, center);
+  const auto comp3 = [](unsigned a, unsigned b, unsigned c) {
+    return a * 9 + b * 3 + c;
+  };
+  const auto comp2 = [](unsigned a, unsigned b) { return a * 3 + b; };
+
+  std::array<std::vector<double>, 27> christoffel;
+  std::array<std::vector<double>, 9> inverseMetric;
+  std::array<std::vector<double>, 3> covectorV;
+  std::array<std::vector<double>, 3> vectorW;
+  std::array<std::vector<double>, 9> mixedA;
+  std::array<std::vector<double>, 9> outNablaV;
+  std::array<std::vector<double>, 9> outNablaW;
+  std::array<std::vector<double>, 27> outNablaA;
+
+  std::array<double *, 27> christoffelPtrs{};
+  std::array<double *, 9> inverseMetricPtrs{};
+  std::array<double *, 3> covectorVPtrs{};
+  std::array<double *, 3> vectorWPtrs{};
+  std::array<double *, 9> mixedAPtrs{};
+  std::array<double *, 9> outNablaVPtrs{};
+  std::array<double *, 9> outNablaWPtrs{};
+  std::array<double *, 27> outNablaAPtrs{};
+
+  for (unsigned c = 0; c < 27; ++c) {
+    christoffel[c].assign(nPoints, 0.0);
+    outNablaA[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    christoffelPtrs[c] = christoffel[c].data();
+    outNablaAPtrs[c] = outNablaA[c].data();
+  }
+  for (unsigned c = 0; c < 9; ++c) {
+    inverseMetric[c].assign(nPoints, 0.0);
+    mixedA[c].assign(nPoints, 0.0);
+    outNablaV[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    outNablaW[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    inverseMetricPtrs[c] = inverseMetric[c].data();
+    mixedAPtrs[c] = mixedA[c].data();
+    outNablaVPtrs[c] = outNablaV[c].data();
+    outNablaWPtrs[c] = outNablaW[c].data();
+  }
+  for (unsigned c = 0; c < 3; ++c) {
+    covectorV[c].assign(nPoints, 0.0);
+    vectorW[c].assign(nPoints, 0.0);
+    covectorVPtrs[c] = covectorV[c].data();
+    vectorWPtrs[c] = vectorW[c].data();
+  }
+
+  // Connection and field values chosen so selected components have closed-form
+  // expected values.
+  for (std::size_t p = 0; p < nPoints; ++p) {
+    // Gamma^0_{0 1} = 2 => contributes to covector correction.
+    christoffel[comp3(0, 0, 1)][p] = 2.0;
+    // Gamma^0_{1 2} = 3 => contributes to vector and mixed (+) corrections.
+    christoffel[comp3(0, 1, 2)][p] = 3.0;
+    // Gamma^2_{2 1} = 5 => contributes to mixed (-) correction.
+    christoffel[comp3(2, 2, 1)][p] = 5.0;
+
+    // Identity inverse metric => nabla^1 == nabla_1 for selected probes.
+    inverseMetric[comp2(0, 0)][p] = 1.0;
+    inverseMetric[comp2(1, 1)][p] = 1.0;
+    inverseMetric[comp2(2, 2)][p] = 1.0;
+
+    covectorV[0][p] = 1.0;
+    vectorW[2][p] = 6.0;
+
+    mixedA[comp2(2, 2)][p] = 7.0;
+    mixedA[comp2(0, 2)][p] = 11.0;
+  }
+
+  tensorium_mlir::RhsEvalDescriptor desc;
+  desc.grid.spatialDim = 3;
+  desc.grid.extents = {nr, nt, np};
+  desc.grid.spacing = {1.0, 1.0, 1.0};
+  desc.point = {center, center, center};
+  desc.args.resize(rhsArgCount);
+  unsigned arg = 0;
+  desc.args[arg++].components.assign(christoffelPtrs.begin(), christoffelPtrs.end());
+  if (rhsArgCount == 8) {
+    desc.args[arg++].components.assign(inverseMetricPtrs.begin(),
+                                       inverseMetricPtrs.end());
+  }
+  desc.args[arg++].components.assign(covectorVPtrs.begin(), covectorVPtrs.end());
+  desc.args[arg++].components.assign(vectorWPtrs.begin(), vectorWPtrs.end());
+  desc.args[arg++].components.assign(mixedAPtrs.begin(), mixedAPtrs.end());
+  desc.args[arg++].components.assign(outNablaVPtrs.begin(), outNablaVPtrs.end());
+  desc.args[arg++].components.assign(outNablaWPtrs.begin(), outNablaWPtrs.end());
+  desc.args[arg++].components.assign(outNablaAPtrs.begin(), outNablaAPtrs.end());
+
+  auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
+  if (!evalRes.ok) {
+    std::cerr << "FAIL: rhs evaluator failed for all-cases covariant test: "
+              << evalRes.message << "\n";
+    return false;
+  }
+
+  const double nablaV_01 = outNablaV[comp2(0, 1)][p0];
+  const double nablaW_01 = outNablaW[comp2(0, 1)][p0];
+  const double nablaA_021 = outNablaA[comp3(0, 2, 1)][p0];
+
+  const double expectedNablaV_01 = -2.0;
+  const double expectedNablaW_01 = 18.0;
+  const double expectedNablaA_021 = -34.0;
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Covariant all-cases fallback point\n"
+            << "  nabla_j(V_i) [0,1] got=" << nablaV_01
+            << " expected=" << expectedNablaV_01 << "\n"
+            << "  nabla_j(W^i) [0,1] got=" << nablaW_01
+            << " expected=" << expectedNablaW_01 << "\n"
+            << "  nabla_k(A^i_j) [0,2,1] got=" << nablaA_021
+            << " expected=" << expectedNablaA_021 << "\n";
+
+  if (!almostEqual(nablaV_01, expectedNablaV_01, 1e-10, 1e-10) ||
+      !almostEqual(nablaW_01, expectedNablaW_01, 1e-10, 1e-10) ||
+      !almostEqual(nablaA_021, expectedNablaA_021, 1e-10, 1e-10)) {
+    std::cerr << "FAIL: covariant all-cases numeric mismatch\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSchwarzschildChristoffelMLIRStructure() {
   ::mlir::MLIRContext ctx;
   auto module = buildMLIRModuleFromFile(
@@ -3619,8 +3932,17 @@ int main() {
       {"testKerrLikeReconstructMetricPoint",
        &testKerrLikeReconstructMetricPoint},
       {"testKerrLikeHasNonZeroBetaPhi", &testKerrLikeHasNonZeroBetaPhi},
+      {"testNablaMetricPathVarianceMatrix", &testNablaMetricPathVarianceMatrix},
+      {"testNablaConnectionFallbackCovariantOnly",
+       &testNablaConnectionFallbackCovariantOnly},
+      {"testNablaConnectionFallbackContravariantRequiresInverseMetric",
+       &testNablaConnectionFallbackContravariantRequiresInverseMetric},
+      {"testNablaConnectionFallbackContravariantNonScalarCompiles",
+       &testNablaConnectionFallbackContravariantNonScalarCompiles},
       {"testCovariantDerivativeRankOneNumericPoint",
        &testCovariantDerivativeRankOneNumericPoint},
+      {"testCovariantDerivativeAllCasesNumericPoint",
+       &testCovariantDerivativeAllCasesNumericPoint},
       {"testSchwarzschildChristoffelNumericPoint",
        &testSchwarzschildChristoffelNumericPoint},
       {"testSchwarzschildChristoffelMLIRStructure",

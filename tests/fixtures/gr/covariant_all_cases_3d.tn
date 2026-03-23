@@ -1,0 +1,25 @@
+# Covariant derivative fixture covering vector/covector/mixed and nabla/nabla^
+# using explicit connection fallback (no metric field).
+field mixed_tensor(up=1,down=2) Christoffel[i,j,k]
+field inverse_metric gammaU[i,j]
+field covector V[i]
+field vector W[i]
+field mixed_tensor(up=1,down=1) A[i,j]
+
+field cov_tensor2 nablaV[i,j]
+field mixed_tensor(up=1,down=1) nablaW[i,j]
+field mixed_tensor(up=1,down=2) nablaA[i,j,k]
+
+simulation {
+  coordinates = spherical
+  dimension = 3
+  resolution = [9,9,9]
+  time { dt = 0.01 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution CovariantAllCases {
+  dt nablaV[i,j] = nabla_j(V[i])
+  dt nablaW[i,j] = nabla_j(W[i])
+  dt nablaA[i,j,k] = nabla_k(A[i,j])
+}
