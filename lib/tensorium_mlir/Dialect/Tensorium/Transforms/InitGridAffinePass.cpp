@@ -138,60 +138,60 @@ struct InitGridAffinePass
     Value gammaArg = entry->getArgument(gridArgIdx++);
     Value gammaUArg = entry->getArgument(gridArgIdx++);
 
-    Value c0 = arith::ConstantIndexOp::create(b, loc, 0);
-    Value n = coordMemrefs.empty() ? memref::DimOp::create(b, loc, alphaArg, c0)
-                                   : memref::DimOp::create(b, loc,
+    Value c0 = b.create<arith::ConstantIndexOp>(loc, 0);
+    Value n = coordMemrefs.empty() ? b.create<memref::DimOp>(loc, alphaArg, c0)
+                                   : b.create<memref::DimOp>(loc,
                                                            coordMemrefs.front(), c0);
 
     AffineMap lbMap = AffineMap::getConstantMap(0, &getContext());
     AffineExpr s0 = b.getAffineSymbolExpr(0);
     AffineMap ubMap = AffineMap::get(0, 1, s0);
 
-    auto loop = affine::AffineForOp::create(
-        b, loc, ValueRange{}, lbMap, ValueRange{n}, ubMap, 1);
+    auto loop = b.create<affine::AffineForOp>(loc, ValueRange{}, lbMap,
+                                              ValueRange{n}, ubMap, 1);
 
     OpBuilder ib = OpBuilder::atBlockTerminator(loop.getBody());
     Value i = loop.getInductionVar();
 
     auto mem1Ty = MemRefType::get({1}, f64);
     auto mem9Ty = MemRefType::get({9}, f64);
-    Value tmpAlpha = memref::AllocOp::create(ib, loc, mem1Ty);
-    Value tmpGamma = memref::AllocOp::create(ib, loc, mem9Ty);
-    Value tmpGammaU = memref::AllocOp::create(ib, loc, mem9Ty);
+    Value tmpAlpha = ib.create<memref::AllocOp>(loc, mem1Ty);
+    Value tmpGamma = ib.create<memref::AllocOp>(loc, mem9Ty);
+    Value tmpGammaU = ib.create<memref::AllocOp>(loc, mem9Ty);
 
     SmallVector<Value> callArgs;
     callArgs.reserve(paramArgs.size() + coordMemrefs.size() + 3);
     callArgs.append(paramArgs.begin(), paramArgs.end());
     for (Value coordMemref : coordMemrefs)
       callArgs.push_back(
-          memref::LoadOp::create(ib, loc, coordMemref, ValueRange{i}));
+          ib.create<memref::LoadOp>(loc, coordMemref, ValueRange{i}));
     callArgs.push_back(tmpAlpha);
     callArgs.push_back(tmpGamma);
     callArgs.push_back(tmpGammaU);
 
-    func::CallOp::create(ib, loc, initPoint.getSymName(), TypeRange{}, callArgs);
+    ib.create<func::CallOp>(loc, initPoint.getSymName(), TypeRange{}, callArgs);
 
-    Value a0 = memref::LoadOp::create(ib, loc, tmpAlpha, ValueRange{c0});
-    memref::StoreOp::create(ib, loc, a0, alphaArg, ValueRange{i});
+    Value a0 = ib.create<memref::LoadOp>(loc, tmpAlpha, ValueRange{c0});
+    ib.create<memref::StoreOp>(loc, a0, alphaArg, ValueRange{i});
 
     for (int64_t comp = 0; comp < 9; ++comp) {
-      Value cComp = arith::ConstantIndexOp::create(ib, loc, comp);
-      Value base = arith::MulIOp::create(ib, loc, cComp, n);
-      Value flat = arith::AddIOp::create(ib, loc, base, i);
+      Value cComp = ib.create<arith::ConstantIndexOp>(loc, comp);
+      Value base = ib.create<arith::MulIOp>(loc, cComp, n);
+      Value flat = ib.create<arith::AddIOp>(loc, base, i);
 
-      Value g = memref::LoadOp::create(ib, loc, tmpGamma, ValueRange{cComp});
-      memref::StoreOp::create(ib, loc, g, gammaArg, ValueRange{flat});
+      Value g = ib.create<memref::LoadOp>(loc, tmpGamma, ValueRange{cComp});
+      ib.create<memref::StoreOp>(loc, g, gammaArg, ValueRange{flat});
 
-      Value gU = memref::LoadOp::create(ib, loc, tmpGammaU, ValueRange{cComp});
-      memref::StoreOp::create(ib, loc, gU, gammaUArg, ValueRange{flat});
+      Value gU = ib.create<memref::LoadOp>(loc, tmpGammaU, ValueRange{cComp});
+      ib.create<memref::StoreOp>(loc, gU, gammaUArg, ValueRange{flat});
     }
 
-    memref::DeallocOp::create(ib, loc, tmpAlpha);
-    memref::DeallocOp::create(ib, loc, tmpGamma);
-    memref::DeallocOp::create(ib, loc, tmpGammaU);
+    ib.create<memref::DeallocOp>(loc, tmpAlpha);
+    ib.create<memref::DeallocOp>(loc, tmpGamma);
+    ib.create<memref::DeallocOp>(loc, tmpGammaU);
 
     b.setInsertionPointAfter(loop);
-    func::ReturnOp::create(b, loc);
+    b.create<func::ReturnOp>(loc);
 
     module.push_back(gridFn);
   }

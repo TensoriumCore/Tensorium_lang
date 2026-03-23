@@ -19,9 +19,10 @@ static void emitError(VerifyContext &ctx, const std::string &message) {
 
 static bool hasConnectionTensor(const backend::ModuleIR &module) {
   for (const auto &field : module.fields) {
-    if ((field.name == "Gamma" || field.name == "GammaU" ||
-         field.name == "Christoffel") &&
-        field.tensorType.rank() == 3) {
+    if ((field.tensorType.up == 1 && field.tensorType.down == 2) ||
+        (field.tensorType.rank() == 3 &&
+         (field.name == "Gamma" || field.name == "GammaU" ||
+          field.name == "Christoffel"))) {
       return true;
     }
   }

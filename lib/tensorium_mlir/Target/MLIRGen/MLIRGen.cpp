@@ -125,13 +125,13 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   b.setInsertionPointToEnd(initBlock);
   auto initFieldArg = mapFieldArgs(initBlock, initArgIndices);
   emitInitialDataOps(b, loc, module, initFieldArg);
-  mlir::func::ReturnOp::create(b, loc);
+  b.create<mlir::func::ReturnOp>(loc);
 
   auto *rhsBlock = rhsFunc.addEntryBlock();
   b.setInsertionPointToEnd(rhsBlock);
   auto rhsFieldArg = mapFieldArgs(rhsBlock, rhsArgIndices);
   emitEvolutionOps(b, loc, module, rhsFieldArg);
-  mlir::func::ReturnOp::create(b, loc);
+  b.create<mlir::func::ReturnOp>(loc);
 
   auto *entryBlock = entryFunc.addEntryBlock();
   b.setInsertionPointToEnd(entryBlock);
@@ -145,11 +145,11 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   for (unsigned idx : rhsArgIndices)
     rhsCallArgs.push_back(entryBlock->getArgument(idx));
 
-  mlir::func::CallOp::create(b, loc, tensorium_mlir::abi::kSymbolInit, mlir::TypeRange{},
+  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolInit, mlir::TypeRange{},
                              initCallArgs);
-  mlir::func::CallOp::create(b, loc, tensorium_mlir::abi::kSymbolRhs, mlir::TypeRange{},
+  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolRhs, mlir::TypeRange{},
                              rhsCallArgs);
-  mlir::func::ReturnOp::create(b, loc);
+  b.create<mlir::func::ReturnOp>(loc);
 
   moduleOp->getOperation()->setAttr(
       tensorium_mlir::abi::kAttrABIVersion,

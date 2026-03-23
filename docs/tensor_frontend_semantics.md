@@ -111,10 +111,15 @@ identical variance” or “contract() expects at least one repeated index”).
   - Expansion uses Christoffel terms slot-by-slot:
     `+Gamma` correction for each contravariant slot, `-Gamma` correction for
     each covariant slot.
-  - This expansion requires both a unique `metric` field and a unique
-    `inverse_metric` field.
-* Missing metric/inverse metric declarations or missing explicit argument
-  indices are front-end errors.
+  - Expansion source is selected as follows:
+    - Preferred: unique `metric` + unique `inverse_metric` (Gamma built from
+      metric-compatible formula).
+    - Fallback: unique connection tensor `mixed_tensor(up=1,down=2)` (for
+      example `Christoffel` or `Gamma`).
+  - `nabla^i(...)` on non-scalars always requires `inverse_metric` to raise the
+    derivative index.
+* Missing required tensor declarations or missing explicit argument indices are
+  front-end errors.
 
 ### Tensor Product
 * Binary `*` multiplies tensor ranks as described above. Index annotations are
@@ -148,8 +153,10 @@ A program is considered **valid** when:
 4. Temporaries are defined before use and follow the same index rules.
 5. Externs are only called in executable mode if implementations exist and their
    tensor signatures match.
-6. `nabla` on non-scalars is only valid when `metric` and `inverse_metric` are
-   both declared and uniquely identifiable.
+6. `nabla` on non-scalars is valid when either:
+   - `metric` and `inverse_metric` are both declared and unique, or
+   - a unique connection tensor `mixed_tensor(up=1,down=2)` is declared.
+   Also, `nabla^` on non-scalars still requires `inverse_metric`.
 7. Integer-only fields are provided with integer literals:
    - `simulation.dimension`
    - entries of `simulation.resolution`
@@ -241,8 +248,8 @@ hold:
   - `+`/`-` operate only on identical types.
   - `*` concatenates ranks, `/` divides by scalars.
   - `d_i` adds one covariant slot.
-  - `nabla_i` / `nabla^i` are expanded in Sema using metric-compatible
-    Christoffel terms.
+  - `nabla_i` / `nabla^i` are expanded in Sema using Christoffel terms, sourced
+    either from metric/inverse_metric or a connection tensor field.
   - `contract` removes repeated indices and fails if none exist.
 * Extern calls have matching argument variance and return types.
 

@@ -88,23 +88,24 @@ mlir::Value emitInitExpr(
   switch (expr->kind) {
   case InitExprIR::Kind::Number: {
     auto *n = static_cast<const InitNumberIR *>(expr);
-    return tensorium::mlir::ConstOp::create(b, loc, scalarTy,
+    return b.create<tensorium::mlir::ConstOp>(loc, scalarTy,
                                             b.getF64FloatAttr(n->value))
         .getResult();
   }
   case InitExprIR::Kind::Symbol: {
     auto *s = static_cast<const InitSymbolIR *>(expr);
     if (auto it = fieldArg.find(s->name); it != fieldArg.end()) {
-      return tensorium::mlir::RefOp::create(
-                 b, loc, scalarTy, it->second, b.getStringAttr("field"),
-                 mlir::ArrayAttr(), mlir::ArrayAttr())
+      return b
+          .create<tensorium::mlir::RefOp>(loc, scalarTy, it->second,
+                                          b.getStringAttr("field"),
+                                          mlir::ArrayAttr(), mlir::ArrayAttr())
           .getResult();
     }
 
     if (isCoordinateName(s->name)) {
       if (auto it = coordValues.find(s->name); it != coordValues.end())
         return it->second;
-      auto coord = tensorium::mlir::CoordOp::create(b, loc, scalarTy,
+      auto coord = b.create<tensorium::mlir::CoordOp>(loc, scalarTy,
                                                     b.getStringAttr(s->name));
       coordValues[s->name] = coord.getResult();
       return coord.getResult();
@@ -112,7 +113,7 @@ mlir::Value emitInitExpr(
 
     if (auto it = paramValues.find(s->name); it != paramValues.end())
       return it->second;
-    auto param = tensorium::mlir::ParamOp::create(b, loc, scalarTy,
+    auto param = b.create<tensorium::mlir::ParamOp>(loc, scalarTy,
                                                   b.getStringAttr(s->name));
     paramValues[s->name] = param.getResult();
     return param.getResult();
@@ -125,13 +126,13 @@ mlir::Value emitInitExpr(
                           coordValues);
 
     if (bin->op == '+')
-      return tensorium::mlir::AddOp::create(b, loc, scalarTy, L, R).getResult();
+      return b.create<tensorium::mlir::AddOp>(loc, scalarTy, L, R).getResult();
     if (bin->op == '-')
-      return tensorium::mlir::SubOp::create(b, loc, scalarTy, L, R).getResult();
+      return b.create<tensorium::mlir::SubOp>(loc, scalarTy, L, R).getResult();
     if (bin->op == '*')
-      return tensorium::mlir::MulOp::create(b, loc, scalarTy, L, R).getResult();
+      return b.create<tensorium::mlir::MulOp>(loc, scalarTy, L, R).getResult();
     if (bin->op == '/')
-      return tensorium::mlir::DivOp::create(b, loc, scalarTy, L, R).getResult();
+      return b.create<tensorium::mlir::DivOp>(loc, scalarTy, L, R).getResult();
     if (bin->op == '^') {
       auto *rhsNum = dynamic_cast<const InitNumberIR *>(bin->rhs.get());
       if (!rhsNum)
@@ -142,13 +143,13 @@ mlir::Value emitInitExpr(
         emitUnsupportedExprError(
             loc, "initial_data exponentiation supports integer exponents 0..4");
       if (exp == 0) {
-        return tensorium::mlir::ConstOp::create(b, loc, scalarTy,
+        return b.create<tensorium::mlir::ConstOp>(loc, scalarTy,
                                                 b.getF64FloatAttr(1.0))
             .getResult();
       }
       mlir::Value acc = L;
       for (int i = 1; i < exp; ++i)
-        acc = tensorium::mlir::MulOp::create(b, loc, scalarTy, acc, L)
+        acc = b.create<tensorium::mlir::MulOp>(loc, scalarTy, acc, L)
                   .getResult();
       return acc;
     }
@@ -161,14 +162,14 @@ mlir::Value emitInitExpr(
         emitUnsupportedExprError(loc, "sin() expects 1 argument");
       auto arg = emitInitExpr(b, loc, call->args[0].get(), fieldArg, paramValues,
                               coordValues);
-      return tensorium::mlir::SinOp::create(b, loc, scalarTy, arg).getResult();
+      return b.create<tensorium::mlir::SinOp>(loc, scalarTy, arg).getResult();
     }
     if (call->callee == "sqrt") {
       if (call->args.size() != 1)
         emitUnsupportedExprError(loc, "sqrt() expects 1 argument");
       auto arg = emitInitExpr(b, loc, call->args[0].get(), fieldArg, paramValues,
                               coordValues);
-      return tensorium::mlir::SqrtOp::create(b, loc, scalarTy, arg).getResult();
+      return b.create<tensorium::mlir::SqrtOp>(loc, scalarTy, arg).getResult();
     }
     emitUnsupportedExprError(
         loc, "unsupported initial_data function '" + call->callee + "'");
@@ -223,18 +224,18 @@ void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
           emitInitExpr(b, loc, comp.get(), fieldArg, paramValues, coordValues));
     }
 
-    auto metric = tensorium::mlir::Metric4Op::create(
-        b, loc, metricTy, metricComps, b.getStringAttr(init.metric4.name),
+    auto metric = b.create<tensorium::mlir::Metric4Op>(
+        loc, metricTy, metricComps, b.getStringAttr(init.metric4.name),
         b.getStringAttr(init.metric4.coordSystem),
         makeStringArrayAttr(b, init.metric4.indices),
         b.getBoolAttr(init.metric4.enforceSymmetry));
 
-    auto decomp = tensorium::mlir::Decompose3P1FromMetricOp::create(
-        b, loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
+    auto decomp = b.create<tensorium::mlir::Decompose3P1FromMetricOp>(
+        loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
         metric.getMetric());
 
-    init3p1 = tensorium::mlir::Init3P1Op::create(
-        b, loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
+    init3p1 = b.create<tensorium::mlir::Init3P1Op>(
+        loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy},
         decomp.getAlpha(), decomp.getBeta(), decomp.getGamma(),
         decomp.getGammaU());
   } else if (init.hasDecomposed) {
@@ -256,7 +257,7 @@ void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
           emitInitExpr(b, loc, expr.get(), fieldArg, paramValues, coordValues));
     }
     auto beta =
-        tensorium::mlir::BuildCovectorOp::create(b, loc, betaTy, betaComponents)
+        b.create<tensorium::mlir::BuildCovectorOp>(loc, betaTy, betaComponents)
             .getResult();
 
     llvm::SmallVector<mlir::Value, 9> gammaComponents;
@@ -265,7 +266,7 @@ void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
       gammaComponents.push_back(
           emitInitExpr(b, loc, expr.get(), fieldArg, paramValues, coordValues));
     }
-    auto gamma = tensorium::mlir::BuildCovTensor2Op::create(b, loc, gammaTy,
+    auto gamma = b.create<tensorium::mlir::BuildCovTensor2Op>(loc, gammaTy,
                                                              gammaComponents)
                      .getResult();
 
@@ -275,13 +276,13 @@ void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
       gammaUComponents.push_back(
           emitInitExpr(b, loc, expr.get(), fieldArg, paramValues, coordValues));
     }
-    auto gammaU = tensorium::mlir::BuildConTensor2Op::create(b, loc, gammaUTy,
+    auto gammaU = b.create<tensorium::mlir::BuildConTensor2Op>(loc, gammaUTy,
                                                               gammaUComponents)
                       .getResult();
 
-    init3p1 = tensorium::mlir::Init3P1Op::create(
-        b, loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy}, alpha,
-        beta, gamma, gammaU);
+    init3p1 = b.create<tensorium::mlir::Init3P1Op>(
+        loc, mlir::TypeRange{scalarTy, betaTy, gammaTy, gammaUTy}, alpha, beta,
+        gamma, gammaU);
   }
 
   if (init.split3p1.enabled) {
@@ -293,7 +294,7 @@ void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
                      "' is not available in entry function arguments");
       }
       llvm::SmallVector<mlir::Attribute, 0> noIndices;
-      tensorium::mlir::AssignOp::create(b, loc, it->second, rhs,
+      b.create<tensorium::mlir::AssignOp>(loc, it->second, rhs,
                                         b.getArrayAttr(noIndices));
     };
 

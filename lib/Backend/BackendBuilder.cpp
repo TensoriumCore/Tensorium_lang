@@ -609,8 +609,9 @@ ModuleIR BackendBuilder::build(const Program &prog,
     out.kind = lowerFieldKind(f.kind);
     out.tensorType.up = f.up;
     out.tensorType.down = f.down;
-    if ((f.name == "Gamma" || f.name == "GammaU" || f.name == "Christoffel") &&
-        (f.up + f.down) == 3) {
+    if ((f.up == 1 && f.down == 2) ||
+        ((f.up + f.down) == 3 &&
+         (f.name == "Gamma" || f.name == "GammaU" || f.name == "Christoffel"))) {
       hasConnectionTensor = true;
     }
     mod.fields.push_back(std::move(out));

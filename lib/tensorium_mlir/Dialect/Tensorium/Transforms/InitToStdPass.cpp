@@ -211,14 +211,14 @@ struct InitToStdPass
     };
 
     auto storeScalarAt = [&](Value memref, int64_t idx, Value scalar) {
-      Value index = arith::ConstantIndexOp::create(b, loc, idx);
-      memref::StoreOp::create(b, loc, scalar, memref, ValueRange{index});
+      Value index = b.create<arith::ConstantIndexOp>(loc, idx);
+      b.create<memref::StoreOp>(loc, scalar, memref, ValueRange{index});
     };
 
     for (Operation &op : srcBlock.without_terminator()) {
       if (auto c = dyn_cast<ConstOp>(&op)) {
-        Value v = arith::ConstantFloatOp::create(
-            b, loc, llvm::cast<FloatType>(f64), c.getValue());
+        Value v = b.create<arith::ConstantFloatOp>(
+            loc, c.getValue(), llvm::cast<FloatType>(f64));
         scalarVals[c.getResult()] = v;
         continue;
       }
@@ -254,7 +254,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[a.getRes()] = arith::AddFOp::create(b, loc, *lhs, *rhs);
+        scalarVals[a.getRes()] = b.create<arith::AddFOp>(loc, *lhs, *rhs);
         continue;
       }
 
@@ -265,7 +265,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[s.getRes()] = arith::SubFOp::create(b, loc, *lhs, *rhs);
+        scalarVals[s.getRes()] = b.create<arith::SubFOp>(loc, *lhs, *rhs);
         continue;
       }
 
@@ -276,7 +276,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[m.getRes()] = arith::MulFOp::create(b, loc, *lhs, *rhs);
+        scalarVals[m.getRes()] = b.create<arith::MulFOp>(loc, *lhs, *rhs);
         continue;
       }
 
@@ -287,7 +287,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[d.getRes()] = arith::DivFOp::create(b, loc, *lhs, *rhs);
+        scalarVals[d.getRes()] = b.create<arith::DivFOp>(loc, *lhs, *rhs);
         continue;
       }
 
@@ -297,7 +297,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[sin.getOut()] = math::SinOp::create(b, loc, *in);
+        scalarVals[sin.getOut()] = b.create<math::SinOp>(loc, *in);
         continue;
       }
 
@@ -307,7 +307,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[sq.getOut()] = math::SqrtOp::create(b, loc, *in);
+        scalarVals[sq.getOut()] = b.create<math::SqrtOp>(loc, *in);
         continue;
       }
 
@@ -425,7 +425,7 @@ struct InitToStdPass
       return;
     }
 
-    func::ReturnOp::create(b, loc);
+    b.create<func::ReturnOp>(loc);
     module.push_back(lowered);
   }
 };

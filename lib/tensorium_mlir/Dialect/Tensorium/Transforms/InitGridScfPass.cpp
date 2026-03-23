@@ -137,54 +137,54 @@ struct InitGridScfPass
     Value gammaArg = entry->getArgument(gridArgIdx++);
     Value gammaUArg = entry->getArgument(gridArgIdx++);
 
-    Value c0 = arith::ConstantIndexOp::create(b, loc, 0);
-    Value c1 = arith::ConstantIndexOp::create(b, loc, 1);
-    Value n = coordMemrefs.empty() ? memref::DimOp::create(b, loc, alphaArg, c0)
-                                   : memref::DimOp::create(b, loc,
+    Value c0 = b.create<arith::ConstantIndexOp>(loc, 0);
+    Value c1 = b.create<arith::ConstantIndexOp>(loc, 1);
+    Value n = coordMemrefs.empty() ? b.create<memref::DimOp>(loc, alphaArg, c0)
+                                   : b.create<memref::DimOp>(loc,
                                                            coordMemrefs.front(), c0);
 
-    auto forOp = scf::ForOp::create(b, loc, c0, n, c1);
+    auto forOp = b.create<scf::ForOp>(loc, c0, n, c1);
     b.setInsertionPointToStart(forOp.getBody());
     Value i = forOp.getInductionVar();
 
     auto mem1Ty = MemRefType::get({1}, f64);
     auto mem9Ty = MemRefType::get({9}, f64);
-    Value tmpAlpha = memref::AllocOp::create(b, loc, mem1Ty);
-    Value tmpGamma = memref::AllocOp::create(b, loc, mem9Ty);
-    Value tmpGammaU = memref::AllocOp::create(b, loc, mem9Ty);
+    Value tmpAlpha = b.create<memref::AllocOp>(loc, mem1Ty);
+    Value tmpGamma = b.create<memref::AllocOp>(loc, mem9Ty);
+    Value tmpGammaU = b.create<memref::AllocOp>(loc, mem9Ty);
 
     SmallVector<Value> callArgs;
     callArgs.reserve(paramArgs.size() + coordMemrefs.size() + 3);
     callArgs.append(paramArgs.begin(), paramArgs.end());
     for (Value coordMemref : coordMemrefs)
-      callArgs.push_back(memref::LoadOp::create(b, loc, coordMemref, ValueRange{i}));
+      callArgs.push_back(b.create<memref::LoadOp>(loc, coordMemref, ValueRange{i}));
     callArgs.push_back(tmpAlpha);
     callArgs.push_back(tmpGamma);
     callArgs.push_back(tmpGammaU);
 
-    func::CallOp::create(b, loc, initPoint.getSymName(), TypeRange{}, callArgs);
+    b.create<func::CallOp>(loc, initPoint.getSymName(), TypeRange{}, callArgs);
 
-    Value a0 = memref::LoadOp::create(b, loc, tmpAlpha, ValueRange{c0});
-    memref::StoreOp::create(b, loc, a0, alphaArg, ValueRange{i});
+    Value a0 = b.create<memref::LoadOp>(loc, tmpAlpha, ValueRange{c0});
+    b.create<memref::StoreOp>(loc, a0, alphaArg, ValueRange{i});
 
     for (int64_t comp = 0; comp < 9; ++comp) {
-      Value cComp = arith::ConstantIndexOp::create(b, loc, comp);
-      Value base = arith::MulIOp::create(b, loc, cComp, n);
-      Value flat = arith::AddIOp::create(b, loc, base, i);
+      Value cComp = b.create<arith::ConstantIndexOp>(loc, comp);
+      Value base = b.create<arith::MulIOp>(loc, cComp, n);
+      Value flat = b.create<arith::AddIOp>(loc, base, i);
 
-      Value g = memref::LoadOp::create(b, loc, tmpGamma, ValueRange{cComp});
-      memref::StoreOp::create(b, loc, g, gammaArg, ValueRange{flat});
+      Value g = b.create<memref::LoadOp>(loc, tmpGamma, ValueRange{cComp});
+      b.create<memref::StoreOp>(loc, g, gammaArg, ValueRange{flat});
 
-      Value gU = memref::LoadOp::create(b, loc, tmpGammaU, ValueRange{cComp});
-      memref::StoreOp::create(b, loc, gU, gammaUArg, ValueRange{flat});
+      Value gU = b.create<memref::LoadOp>(loc, tmpGammaU, ValueRange{cComp});
+      b.create<memref::StoreOp>(loc, gU, gammaUArg, ValueRange{flat});
     }
 
-    memref::DeallocOp::create(b, loc, tmpAlpha);
-    memref::DeallocOp::create(b, loc, tmpGamma);
-    memref::DeallocOp::create(b, loc, tmpGammaU);
+    b.create<memref::DeallocOp>(loc, tmpAlpha);
+    b.create<memref::DeallocOp>(loc, tmpGamma);
+    b.create<memref::DeallocOp>(loc, tmpGammaU);
 
     b.setInsertionPointAfter(forOp);
-    func::ReturnOp::create(b, loc);
+    b.create<func::ReturnOp>(loc);
 
     module.push_back(gridFn);
   }

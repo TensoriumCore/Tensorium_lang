@@ -26,8 +26,8 @@ makeVar(const std::string &name, const std::vector<std::string> &indices,
   v->tensorIndexNames = indices;
 
   for (size_t i = 0; i < indices.size(); ++i) {
-    bool isInverse = (fd->kind == TensorKind::InverseMetric);
-    v->tensorIndexIsUp.push_back(isInverse);
+    bool isUp = static_cast<int>(i) < fd->up;
+    v->tensorIndexIsUp.push_back(isUp);
     v->tensorIndexOffsets.push_back(0);
   }
   checker.infer(v.get());
@@ -131,6 +131,43 @@ static std::pair<std::string, std::string> resolveMetricNames(
         "nabla expansion requires a unique inverse_metric field (multiple declared)");
   }
   return {metricName, inverseMetricName};
+}
+
+static std::string resolveConnectionFieldName(
+    const std::unordered_map<std::string, const FieldDecl *> &fields) {
+  auto isConnection = [](const FieldDecl *fd) {
+    return fd && fd->up == 1 && fd->down == 2;
+  };
+
+  auto pickNamed = [&](const std::string &name) -> std::string {
+    auto it = fields.find(name);
+    if (it == fields.end())
+      return {};
+    if (!isConnection(it->second))
+      return {};
+    return it->first;
+  };
+
+  if (auto preferred = pickNamed("Christoffel"); !preferred.empty())
+    return preferred;
+  if (auto preferred = pickNamed("Gamma"); !preferred.empty())
+    return preferred;
+
+  std::string candidate;
+  int count = 0;
+  for (const auto &kv : fields) {
+    if (!isConnection(kv.second))
+      continue;
+    candidate = kv.first;
+    ++count;
+  }
+
+  if (count > 1) {
+    throw std::runtime_error(
+        "nabla expansion requires a unique connection tensor field "
+        "(mixed_tensor(up=1,down=2))");
+  }
+  return candidate;
 }
 
 static std::unique_ptr<IndexedVar>
@@ -289,6 +326,73 @@ static std::unique_ptr<IndexedExpr> expandCovariantNablaForTensor(
     auto sumAB = makeBinaryChecked('+', std::move(halfA), std::move(halfB), checker);
     auto correction = makeBinaryChecked('-', std::move(sumAB), std::move(halfC),
                                         checker);
+
+    if (slotIsUp) {
+      result = makeBinaryChecked('+', std::move(result), std::move(correction),
+                                 checker);
+    } else {
+      result = makeBinaryChecked('-', std::move(result), std::move(correction),
+                                 checker);
+    }
+  }
+
+  checker.infer(result.get());
+  return result;
+}
+
+static std::unique_ptr<IndexedExpr> expandCovariantNablaWithConnectionForTensor(
+    const IndexedVar &tensorArg, std::unique_ptr<IndexedExpr> tensorArgExpr,
+    const std::string &derivIdx, const std::string &connectionName,
+    const std::unordered_map<std::string, const FieldDecl *> &fields,
+    TensorTypeChecker &checker) {
+  if (tensorArg.tensorIndexNames.empty()) {
+    throw std::runtime_error(
+        "nabla on non-scalar tensor requires explicit indices");
+  }
+
+  std::unique_ptr<IndexedExpr> result =
+      makeDeriv(derivIdx, std::move(tensorArgExpr), checker);
+
+  std::unordered_set<std::string> baseUsed;
+  for (const auto &idx : tensorArg.tensorIndexNames) {
+    if (!idx.empty())
+      baseUsed.insert(idx);
+  }
+  baseUsed.insert(derivIdx);
+
+  for (size_t slot = 0; slot < tensorArg.tensorIndexNames.size(); ++slot) {
+    const std::string &slotIdx = tensorArg.tensorIndexNames[slot];
+    if (slotIdx.empty()) {
+      throw std::runtime_error(
+          "nabla on non-scalar tensor requires explicit indices");
+    }
+    if (!isSpatialIndexName(slotIdx)) {
+      throw std::runtime_error("Invalid tensor index '" + slotIdx +
+                               "' in nabla expansion");
+    }
+
+    std::string dummy = chooseFreshSpatialIndex(baseUsed, "nabla expansion");
+    bool slotIsUp = false;
+    if (slot < tensorArg.tensorIndexIsUp.size()) {
+      slotIsUp = tensorArg.tensorIndexIsUp[slot];
+    } else {
+      slotIsUp = slot < static_cast<size_t>(tensorArg.up);
+    }
+
+    std::vector<std::string> gammaIndices;
+    if (slotIsUp) {
+      // +Gamma^i_{k m} T^m...
+      gammaIndices = {slotIdx, derivIdx, dummy};
+    } else {
+      // -Gamma^m_{i k} T_...m...
+      gammaIndices = {dummy, slotIdx, derivIdx};
+    }
+
+    auto gamma = makeVar(connectionName, gammaIndices, fields, checker);
+    auto shifted = cloneTensorWithReplacedIndex(tensorArg, slot, dummy, checker);
+    auto correction = makeContract(
+        makeBinaryChecked('*', std::move(gamma), std::move(shifted), checker),
+        checker);
 
     if (slotIsUp) {
       result = makeBinaryChecked('+', std::move(result), std::move(correction),
@@ -623,10 +727,15 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       auto metrics = resolveMetricNames(fields);
       const std::string &gName = metrics.first;
       const std::string &invgName = metrics.second;
-      if (gName.empty() || invgName.empty()) {
+      const std::string connectionName = resolveConnectionFieldName(fields);
+
+      const bool canExpandFromMetric = !gName.empty() && !invgName.empty();
+      const bool canExpandFromConnection = !connectionName.empty();
+      if (!canExpandFromMetric && !canExpandFromConnection) {
         throw std::runtime_error(
-            "nabla on non-scalar tensor requires 'metric' and "
-            "'inverse_metric'");
+            "nabla on non-scalar tensor requires either "
+            "'metric'+'inverse_metric' or a connection tensor "
+            "mixed_tensor(up=1,down=2)");
       }
 
       auto *tensorVar = dynamic_cast<IndexedVar *>(arg.get());
@@ -642,9 +751,19 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       IndexedVar tensorSnapshot = *tensorVar;
 
       if (!isContravariant) {
-        return expandCovariantNablaForTensor(
-            tensorSnapshot, std::move(arg), derivIdx, gName, invgName, fields,
+        if (canExpandFromMetric) {
+          return expandCovariantNablaForTensor(
+              tensorSnapshot, std::move(arg), derivIdx, gName, invgName, fields,
+              checker);
+        }
+        return expandCovariantNablaWithConnectionForTensor(
+            tensorSnapshot, std::move(arg), derivIdx, connectionName, fields,
             checker);
+      }
+
+      if (invgName.empty()) {
+        throw std::runtime_error(
+            "nabla^ on non-scalar tensor requires 'inverse_metric'");
       }
 
       std::unordered_set<std::string> used;
@@ -655,9 +774,16 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       used.insert(derivIdx);
       std::string covIdx = chooseFreshSpatialIndex(used, "nabla^ expansion");
 
-      auto covExpanded = expandCovariantNablaForTensor(
-          tensorSnapshot, std::move(arg), covIdx, gName, invgName, fields,
-          checker);
+      std::unique_ptr<IndexedExpr> covExpanded;
+      if (canExpandFromMetric) {
+        covExpanded = expandCovariantNablaForTensor(
+            tensorSnapshot, std::move(arg), covIdx, gName, invgName, fields,
+            checker);
+      } else {
+        covExpanded = expandCovariantNablaWithConnectionForTensor(
+            tensorSnapshot, std::move(arg), covIdx, connectionName, fields,
+            checker);
+      }
       auto out = raiseWithInverseMetric(std::move(covExpanded), derivIdx, covIdx,
                                         invgName, fields, checker);
       checker.infer(out.get());
@@ -752,8 +878,9 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
     if (fields.count(f.name))
       throw std::runtime_error("Field redeclared: " + f.name);
     enforceMetricFieldRules(f);
-    if ((f.name == "Gamma" || f.name == "GammaU" || f.name == "Christoffel") &&
-        (f.up + f.down) == 3) {
+    if ((f.up == 1 && f.down == 2) ||
+        ((f.up + f.down) == 3 &&
+         (f.name == "Gamma" || f.name == "GammaU" || f.name == "Christoffel"))) {
       hasConnectionTensor = true;
     }
     fields[f.name] = &f;

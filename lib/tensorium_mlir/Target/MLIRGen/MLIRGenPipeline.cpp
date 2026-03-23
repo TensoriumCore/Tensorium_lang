@@ -91,7 +91,7 @@ bool lowerModuleToLLVM(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createLowerAffinePass());
-  pm.addPass(mlir::createSCFToControlFlowPass());
+  pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::memref::createExpandStridedMetadataPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createConvertMathToLLVMPass());

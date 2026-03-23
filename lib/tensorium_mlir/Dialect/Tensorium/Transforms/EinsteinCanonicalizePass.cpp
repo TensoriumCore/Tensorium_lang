@@ -209,8 +209,8 @@ struct TensoriumEinsteinCanonicalizePass final
       bool valid = true;
       auto roles = makeRolesStrict(b, all, out, counts, valid);
 
-      auto newOp = tensorium::mlir::EinsumOp::create(
-          b, op.getLoc(), op.getResult().getType(), newOps);
+      auto newOp = b.create<tensorium::mlir::EinsumOp>(
+          op.getLoc(), op.getResult().getType(), newOps);
 
       newOp->setAttr("spec", b.getStringAttr(spec));
       newOp->setAttr("tin.idx.ins", fromRefs2D(b, newIns));

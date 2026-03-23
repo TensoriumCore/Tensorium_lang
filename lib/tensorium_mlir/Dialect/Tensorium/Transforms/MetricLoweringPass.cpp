@@ -18,22 +18,22 @@ namespace {
 
 static Value addScalar(OpBuilder &b, Location loc, FieldType scalarTy, Value lhs,
                        Value rhs) {
-  return AddOp::create(b, loc, scalarTy, lhs, rhs).getRes();
+  return b.create<AddOp>(loc, scalarTy, lhs, rhs).getRes();
 }
 
 static Value subScalar(OpBuilder &b, Location loc, FieldType scalarTy, Value lhs,
                        Value rhs) {
-  return SubOp::create(b, loc, scalarTy, lhs, rhs).getRes();
+  return b.create<SubOp>(loc, scalarTy, lhs, rhs).getRes();
 }
 
 static Value mulScalar(OpBuilder &b, Location loc, FieldType scalarTy, Value lhs,
                        Value rhs) {
-  return MulOp::create(b, loc, scalarTy, lhs, rhs).getRes();
+  return b.create<MulOp>(loc, scalarTy, lhs, rhs).getRes();
 }
 
 static Value divScalar(OpBuilder &b, Location loc, FieldType scalarTy, Value lhs,
                        Value rhs) {
-  return DivOp::create(b, loc, scalarTy, lhs, rhs).getRes();
+  return b.create<DivOp>(loc, scalarTy, lhs, rhs).getRes();
 }
 
 struct MetricLoweringPass
@@ -78,15 +78,15 @@ struct MetricLoweringPass
       // beta_i = g_{0i}.
       std::array<Value, 3> beta = {comps[1], comps[2], comps[3]};
 
-      Value gammaVal = BuildCovTensor2Op::create(
-                           b, loc,
-                           llvm::cast<FieldType>(decomp.getGamma().getType()),
-                           ValueRange(gamma))
-                           .getOut();
-      Value betaVal = BuildCovectorOp::create(
-                          b, loc,
-                          llvm::cast<FieldType>(decomp.getBeta().getType()),
-                          ValueRange(beta))
+      Value gammaVal =
+          b.create<BuildCovTensor2Op>(
+               loc, llvm::cast<FieldType>(decomp.getGamma().getType()),
+               ValueRange(gamma))
+              .getOut();
+      Value betaVal = b
+                          .create<BuildCovectorOp>(
+                              loc, llvm::cast<FieldType>(decomp.getBeta().getType()),
+                              ValueRange(beta))
                           .getOut();
 
       // Inverse gammaU = inverse(gamma) via adjugate/determinant.
@@ -139,11 +139,11 @@ struct MetricLoweringPass
           divScalar(b, loc, scalarTy, c12, det),
           divScalar(b, loc, scalarTy, c22, det)};
 
-      Value gammaUVal = BuildConTensor2Op::create(
-                            b, loc,
-                            llvm::cast<FieldType>(decomp.getGammaU().getType()),
-                            ValueRange(gammaU))
-                            .getOut();
+      Value gammaUVal =
+          b.create<BuildConTensor2Op>(
+               loc, llvm::cast<FieldType>(decomp.getGammaU().getType()),
+               ValueRange(gammaU))
+              .getOut();
 
       // alpha = sqrt(beta_i * beta^i - g00), beta^i = gammaU^{ij} beta_j.
       Value betaUp0 = addScalar(
@@ -169,11 +169,10 @@ struct MetricLoweringPass
           mulScalar(b, loc, scalarTy, beta[2], betaUp2));
 
       Value alphaSq = subScalar(b, loc, scalarTy, betaDot, comps[0]);
-      Value alphaVal = SqrtOp::create(
-                           b, loc,
-                           llvm::cast<FieldType>(decomp.getAlpha().getType()),
+      Value alphaVal =
+          b.create<SqrtOp>(loc, llvm::cast<FieldType>(decomp.getAlpha().getType()),
                            alphaSq)
-                           .getOut();
+              .getOut();
 
       decomp.getAlpha().replaceAllUsesWith(alphaVal);
       decomp.getBeta().replaceAllUsesWith(betaVal);

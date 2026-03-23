@@ -200,8 +200,8 @@ public:
         inputFieldMemrefs(inputFieldMemrefs.begin(), inputFieldMemrefs.end()),
         outputFieldMemrefs(outputFieldMemrefs.begin(), outputFieldMemrefs.end()),
         paramScalars(paramScalarsIn) {
-    nPoints = arith::MulIOp::create(b, loc, nx, ny);
-    nPoints = arith::MulIOp::create(b, loc, nPoints, nz);
+    nPoints = b.create<arith::MulIOp>(loc, nx, ny);
+    nPoints = b.create<arith::MulIOp>(loc, nPoints, nz);
   }
 
   LogicalResult lowerDtAssign(DtAssignOp dt) {
@@ -247,8 +247,8 @@ public:
         return failure();
 
       Value cComp = idxConst(static_cast<int64_t>(lhsComp));
-      Value base = arith::MulIOp::create(b, loc, cComp, nPoints);
-      Value flat = arith::AddIOp::create(b, loc, base, linear);
+      Value base = b.create<arith::MulIOp>(loc, cComp, nPoints);
+      Value flat = b.create<arith::AddIOp>(loc, base, linear);
       Value outVal = rhs.comps[*rhsCompOr];
       pendingStores.push_back(
           PendingStore{outputFieldMemrefs[fieldArg.getArgNumber()], flat, outVal});
@@ -259,7 +259,7 @@ public:
 
   void flushPendingStores() {
     for (const PendingStore &s : pendingStores) {
-      memref::StoreOp::create(b, loc, s.value, s.memref, ValueRange{s.flat});
+      b.create<memref::StoreOp>(loc, s.value, s.memref, ValueRange{s.flat});
     }
     pendingStores.clear();
   }
@@ -269,9 +269,9 @@ private:
     if (auto c = dyn_cast_or_null<ConstOp>(v.getDefiningOp())) {
       TensorScalars out;
       out.indices.clear();
-      out.comps.push_back(arith::ConstantFloatOp::create(
-          b, loc, llvm::cast<FloatType>(b.getF64Type()),
-          APFloat(c.getValue().convertToDouble())));
+      out.comps.push_back(b.create<arith::ConstantFloatOp>(
+          loc, APFloat(c.getValue().convertToDouble()),
+          llvm::cast<FloatType>(b.getF64Type())));
       return out;
     }
 
@@ -324,10 +324,11 @@ private:
       Value lin = pointLinear(total);
       for (std::size_t comp = 0; comp < count; ++comp) {
         Value cComp = idxConst(static_cast<int64_t>(comp));
-        Value base = arith::MulIOp::create(b, loc, cComp, nPoints);
-        Value flat = arith::AddIOp::create(b, loc, base, lin);
-        out.comps.push_back(memref::LoadOp::create(
-            b, loc, inputFieldMemrefs[srcArg.getArgNumber()], ValueRange{flat}));
+        Value base = b.create<arith::MulIOp>(loc, cComp, nPoints);
+        Value flat = b.create<arith::AddIOp>(loc, base, lin);
+        out.comps.push_back(
+            b.create<memref::LoadOp>(loc, inputFieldMemrefs[srcArg.getArgNumber()],
+                                     ValueRange{flat}));
       }
       return out;
     }
@@ -355,7 +356,7 @@ private:
 
       Value idx = *axis == 0 ? ix : (*axis == 1 ? iy : iz);
       Value spacing = *axis == 0 ? dx : (*axis == 1 ? dy : dz);
-      Value coord = arith::MulFOp::create(b, loc, indexToF64(idx), spacing);
+      Value coord = b.create<arith::MulFOp>(loc, indexToF64(idx), spacing);
 
       TensorScalars out;
       out.indices.clear();
@@ -391,7 +392,7 @@ private:
       out.comps.reserve(lhs->comps.size() * rhs->comps.size());
       for (Value l : lhs->comps) {
         for (Value r : rhs->comps)
-          out.comps.push_back(arith::MulFOp::create(b, loc, l, r));
+          out.comps.push_back(b.create<arith::MulFOp>(loc, l, r));
       }
       return out;
     }
@@ -409,7 +410,7 @@ private:
       out.indices = lhs->indices;
       out.comps.reserve(lhs->comps.size());
       for (Value l : lhs->comps)
-        out.comps.push_back(arith::DivFOp::create(b, loc, l, rhs->comps[0]));
+        out.comps.push_back(b.create<arith::DivFOp>(loc, l, rhs->comps[0]));
       return out;
     }
 
@@ -429,8 +430,8 @@ private:
       out.indices.push_back(derivIdxAttr.getValue().str());
       out.comps.assign(in0->comps.size() * spatialDim, Value());
 
-      Value two = arith::ConstantFloatOp::create(
-          b, loc, llvm::cast<FloatType>(b.getF64Type()), APFloat(2.0));
+      Value two = b.create<arith::ConstantFloatOp>(
+          loc, APFloat(2.0), llvm::cast<FloatType>(b.getF64Type()));
       for (unsigned axis = 0; axis < spatialDim; ++axis) {
         Shift3 plus = shift;
         Shift3 minus = shift;
@@ -456,13 +457,13 @@ private:
         }
 
         Value spacing = axis == 0 ? dx : (axis == 1 ? dy : dz);
-        Value denom = arith::MulFOp::create(b, loc, two, spacing);
+        Value denom = b.create<arith::MulFOp>(loc, two, spacing);
 
         for (std::size_t c = 0; c < in0->comps.size(); ++c) {
           Value diff =
-              arith::SubFOp::create(b, loc, plusVal->comps[c], minusVal->comps[c]);
+              b.create<arith::SubFOp>(loc, plusVal->comps[c], minusVal->comps[c]);
           out.comps[c * spatialDim + axis] =
-              arith::DivFOp::create(b, loc, diff, denom);
+              b.create<arith::DivFOp>(loc, diff, denom);
         }
       }
       return out;
@@ -581,10 +582,10 @@ private:
 
       Value val;
       if (isSub) {
-        val = arith::SubFOp::create(b, loc, lhs.comps[*lhsCompOr],
+        val = b.create<arith::SubFOp>(loc, lhs.comps[*lhsCompOr],
                                     rhs.comps[*rhsCompOr]);
       } else {
-        val = arith::AddFOp::create(b, loc, lhs.comps[*lhsCompOr],
+        val = b.create<arith::AddFOp>(loc, lhs.comps[*lhsCompOr],
                                     rhs.comps[*rhsCompOr]);
       }
       out.comps.push_back(val);
@@ -644,7 +645,7 @@ private:
         acc = *term;
         first = false;
       } else {
-        acc = arith::AddFOp::create(b, loc, acc, *term);
+        acc = b.create<arith::AddFOp>(loc, acc, *term);
       }
     }
     return acc;
@@ -668,7 +669,7 @@ private:
           prod = term;
           first = false;
         } else {
-          prod = arith::MulFOp::create(b, loc, prod, term);
+          prod = b.create<arith::MulFOp>(loc, prod, term);
         }
       }
       return prod;
@@ -686,36 +687,36 @@ private:
         acc = *term;
         first = false;
       } else {
-        acc = arith::AddFOp::create(b, loc, acc, *term);
+        acc = b.create<arith::AddFOp>(loc, acc, *term);
       }
     }
     return acc;
   }
 
   Value idxConst(int64_t v) {
-    return arith::ConstantIndexOp::create(b, loc, v);
+    return b.create<arith::ConstantIndexOp>(loc, v);
   }
 
   Value addIdx(Value base, int delta) {
     if (delta == 0)
       return base;
     Value c = idxConst(delta);
-    return arith::AddIOp::create(b, loc, base, c);
+    return b.create<arith::AddIOp>(loc, base, c);
   }
 
   Value pointLinear(Shift3 shift) {
     Value x = addIdx(ix, shift.x);
     Value y = addIdx(iy, shift.y);
     Value z = addIdx(iz, shift.z);
-    Value xy = arith::MulIOp::create(b, loc, x, ny);
-    Value xyy = arith::AddIOp::create(b, loc, xy, y);
-    Value xyz = arith::MulIOp::create(b, loc, xyy, nz);
-    return arith::AddIOp::create(b, loc, xyz, z);
+    Value xy = b.create<arith::MulIOp>(loc, x, ny);
+    Value xyy = b.create<arith::AddIOp>(loc, xy, y);
+    Value xyz = b.create<arith::MulIOp>(loc, xyy, nz);
+    return b.create<arith::AddIOp>(loc, xyz, z);
   }
 
   Value indexToF64(Value idx) {
-    Value i64 = arith::IndexCastOp::create(b, loc, b.getI64Type(), idx);
-    return arith::SIToFPOp::create(b, loc, b.getF64Type(), i64);
+    Value i64 = b.create<arith::IndexCastOp>(loc, b.getI64Type(), idx);
+    return b.create<arith::SIToFPOp>(loc, b.getF64Type(), i64);
   }
 
   std::optional<unsigned> coordAxis(llvm::StringRef name) const {
@@ -862,26 +863,26 @@ struct RhsGridScfPass
 
     SmallVector<Value> snapshotMemrefs;
     snapshotMemrefs.reserve(fieldMemrefs.size());
-    Value zeroIdx = arith::ConstantIndexOp::create(b, loc, 0);
+    Value zeroIdx = b.create<arith::ConstantIndexOp>(loc, 0);
     for (Value mem : fieldMemrefs) {
-      Value size = memref::DimOp::create(b, loc, mem, zeroIdx);
-      auto snap = memref::AllocOp::create(
-          b, loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
-      memref::CopyOp::create(b, loc, mem, snap);
+      Value size = b.create<memref::DimOp>(loc, mem, zeroIdx);
+      auto snap = b.create<memref::AllocOp>(
+          loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
+      b.create<memref::CopyOp>(loc, mem, snap);
       snapshotMemrefs.push_back(snap);
     }
 
-    Value c1 = arith::ConstantIndexOp::create(b, loc, 1);
-    Value c2 = arith::ConstantIndexOp::create(b, loc, 2);
-    Value ubX = arith::SubIOp::create(b, loc, nx, c2);
-    Value ubY = arith::SubIOp::create(b, loc, ny, c2);
-    Value ubZ = arith::SubIOp::create(b, loc, nz, c2);
+    Value c1 = b.create<arith::ConstantIndexOp>(loc, 1);
+    Value c2 = b.create<arith::ConstantIndexOp>(loc, 2);
+    Value ubX = b.create<arith::SubIOp>(loc, nx, c2);
+    Value ubY = b.create<arith::SubIOp>(loc, ny, c2);
+    Value ubZ = b.create<arith::SubIOp>(loc, nz, c2);
 
-    auto loopX = scf::ForOp::create(b, loc, c2, ubX, c1);
+    auto loopX = b.create<scf::ForOp>(loc, c2, ubX, c1);
     b.setInsertionPointToStart(loopX.getBody());
-    auto loopY = scf::ForOp::create(b, loc, c2, ubY, c1);
+    auto loopY = b.create<scf::ForOp>(loc, c2, ubY, c1);
     b.setInsertionPointToStart(loopY.getBody());
-    auto loopZ = scf::ForOp::create(b, loc, c2, ubZ, c1);
+    auto loopZ = b.create<scf::ForOp>(loc, c2, ubZ, c1);
 
     {
       OpBuilder ib = OpBuilder::atBlockBegin(loopZ.getBody());
@@ -905,8 +906,8 @@ struct RhsGridScfPass
 
     b.setInsertionPointAfter(loopX);
     for (Value snap : snapshotMemrefs)
-      memref::DeallocOp::create(b, loc, snap);
-    func::ReturnOp::create(b, loc);
+      b.create<memref::DeallocOp>(loc, snap);
+    b.create<func::ReturnOp>(loc);
 
     module.push_back(outFn);
   }
@@ -1030,32 +1031,32 @@ struct RhsGridAffinePass
 
     SmallVector<Value> snapshotMemrefs;
     snapshotMemrefs.reserve(fieldMemrefs.size());
-    Value zeroIdx = arith::ConstantIndexOp::create(b, loc, 0);
+    Value zeroIdx = b.create<arith::ConstantIndexOp>(loc, 0);
     for (Value mem : fieldMemrefs) {
-      Value size = memref::DimOp::create(b, loc, mem, zeroIdx);
-      auto snap = memref::AllocOp::create(
-          b, loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
-      memref::CopyOp::create(b, loc, mem, snap);
+      Value size = b.create<memref::DimOp>(loc, mem, zeroIdx);
+      auto snap = b.create<memref::AllocOp>(
+          loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
+      b.create<memref::CopyOp>(loc, mem, snap);
       snapshotMemrefs.push_back(snap);
     }
 
-    Value c2 = arith::ConstantIndexOp::create(b, loc, 2);
-    Value ubX = arith::SubIOp::create(b, loc, nx, c2);
-    Value ubY = arith::SubIOp::create(b, loc, ny, c2);
-    Value ubZ = arith::SubIOp::create(b, loc, nz, c2);
+    Value c2 = b.create<arith::ConstantIndexOp>(loc, 2);
+    Value ubX = b.create<arith::SubIOp>(loc, nx, c2);
+    Value ubY = b.create<arith::SubIOp>(loc, ny, c2);
+    Value ubZ = b.create<arith::SubIOp>(loc, nz, c2);
 
     AffineMap lbMap = AffineMap::getConstantMap(2, &getContext());
     AffineExpr s0 = b.getAffineSymbolExpr(0);
     AffineMap ubMap = AffineMap::get(0, 1, s0);
 
-    auto loopX = affine::AffineForOp::create(
-        b, loc, ValueRange{}, lbMap, ValueRange{ubX}, ubMap, 1);
+    auto loopX = b.create<affine::AffineForOp>(loc, ValueRange{}, lbMap,
+                                               ValueRange{ubX}, ubMap, 1);
     b.setInsertionPointToStart(loopX.getBody());
-    auto loopY = affine::AffineForOp::create(
-        b, loc, ValueRange{}, lbMap, ValueRange{ubY}, ubMap, 1);
+    auto loopY = b.create<affine::AffineForOp>(loc, ValueRange{}, lbMap,
+                                               ValueRange{ubY}, ubMap, 1);
     b.setInsertionPointToStart(loopY.getBody());
-    auto loopZ = affine::AffineForOp::create(
-        b, loc, ValueRange{}, lbMap, ValueRange{ubZ}, ubMap, 1);
+    auto loopZ = b.create<affine::AffineForOp>(loc, ValueRange{}, lbMap,
+                                               ValueRange{ubZ}, ubMap, 1);
 
     {
       OpBuilder ib = OpBuilder::atBlockBegin(loopZ.getBody());
@@ -1079,8 +1080,8 @@ struct RhsGridAffinePass
 
     b.setInsertionPointAfter(loopX);
     for (Value snap : snapshotMemrefs)
-      memref::DeallocOp::create(b, loc, snap);
-    func::ReturnOp::create(b, loc);
+      b.create<memref::DeallocOp>(loc, snap);
+    b.create<func::ReturnOp>(loc);
 
     module.push_back(outFn);
   }
