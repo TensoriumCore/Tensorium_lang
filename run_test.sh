@@ -641,6 +641,7 @@ bash tools/dev/test_schwarzschild_christoffel_ll.sh
 bash tools/dev/test_reissner_christoffel_ll.sh
 bash tools/dev/test_kerr_like_christoffel_ll.sh
 bash tools/dev/test_minkowski_ricci_ll.sh
+bash tools/dev/test_schwarzschild_ricci_ll.sh
 bash tools/dev/test_covariant_rank1_ll.sh
 
 echo
