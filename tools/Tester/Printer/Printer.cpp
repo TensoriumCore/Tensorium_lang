@@ -182,6 +182,13 @@ void printIndexedExpr(const IndexedExpr *e) {
       std::cout << "[";
       for (size_t i = 0; i < v->tensorIndexNames.size(); ++i) {
         std::cout << v->tensorIndexNames[i];
+        int off = 0;
+        if (i < v->tensorIndexOffsets.size())
+          off = v->tensorIndexOffsets[i];
+        if (off > 0)
+          std::cout << "+" << off;
+        else if (off < 0)
+          std::cout << off;
         if (i + 1 < v->tensorIndexNames.size())
           std::cout << ",";
       }

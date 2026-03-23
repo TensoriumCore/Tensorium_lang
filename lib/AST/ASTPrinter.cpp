@@ -39,6 +39,13 @@ public:
     std::cout << E.base << "[";
     for (size_t i = 0; i < E.indices.size(); ++i) {
       std::cout << E.indices[i];
+      int off = 0;
+      if (i < E.indexOffsets.size())
+        off = E.indexOffsets[i];
+      if (off > 0)
+        std::cout << "+" << off;
+      else if (off < 0)
+        std::cout << off;
       if (i + 1 < E.indices.size())
         std::cout << ",";
     }

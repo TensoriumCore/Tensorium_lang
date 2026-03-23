@@ -515,7 +515,7 @@ public:
 
       if (cal == "contract") {
         if (call->args.size() != 1)
-          throw std::runtime_error("contract() expects 1 argument");
+          throw std::runtime_error(cal + "() expects 1 argument");
 
         const IndexedExpr *arg = call->args[0].get();
         TensorType t = inferImpl(arg, true);

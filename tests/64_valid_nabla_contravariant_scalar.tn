@@ -1,0 +1,24 @@
+field scalar phi
+field vector grad[i]
+field metric gamma[i,j]
+field inverse_metric gammaU[i,j]
+
+simulation {
+  dimension = 2
+  resolution = [8,8]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution NablaContravariantScalar {
+  dt grad[i] = nabla^i(phi)
+}

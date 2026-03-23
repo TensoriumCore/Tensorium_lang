@@ -1,0 +1,24 @@
+field covector W[i]
+field mixed_tensor(up=1,down=1) dW[i,j]
+field metric gamma[i,j]
+field inverse_metric gammaU[i,j]
+
+simulation {
+  dimension = 2
+  resolution = [8,8]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution NablaContravariantCovector {
+  dt dW[i,j] = nabla^j(W[i])
+}

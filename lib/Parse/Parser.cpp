@@ -77,6 +77,22 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
   if (cur.type == TokenType::Identifier) {
     std::string n = cur.text;
     advance();
+    if (n == "nabla" && cur.type == TokenType::Caret) {
+      advance();
+      if (cur.type != TokenType::Identifier)
+        syntaxError("expected index after nabla^");
+      std::string idx = cur.text;
+      if (idx.size() != 1)
+        syntaxError("nabla^ expects a single index name");
+      advance();
+      expect(TokenType::LParen);
+      auto args = parseExprList();
+      expect(TokenType::RParen);
+      auto c = std::make_unique<CallExpr>();
+      c->callee = "nabla^" + idx;
+      c->args = std::move(args);
+      return c;
+    }
     if (cur.type == TokenType::LParen) {
       advance();
       auto args = parseExprList();
@@ -89,9 +105,24 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     if (cur.type == TokenType::LBracket) {
       advance();
       std::vector<std::string> idx;
+      std::vector<int> offs;
       while (cur.type == TokenType::Identifier) {
         idx.push_back(cur.text);
         advance();
+        int off = 0;
+        if (cur.type == TokenType::Plus || cur.type == TokenType::Minus) {
+          bool neg = (cur.type == TokenType::Minus);
+          advance();
+          if (cur.type != TokenType::Number)
+            syntaxError("index offset expects an integer literal");
+          if (cur.text.find('.') != std::string::npos)
+            syntaxError("index offset expects an integer literal");
+          off = std::stoi(cur.text);
+          if (neg)
+            off = -off;
+          advance();
+        }
+        offs.push_back(off);
         if (cur.type == TokenType::Comma) {
           advance();
           continue;
@@ -99,7 +130,8 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         break;
       }
       expect(TokenType::RBracket);
-      return std::make_unique<IndexedVarExpr>(n, std::move(idx));
+      return std::make_unique<IndexedVarExpr>(n, std::move(idx),
+                                              std::move(offs));
     }
     return std::make_unique<VarExpr>(n);
   }
@@ -248,6 +280,8 @@ TensorTypeDesc Parser::parseTensorTypeDesc() {
       advance();
       expect(TokenType::Equals);
       if (cur.type != TokenType::Number)
+        syntaxError("mixed_tensor attribute expects integer");
+      if (cur.text.find('.') != std::string::npos)
         syntaxError("mixed_tensor attribute expects integer");
       int value = std::stoi(cur.text);
       if (attr == "up") {
@@ -794,6 +828,8 @@ SpatialConfig Parser::parseSpatialBlock() {
 
       if (cur.type != TokenType::Number)
         syntaxError("order expects an integer");
+      if (cur.text.find('.') != std::string::npos)
+        syntaxError("order expects an integer");
 
       cfg.order = std::stoi(cur.text);
       hasOrder = true;
@@ -879,9 +915,13 @@ SimulationConfig Parser::parseSimulation() {
         syntaxError("duplicate 'dimension' entry in simulation block");
       advance();
       expect(TokenType::Equals);
+      if (cur.type != TokenType::Number)
+        syntaxError("dimension expects an integer");
+      if (cur.text.find('.') != std::string::npos)
+        syntaxError("dimension expects an integer");
       cfg.dimension = std::stoi(cur.text);
-      expect(TokenType::Number);
       hasDimension = true;
+      advance();
       continue;
     }
 
@@ -894,6 +934,8 @@ SimulationConfig Parser::parseSimulation() {
 
       cfg.resolution.clear();
       while (cur.type == TokenType::Number) {
+        if (cur.text.find('.') != std::string::npos)
+          syntaxError("resolution expects integer values");
         cfg.resolution.push_back(std::stoi(cur.text));
         advance();
         if (cur.type == TokenType::Comma)

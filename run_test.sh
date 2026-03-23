@@ -48,8 +48,20 @@ VALID_TESTS=(
   tests/50_large_tensor_mix.tn
   tests/51_large_tensor_flux.tn
   tests/56_metric_decl_ok.tn
+  tests/58_nabla_scalar.tn
+  tests/59_nabla_expand.tn
   tests/31_temp_valid_scalar.tn
   tests/semantic/robustness/04_explicit_parameter_declaration.tn
+  tests/60_valid_index_offset.tn
+  tests/61_valid_field_mixed_tensor.tn
+  tests/62_valid_trace_builtin.tn
+  tests/63_valid_laplacian_builtin.tn
+  tests/64_valid_nabla_contravariant_scalar.tn
+  tests/68_valid_nabla_covector.tn
+  tests/69_valid_nabla_mixed_tensor.tn
+  tests/70_valid_nabla_contravariant_vector.tn
+  tests/73_valid_nabla_contravariant_covector.tn
+  tests/74_valid_nabla_contravariant_mixed_tensor.tn
 )
 
 EXTERN_TESTS=(
@@ -81,6 +93,11 @@ ERROR_TESTS=(
   tests/55_error_implicit_contraction.tn
   tests/57_error_metric_rank.tn
   tests/58_error_non_dt_field_assign.tn
+  tests/65_error_nabla_contravariant_missing_inverse_metric.tn
+  tests/66_error_dimension_non_integer.tn
+  tests/67_error_spatial_order_non_integer.tn
+  tests/71_error_nabla_tensor_missing_metric.tn
+  tests/72_error_nabla_tensor_requires_indices.tn
 )
 
 SEMANTIC_EINSTEIN_VALID_TESTS=(

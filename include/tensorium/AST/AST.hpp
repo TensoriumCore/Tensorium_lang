@@ -78,8 +78,14 @@ struct CallExpr : Expr {
 struct IndexedVarExpr : Expr {
   std::string base;
   std::vector<std::string> indices;
-  IndexedVarExpr(std::string b, std::vector<std::string> idx)
-      : base(std::move(b)), indices(std::move(idx)) {}
+  std::vector<int> indexOffsets;
+  IndexedVarExpr(std::string b, std::vector<std::string> idx,
+                 std::vector<int> offs = {})
+      : base(std::move(b)), indices(std::move(idx)),
+        indexOffsets(std::move(offs)) {
+    if (indexOffsets.size() != indices.size())
+      indexOffsets.assign(indices.size(), 0);
+  }
   void accept(ExprVisitor &v) const override { v.visit(*this); }
 };
 
