@@ -52,7 +52,6 @@ To compile and analyze a Tensorium source file (.tn):
 
 This pipeline perform:
 
-- This pipeline performs:
 - stencil lowering
 - artificial dissipation pass
 - Einstein index lowering
