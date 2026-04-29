@@ -4,7 +4,7 @@ field inverse_metric gammaU[i,j]
 field covector V[i]
 field vector W[i]
 field mixed_tensor(up=1,down=1) A[i,j]
-
+//miced tensors 
 field mixed_tensor(up=1,down=1) nablaUpV[i,j]
 field con_tensor2 nablaUpW[i,j]
 field mixed_tensor(up=2,down=1) nablaUpA[i,k,j]
