@@ -1,0 +1,51 @@
+# Exact vacuum Kasner slice at t = 1 in Cartesian coordinates, viewed on the
+# constraint-satisfying Z4c submanifold Theta = 0.
+#
+# In this limit, Khat + 2*Theta = K and the homogeneous vacuum Z4c equations
+# reduce exactly to the corresponding BSSN Kasner ODEs used below.
+field scalar chi
+field scalar alpha
+field scalar Theta
+field scalar Khat
+field cov_tensor2 gammatilde[i,j]
+field con_tensor2 gammatildeU[i,j]
+field cov_tensor2 Atilde[i,j]
+field vector Gammahat[i]
+field scalar dchi
+field scalar dKhat
+field cov_tensor2 dgammatilde[i,j]
+field cov_tensor2 dAtilde[i,j]
+field vector dGammahat[i]
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [1,1,1]
+
+  time {
+    dt = 0.01
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution Z4cKasnerReduction {
+  dt dchi = (2.0/3.0) * alpha * chi * (Khat + 2.0 * Theta)
+  dt dgammatilde[i,j] = -2.0 * alpha * Atilde[i,j]
+  dt dKhat =
+      alpha * (
+        (1.0/3.0) * (Khat + 2.0 * Theta) * (Khat + 2.0 * Theta)
+        + contract(
+            Atilde[i,j] * gammatildeU[i,k] * gammatildeU[j,l] * Atilde[k,l]
+          )
+      )
+  dt dAtilde[i,j] =
+      alpha * (Khat + 2.0 * Theta) * Atilde[i,j]
+    - 2.0 * alpha * contract(Atilde[i,k] * gammatildeU[k,l] * Atilde[l,j])
+  dt dGammahat[i] = Gammahat[i] - Gammahat[i]
+}

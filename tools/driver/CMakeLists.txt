@@ -4,6 +4,8 @@ add_executable(Tensorium_cc
 )
 
 target_link_libraries(Tensorium_cc PRIVATE
+  tensoriumParse
+  tensoriumRuntime
   tensoriumLowering
   tensoriumValidation
   tensoriumMlirCodegen

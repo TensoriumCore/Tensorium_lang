@@ -1,0 +1,57 @@
+# Exact vacuum Kasner slice at t = 1 in Cartesian coordinates.
+# Chosen exponents: (p1, p2, p3) = (2/3, 2/3, -1/3).
+# On this slice:
+#   chi = 1
+#   gammatilde_ij = delta_ij
+#   K = -1
+#   Atilde_ij = diag(-1/3, -1/3, 2/3)
+#   Gammahat^i = 0
+#   alpha = 1
+#
+# The BSSN vacuum equations with zero shift reduce to a spatially homogeneous
+# ODE system whose exact RHS is non-trivial and analytically known.
+field scalar chi
+field scalar alpha
+field scalar K
+field cov_tensor2 gammatilde[i,j]
+field con_tensor2 gammatildeU[i,j]
+field cov_tensor2 Atilde[i,j]
+field vector Gammahat[i]
+field scalar dchi
+field scalar dK
+field cov_tensor2 dgammatilde[i,j]
+field cov_tensor2 dAtilde[i,j]
+field vector dGammahat[i]
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [1,1,1]
+
+  time {
+    dt = 0.01
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution BSSNKasner {
+  dt dchi = (2.0/3.0) * alpha * chi * K
+  dt dgammatilde[i,j] = -2.0 * alpha * Atilde[i,j]
+  dt dK =
+      alpha * (
+        (1.0/3.0) * K * K
+        + contract(
+            Atilde[i,j] * gammatildeU[i,k] * gammatildeU[j,l] * Atilde[k,l]
+          )
+      )
+  dt dAtilde[i,j] =
+      alpha * K * Atilde[i,j]
+    - 2.0 * alpha * contract(Atilde[i,k] * gammatildeU[k,l] * Atilde[l,j])
+  dt dGammahat[i] = Gammahat[i] - Gammahat[i]
+}

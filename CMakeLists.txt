@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(TENSORIUM_WARNINGS "Enable warnings" ON)
 
+include(CTest)
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
@@ -44,3 +45,13 @@ endif()
 
 add_subdirectory(lib)
 add_subdirectory(tools)
+
+if (BUILD_TESTING)
+  add_test(NAME tensorium_unittests COMMAND Tensorium_unittests)
+  add_test(NAME tensorium_full_suite
+    COMMAND bash ${PROJECT_SOURCE_DIR}/run_test.sh
+  )
+  set_tests_properties(tensorium_unittests tensorium_full_suite PROPERTIES
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+  )
+endif()

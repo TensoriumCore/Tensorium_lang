@@ -1,0 +1,23 @@
+// The lexer must accept C++-style line comments in source fixtures.
+field scalar phi
+
+simulation {
+  dimension = 1
+  resolution = [8]
+
+  time {
+    dt = 0.1
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution SlashSlashComment {
+  // Inline comments before equations must be ignored.
+  dt phi = phi
+}

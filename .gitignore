@@ -1,7 +1,7 @@
 *.egg-info/
 dist/
 __pycache__/
-
+CODEX_NEXT_STEPS.md
 pybuild/
 build/
 *.o

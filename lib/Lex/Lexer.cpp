@@ -20,7 +20,7 @@ Token Lexer::next() {
       advanceChar();
       continue;
     }
-    if (*src == '#') {
+    if (*src == '#' || (*src == '/' && *(src + 1) == '/')) {
       while (*src && *src != '\n')
         advanceChar();
       continue;

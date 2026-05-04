@@ -67,6 +67,8 @@ All test programs are located in tests/.
 - Files containing error are expected to fail semantic or Einstein validation
 
 ```bash
+ctest --test-dir build --output-on-failure
+bash run_test.sh
 ./build/tools/driver/Tensorium_cc --dump-mlir tests/22_BSSN_minimal.tn
 
 ```

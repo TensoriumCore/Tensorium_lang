@@ -5,6 +5,7 @@ add_executable(Tensorium_tester
 
 target_link_libraries(Tensorium_tester
   PRIVATE
+    tensoriumParse
     tensoriumLowering
     tensoriumValidation
 )
@@ -16,6 +17,7 @@ add_executable(Tensorium_unittests
 target_link_libraries(Tensorium_unittests
   PRIVATE
     tensoriumCompilerAPI
+    tensoriumParse
     tensoriumLowering
     tensoriumValidation
     tensoriumMlirCodegen

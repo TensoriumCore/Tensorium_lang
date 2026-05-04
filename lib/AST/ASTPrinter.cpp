@@ -1,6 +1,5 @@
 #include "tensorium/AST/ASTPrinter.hpp"
 #include "tensorium/AST/AST.hpp"
-#include "tensorium/AST/Visitor.hpp"
 #include <iostream>
 
 namespace tensorium {

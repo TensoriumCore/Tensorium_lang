@@ -52,6 +52,7 @@ VALID_TESTS=(
   tests/59_nabla_expand.tn
   tests/31_temp_valid_scalar.tn
   tests/semantic/robustness/04_explicit_parameter_declaration.tn
+  tests/semantic/robustness/07_cpp_line_comment.tn
   tests/60_valid_index_offset.tn
   tests/61_valid_field_mixed_tensor.tn
   tests/62_valid_trace_builtin.tn

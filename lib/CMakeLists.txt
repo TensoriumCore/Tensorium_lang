@@ -1,32 +1,80 @@
-add_library(tensoriumCore
+function(tensorium_configure_public_headers target_name)
+  target_include_directories(${target_name} PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+  )
+endfunction()
+
+add_library(tensoriumAST
   AST/ASTPrinter.cpp
-  AST/Expr.cpp
+)
+tensorium_configure_public_headers(tensoriumAST)
+
+add_library(tensoriumLex
   Lex/Lexer.cpp
+)
+tensorium_configure_public_headers(tensoriumLex)
+
+add_library(tensoriumParse
   Parse/Parser.cpp
-  Runtime/CpuRuntime.cpp
-  Runtime/Eval.cpp
-  Sema/CallSupport.cpp
-  Sema/Sema.cpp
-  Sema/SemaInitialData.cpp
+  Parse/ParserDeclarations.cpp
+  Parse/ParserExpressions.cpp
+  Parse/ParserInitialData.cpp
+  Parse/ParserSimulation.cpp
+)
+tensorium_configure_public_headers(tensoriumParse)
+target_link_libraries(tensoriumParse PUBLIC
+  tensoriumAST
+  tensoriumLex
 )
 
-target_include_directories(tensoriumCore PUBLIC
-  ${PROJECT_SOURCE_DIR}/include
+add_library(tensoriumSema
+  Sema/CallSupport.cpp
+  Sema/SemaAnalysis.cpp
+  Sema/SemaConstruction.cpp
+  Sema/Sema.cpp
+  Sema/SemaInitialData.cpp
+  Sema/SemaMetricRules.cpp
+  Sema/SemaSimulation.cpp
 )
+tensorium_configure_public_headers(tensoriumSema)
+target_link_libraries(tensoriumSema PUBLIC
+  tensoriumAST
+)
+
+add_library(tensoriumRuntime
+  Runtime/CpuRuntime.cpp
+  Runtime/Eval.cpp
+)
+tensorium_configure_public_headers(tensoriumRuntime)
+
 
 add_library(tensoriumIR INTERFACE)
 target_include_directories(tensoriumIR INTERFACE
   ${PROJECT_SOURCE_DIR}/include
 )
 
+target_link_libraries(tensoriumRuntime PUBLIC
+  tensoriumIR
+)
+
+add_library(tensoriumCore INTERFACE)
+target_include_directories(tensoriumCore INTERFACE
+  ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(tensoriumCore INTERFACE
+  tensoriumAST
+  tensoriumLex
+  tensoriumParse
+  tensoriumSema
+  tensoriumRuntime
+)
+
 add_library(tensoriumLowering
   Backend/BackendBuilder.cpp
 )
-target_include_directories(tensoriumLowering PUBLIC
-  ${PROJECT_SOURCE_DIR}/include
-)
+tensorium_configure_public_headers(tensoriumLowering)
 target_link_libraries(tensoriumLowering PUBLIC
-  tensoriumCore
+  tensoriumSema
   tensoriumIR
 )
 
@@ -36,9 +84,7 @@ add_library(tensoriumValidation
   IR/IRVerifier.cpp
   Validation/ProgramValidator.cpp
 )
-target_include_directories(tensoriumValidation PUBLIC
-  ${PROJECT_SOURCE_DIR}/include
-)
+tensorium_configure_public_headers(tensoriumValidation)
 target_link_libraries(tensoriumValidation PUBLIC
   tensoriumIR
 )
@@ -239,8 +285,11 @@ add_library(tensoriumCompilerAPI
   API/Compiler.cpp
 )
 tensorium_configure_mlir_target(tensoriumCompilerAPI)
-target_link_libraries(tensoriumCompilerAPI PUBLIC
-  tensoriumLowering
-  tensoriumValidation
-  tensoriumMlirCodegen
+target_link_libraries(tensoriumCompilerAPI
+  PUBLIC
+    tensoriumLowering
+    tensoriumValidation
+    tensoriumMlirCodegen
+  PRIVATE
+    tensoriumParse
 )

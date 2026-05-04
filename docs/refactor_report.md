@@ -1,28 +1,27 @@
 # Tensorium Lang - Refactor Architecture Report
 
 ## 1) Executive Summary
-- This audit was executed on branch `refactor/architecture-cleanup` with baseline validation (`cmake --build build -j` and `bash run_test.sh`) passing.
-- Current architecture is functionally coherent end-to-end, but structurally concentrated in two large libraries: `tensorium` and `tensorium_mlir_backend`.
+- This audit was executed on branch `refactor/architecture-cleanup`; current non-regression entry points are `cmake --build build -j`, `ctest --test-dir build --output-on-failure`, and `bash run_test.sh`.
+- Current architecture is functionally coherent end-to-end, and CMake now exposes granular frontend/runtime targets while keeping compatibility aliases.
 - The current layering leaks across boundaries:
-  - frontend types leak into backend IR (`DomainIR` depends on `AST` types),
   - backend lowering depends directly on semantic analyzer concrete class,
-  - validation over backend IR lives in `Sema` namespace/folder.
+  - public compatibility headers still expose historical `Backend/DomainIR.hpp` naming for IR types.
 - A major risk for future maintainability is duplicated logic:
-  - index-set rules (`i..n`) duplicated in several files,
   - MLIR index-attribute helper code duplicated across multiple passes,
   - repeated type-kind conversion/printing switches.
-- Several files are currently placeholders/unwired (`TensoriumToLinalg`, `TsmOptimization`), increasing noise in ownership boundaries.
-- There is at least one functional defect observed during audit: `ConTensor3` maps to `ConTensor4` in backend lowering (`lib/Backend/BackendBuilder.cpp:84`).
-- Target architecture proposed in this report introduces explicit libraries per layer (`Core`, `AST`, `Lex`, `Parse`, `Sema`, `IR`, `Lowering`, `Runtime`, `MLIR IR`, `MLIR Semantic`, `MLIR Transforms`, `MLIR Codegen`, `Tools`).
+- Dead placeholder files from the earlier audit (`TensoriumToLinalg`, `TsmOptimization`, empty LLVM export wrapper) have been removed.
+- The earlier `ConTensor3` backend mapping defect is fixed and covered by tests.
+- Target architecture proposed in this report introduces explicit libraries per layer (`Core`, `AST`, `Lex`, `Parse`, `Sema`, `IR`, `Lowering`, `Runtime`, `MLIR IR`, `MLIR Semantic`, `MLIR Transforms`, `MLIR Codegen`, `Tools`); the CMake split exists, and parser implementation is now split by responsibility.
 - Refactor should be done incrementally with small compile-safe commits; no semantic behavior change except explicitly isolated bug fixes with tests.
-- First phase (this branch) provides baseline artifacts and migration plan; next phases should split CMake targets and headers before moving files.
+- Current clean phase keeps the baseline green while moving responsibilities behind existing public APIs; next phases should continue with low-risk source splits before API renames.
 
 ## 2) Etat Actuel (Architecture + Problemes)
 
 ### 2.1 Cibles CMake et modules reels
 Current targets:
-- Libraries: `tensorium`, `tensorium_mlir_backend`
-- Executables: `Tensorium_cc`, `Tensorium_tester`
+- Libraries: `tensoriumAST`, `tensoriumLex`, `tensoriumParse`, `tensoriumSema`, `tensoriumRuntime`, `tensoriumCore`, `tensoriumIR`, `tensoriumLowering`, `tensoriumValidation`, `tensoriumMlirIR`, `tensoriumMlirSemantic`, `tensoriumMlirTransforms`, `tensoriumMlirCodegen`, `tensoriumCompilerAPI`
+- Compatibility aliases: `tensorium`, `tensorium_mlir_backend`
+- Executables: `Tensorium_cc`, `Tensorium_tester`, `Tensorium_unittests`
 - TableGen: `TensoriumPassesIncGen`, `TensoriumOpsIncGen`
 
 Top-level module map (logical):
@@ -50,7 +49,7 @@ Main path from source text to outputs:
 Observed dependency direction (module-level, simplified):
 - `Lex -> Basic`
 - `Parse -> Lex + AST`
-- `Sema -> AST (+ Basic)`, and also `Sema/ProgramValidator -> Backend`
+- `Sema -> AST (+ Basic)`
 - `BackendBuilder -> AST + IndexedAST + Sema`
 - `Runtime -> Backend`
 - `MLIRGen -> Backend + MLIR Dialect/Passes`
@@ -58,37 +57,42 @@ Observed dependency direction (module-level, simplified):
 
 Detected cycle at architecture level (hidden today by monolithic target):
 - `Backend` depends on `Sema` (`include/tensorium/Backend/BackendBuilder.hpp:6`)
-- `Sema` validation API depends on backend IR (`include/tensorium/Sema/ProgramValidator.hpp:2`)
 
 ### 2.4 Architectural smells
-1. Monolithic target packing
-- `tensorium` groups frontend, sema, backend IR builder, runtime.
-- `tensorium_mlir_backend` groups dialect, semantic helpers, passes, codegen, init/pipeline.
+1. Compatibility target packing
+- `tensoriumCore` remains as compatibility aggregate over `tensoriumAST`, `tensoriumLex`, `tensoriumParse`, `tensoriumSema`, and `tensoriumRuntime`.
+- `tensorium_mlir_backend` remains as compatibility aggregate over split MLIR targets.
 
 2. Layering violations
-- Backend IR leaks frontend type: `include/tensorium/Backend/DomainIR.hpp:3` + `TensorTypeDesc` fields (`:63`, `:97`).
 - BackendBuilder API tied to concrete semantic analyzer (`include/tensorium/Backend/BackendBuilder.hpp:12`).
-- Backend IR validator located under `Sema` namespace/folder (`include/tensorium/Sema/ProgramValidator.hpp:24`).
+- Public include paths still use historical `Backend/*` wrappers for IR/lowering naming.
 
 3. God files / mixed responsibilities
-- `lib/Parse/Parser.cpp` (601 lines) parses expressions + declarations + simulation blocks.
-- `lib/Sema/Sema.cpp` (441 lines) symbol setup + simulation validation + type checks + mode policy.
-- `include/tensorium/Sema/tensor_type_checker.hpp` (560 lines, header-only heavy logic).
-- `lib/tensorium_mlir/Target/MLIRGen/MLIRGen.cpp` (328 lines) does IR emission + pass pipeline assembly.
-- `tools/driver/main.cpp` (324 lines) includes argument parsing, orchestration, dump logic, runtime path.
+- Parser code is still centralized at API level, but implementation is now split by responsibility.
+- `lib/Parse/Parser.cpp` (~32 lines) keeps parser cursor, token expectation, and syntax diagnostics.
+- `lib/Parse/ParserDeclarations.cpp` owns tensor type, params, extern, field, metric, evolution, and top-level program parsing.
+- `lib/Parse/ParserExpressions.cpp` owns expression precedence parsing, indexed variables, LHS parsing, and assignments.
+- `lib/Parse/ParserInitialData.cpp` owns `initial_data` parsing helpers.
+- `lib/Parse/ParserSimulation.cpp` owns `simulation`, `time`, and `spatial` block parsing.
+- `lib/Sema/Sema.cpp` (~795 lines) still owns high-risk expression transformation and `nabla` expansion helpers.
+- `lib/Sema/SemaConstruction.cpp` owns analyzer construction, symbol-table seeding, mode warnings, and synthetic metric fields.
+- `lib/Sema/SemaAnalysis.cpp` owns metric/evolution analysis entry points.
+- `lib/Sema/SemaInitialData.cpp` owns `initial_data` semantic validation.
+- `lib/Sema/SemaMetricRules.cpp` owns metric/inverse-metric declaration rules and explicit antisymmetry detection.
+- `lib/Sema/SemaSimulation.cpp` owns simulation metadata validation.
+- `include/tensorium/Sema/tensor_type_checker.hpp` (~717 lines, header-only heavy logic).
+- `lib/tensorium_mlir/Dialect/Tensorium/Transforms/RhsGridScfPass.cpp` (~1100 lines) mixes analysis, lowering, ABI metadata and grid codegen.
+- `tools/driver/main.cpp` (~538 lines) includes argument parsing, orchestration, dump logic, runtime path.
 
 4. Redundant or unused structure
-- Empty placeholder files:
-  - `include/tensorium_mlir/Conversion/TensoriumToLinalg/TensoriumToLinalg.h`
-  - `lib/tensorium_mlir/Conversion/TensoriumToLinalg/TensoriumToLinalg.cpp`
-  - `lib/tensorium_mlir/Dialect/Tensorium/Transforms/TsmOptimization.cpp`
+- Compatibility aliases and wrapper include paths remain and should be removed only after downstream call sites are migrated.
 - `registerAllPasses` currently empty (`lib/tensorium_mlir/Init/Passes.cpp:5`).
 
 5. Defect found during audit
-- `TensorKind::ConTensor3` lowered to `FieldKind::ConTensor4` (`lib/Backend/BackendBuilder.cpp:84`).
+- No current known compile-blocking defect after the `//` comment lexer fix and dead-file cleanup.
 
 6. Local code-quality risk
-- Uninitialized CLI flag: `bool dumpBackend, dumpBackendExpr = false;` (`tools/driver/main.cpp:103`).
+- CLI orchestration remains concentrated in `tools/driver/main.cpp`; extracting an options/parser layer is still recommended.
 
 ### 2.5 Cartographie des responsabilites (niveau, invariants, dependances)
 
@@ -401,6 +405,36 @@ Planned commit sequence (one intention per commit):
 - Result:
   - no remaining `.create<...>` calls in `lib/tensorium_mlir`,
   - build remains green with unchanged behavior.
+
+### Phase 3 continued (frontend parser source split)
+- Extracted `initial_data` parser implementation from `lib/Parse/Parser.cpp` into `lib/Parse/ParserInitialData.cpp`.
+- Extracted `simulation`, `time`, and `spatial` block parsing into `lib/Parse/ParserSimulation.cpp`.
+- Extracted expression precedence, indexed variables, LHS parsing, and assignments into `lib/Parse/ParserExpressions.cpp`.
+- Extracted tensor type, params, extern, field, metric, evolution, and top-level program parsing into `lib/Parse/ParserDeclarations.cpp`.
+- Kept the public parser API unchanged in `include/tensorium/Parse/Parser.hpp`; this is a translation-unit split only.
+- Updated `tensoriumParse` in `lib/CMakeLists.txt` to own the new parser implementation files.
+- Validation:
+  - `cmake --build build -j` passes,
+  - `./build/tools/Tester/Tensorium_unittests` passes,
+  - `bash run_test.sh` passes,
+  - `ctest --test-dir build --output-on-failure` passes,
+  - `bash tools/dev/check_layering.sh` passes.
+
+### Phase 3 continued (Sema source split)
+- Extracted metric/evolution analysis entry points into `lib/Sema/SemaAnalysis.cpp`.
+- Extracted analyzer construction, symbol-table seeding, mode warnings, and synthetic metric-field setup into `lib/Sema/SemaConstruction.cpp`.
+- Extracted metric/inverse-metric declaration rules and explicit antisymmetry detection into `lib/Sema/SemaMetricRules.cpp`.
+- Extracted simulation metadata validation into `lib/Sema/SemaSimulation.cpp`.
+- Kept `lib/Sema/Sema.cpp` focused on high-risk expression transformation and `nabla` expansion helpers for now.
+- Kept `include/tensorium/Sema/Sema.hpp` unchanged; this is a translation-unit split only.
+- Updated `tensoriumSema` in `lib/CMakeLists.txt` to own the new Sema implementation files.
+- Validation:
+  - `cmake --build build -j` passes,
+  - `./build/tools/Tester/Tensorium_unittests` passes,
+  - `bash run_test.sh` passes,
+  - `ctest --test-dir build --output-on-failure` passes,
+  - `bash tools/dev/check_layering.sh` passes,
+  - `git diff --check` passes.
 
 ## 9) Semantic correctness audit
 

@@ -23,19 +23,12 @@ enum class TokenType {
   Caret,
   KwSpacetime,
   KwMetric,
-  KwDecompose,
-  KwCoords,
   KwParams,
-  KwSignature,
-  KwLapse,
-  KwShift,
   KwSpatial,
-  KwExtrinsic,
   KwField,
   KwExtern,
   KwScalar,
   KwVector,
-  KwTensor2,
   KwCovector,
   KwCovTensor2,
   KwConTensor2,
@@ -44,7 +37,6 @@ enum class TokenType {
   KwCovTensor4,
   KwConTensor4,
   KwInverseMetric,
-  KwEq,
   KwEvolution,
   KwDt,
   KwSimulation,
@@ -103,22 +95,10 @@ inline const char *tokenTypeName(TokenType type) {
     return "'spacetime'";
   case TokenType::KwMetric:
     return "'metric'";
-  case TokenType::KwDecompose:
-    return "'decompose'";
-  case TokenType::KwCoords:
-    return "'coords'";
   case TokenType::KwParams:
     return "'params'";
-  case TokenType::KwSignature:
-    return "'signature'";
-  case TokenType::KwLapse:
-    return "'lapse'";
-  case TokenType::KwShift:
-    return "'shift'";
   case TokenType::KwSpatial:
     return "'spatial'";
-  case TokenType::KwExtrinsic:
-    return "'extrinsic'";
   case TokenType::KwField:
     return "'field'";
   case TokenType::KwExtern:
@@ -127,8 +107,6 @@ inline const char *tokenTypeName(TokenType type) {
     return "'scalar'";
   case TokenType::KwVector:
     return "'vector'";
-  case TokenType::KwTensor2:
-    return "'tensor2'";
   case TokenType::KwCovector:
     return "'covector'";
   case TokenType::KwCovTensor2:
@@ -145,8 +123,6 @@ inline const char *tokenTypeName(TokenType type) {
     return "'con_tensor4'";
   case TokenType::KwInverseMetric:
     return "'inverse_metric'";
-  case TokenType::KwEq:
-    return "'eq'";
   case TokenType::KwEvolution:
     return "'evolution'";
   case TokenType::KwDt:
