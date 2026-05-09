@@ -224,6 +224,8 @@ echo " TEST EMIT ARTIFACT FLAGS"
 echo "=============================="
 EMIT_MLIR_OUT="$OUT/emit_scalar.mlir"
 EMIT_LLVM_OUT="$OUT/emit_scalar.ll"
+EMIT_O3_LLVM_OUT="$OUT/emit_o3_schwarzschild.ll"
+EMIT_O3_PASS_OPTS_LLVM_OUT="$OUT/emit_o3_pass_options_schwarzschild.ll"
 "$BIN" --emit-mlir "$EMIT_MLIR_OUT" tests/01_scalar_minimal.tn > /dev/null
 if [[ ! -s "$EMIT_MLIR_OUT" ]]; then
   echo "ERROR: --emit-mlir did not produce output file"
@@ -240,6 +242,23 @@ if [[ ! -s "$EMIT_LLVM_OUT" ]]; then
 fi
 if ! grep -q "define" "$EMIT_LLVM_OUT"; then
   echo "ERROR: --emit-llvm output does not look like LLVM IR"
+  exit 1
+fi
+"$BIN" -O3 --emit-llvm "$EMIT_O3_LLVM_OUT" tests/fixtures/gr/schwarzschild_3d.tn > /dev/null
+if [[ ! -s "$EMIT_O3_LLVM_OUT" ]]; then
+  echo "ERROR: -O3 --emit-llvm did not produce output file"
+  exit 1
+fi
+if ! grep -q "tensorium_init_grid_affine" "$EMIT_O3_LLVM_OUT"; then
+  echo "ERROR: -O3 --emit-llvm did not apply final grid lowering preset"
+  exit 1
+fi
+"$BIN" -O3 --tensorium-dx 0.25 --tensorium-stencil-order 4 \
+  --tensorium-dissipation --tensorium-dissipation-strength 0.05 \
+  --emit-llvm "$EMIT_O3_PASS_OPTS_LLVM_OUT" \
+  tests/fixtures/gr/schwarzschild_3d.tn > /dev/null
+if [[ ! -s "$EMIT_O3_PASS_OPTS_LLVM_OUT" ]]; then
+  echo "ERROR: -O3 with pass options did not produce LLVM IR"
   exit 1
 fi
 

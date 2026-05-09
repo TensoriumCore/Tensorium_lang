@@ -74,7 +74,8 @@ Detected cycle at architecture level (hidden today by monolithic target):
 - `lib/Parse/ParserExpressions.cpp` owns expression precedence parsing, indexed variables, LHS parsing, and assignments.
 - `lib/Parse/ParserInitialData.cpp` owns `initial_data` parsing helpers.
 - `lib/Parse/ParserSimulation.cpp` owns `simulation`, `time`, and `spatial` block parsing.
-- `lib/Sema/Sema.cpp` (~795 lines) still owns high-risk expression transformation and `nabla` expansion helpers.
+- `lib/Sema/Sema.cpp` (~214 lines) still owns high-risk expression transformation.
+- `lib/Sema/SemaNabla.cpp` (~623 lines) owns covariant/contravariant `nabla` expansion and related metric/Christoffel helpers.
 - `lib/Sema/SemaConstruction.cpp` owns analyzer construction, symbol-table seeding, mode warnings, and synthetic metric fields.
 - `lib/Sema/SemaAnalysis.cpp` owns metric/evolution analysis entry points.
 - `lib/Sema/SemaInitialData.cpp` owns `initial_data` semantic validation.
@@ -82,7 +83,7 @@ Detected cycle at architecture level (hidden today by monolithic target):
 - `lib/Sema/SemaSimulation.cpp` owns simulation metadata validation.
 - `include/tensorium/Sema/tensor_type_checker.hpp` (~717 lines, header-only heavy logic).
 - `lib/tensorium_mlir/Dialect/Tensorium/Transforms/RhsGridScfPass.cpp` (~1100 lines) mixes analysis, lowering, ABI metadata and grid codegen.
-- `tools/driver/main.cpp` (~538 lines) includes argument parsing, orchestration, dump logic, runtime path.
+- `tools/driver/main.cpp` (~594 lines) includes argument parsing, orchestration, dump logic, runtime path.
 
 4. Redundant or unused structure
 - Compatibility aliases and wrapper include paths remain and should be removed only after downstream call sites are migrated.
@@ -436,6 +437,23 @@ Planned commit sequence (one intention per commit):
   - `bash tools/dev/check_layering.sh` passes,
   - `git diff --check` passes.
 
+### Phase 3 continued (Sema nabla split and optimization preset)
+- Extracted covariant/contravariant `nabla` expansion into `lib/Sema/SemaNabla.cpp`.
+- Kept `lib/Sema/Sema.cpp` focused on expression transformation; `transformExpr` delegates `nabla_`/`nabla^` calls through the private `SemanticAnalyzer::transformNablaCall` helper.
+- Added `tensorium_mlir::OptimizationLevel` and `makeMLIRGenOptions(OptimizationLevel)` as a clang-like preset helper for MLIR generation options.
+- Added `tensorium_mlir::MLIRPassOptions` plus `applyPassOptions`/`makeMLIRGenOptions(level, passOptions)` so pass flags and pass parameters are merged centrally instead of in the driver.
+- Added driver support for `-O0`, `-O1`, `-O2`, `-O3` plus `--O*` and `--tensorium-O*` aliases.
+- Added pass option CLI flags for stencil spacing/order, dissipation strength, and post-MLIR normalization toggles.
+- `-O3` applies the full deterministic lowering preset through final IR-ready passes, without enabling artificial dissipation by default.
+- Added `-O3 --emit-llvm` and `-O3` with pass options smoke checks to `run_test.sh`.
+- Validation:
+  - `cmake --build build -j` passes,
+  - `./build/tools/Tester/Tensorium_unittests` passes,
+  - `bash run_test.sh` passes,
+  - `ctest --test-dir build --output-on-failure` passes,
+  - `bash tools/dev/check_layering.sh` passes,
+  - `git diff --check` passes.
+
 ## 9) Semantic correctness audit
 
 ### Findings by severity
@@ -459,7 +477,7 @@ Planned commit sequence (one intention per commit):
 - Differential operations are explicit in IR:
   - `PartialDerivativeIR`, `GradientIR`, `CovariantDerivativeIR`, `DivergenceIR`.
 - Covariant derivative policy:
-  - accepted only when a connection tensor (`Gamma`/`GammaU`/`Christoffel`, rank-3) is present (`lib/Sema/Sema.cpp:250`, `lib/Sema/Sema.cpp:354`),
+  - accepted only when either metric/inverse-metric expansion is available or a connection tensor (`Gamma`/`GammaU`/`Christoffel`, rank-3) is present (`lib/Sema/SemaNabla.cpp`),
   - otherwise rejected with stable diagnostic.
 
 ### Diagnostics examples

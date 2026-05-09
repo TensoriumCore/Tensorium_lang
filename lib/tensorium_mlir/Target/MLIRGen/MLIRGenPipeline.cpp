@@ -3,6 +3,7 @@
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
+#include "tensorium_mlir/Dialect/Tensorium/Transform/IndexRoleAnalysisPass.h"
 #include "tensorium_mlir/Dialect/Tensorium/Transform/Passes.h"
 
 namespace tensorium_mlir {
@@ -33,6 +34,10 @@ void addEinsteinPipelineSafe(::mlir::PassManager &pm,
 
   if (opts.enableEinsteinLoweringPass) {
     pm.addPass(tensorium::mlir::createTensoriumEinsteinLoweringPass());
+  }
+
+  if (opts.enableIndexRoleAnalysisPass) {
+    pm.addPass(tensorium::mlir::createTensoriumIndexRoleAnalysisPass());
   }
 
   const bool needValidity = opts.enableEinsteinValidityPass;

@@ -113,10 +113,8 @@ struct InitToStdPass
         }
       }
     }
-    if (paramNames.empty()) {
-      paramNames.push_back("M");
-    } else if (auto it = std::find(paramNames.begin(), paramNames.end(), "M");
-               it != paramNames.end() && it != paramNames.begin()) {
+    if (auto it = std::find(paramNames.begin(), paramNames.end(), "M");
+        it != paramNames.end() && it != paramNames.begin()) {
       std::rotate(paramNames.begin(), it, it + 1);
     }
     if (family != CoordFamily::Unknown) {

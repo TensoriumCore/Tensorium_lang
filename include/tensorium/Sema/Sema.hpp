@@ -33,6 +33,8 @@ class SemanticAnalyzer {
   void validateSpatialIndex(const std::string &idx);
   int resolveIndex(const std::string &name);
   std::unique_ptr<IndexedExpr> transformExpr(const Expr *e);
+  std::unique_ptr<IndexedExpr> transformNablaCall(const CallExpr &call,
+                                                  bool isContravariant);
   void validateSimulation(const SimulationConfig &sim);
   void validateInitialData(const InitialDataDecl &init);
   void validateInitialDataExpr(const Expr *expr, const std::string &context);

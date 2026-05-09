@@ -13,7 +13,9 @@
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 #include "tensorium_mlir/Target/MLIRGen/RhsEvaluator.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
@@ -27,6 +29,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -69,14 +72,39 @@ static bool verifyCanonicalIR(const backend::ModuleIR &mod,
 }
 
 static tensorium_mlir::MLIRGenOptions makeExecutablePipelineOpts() {
-  tensorium_mlir::MLIRGenOptions opts;
-  opts.enableStencilLoweringPass = true;
-  opts.enableEinsteinLoweringPass = true;
-  opts.enableIndexAnalyzePass = true;
-  opts.enableEinsteinAnalyzeEinsumPass = true;
-  opts.enableEinsteinCanonicalizePass = true;
-  opts.enableEinsteinValidityPass = true;
-  return opts;
+  return tensorium_mlir::makeMLIRGenOptions(
+      tensorium_mlir::OptimizationLevel::O2);
+}
+
+static bool testMLIRGenOptimizationPassOptions() {
+  tensorium_mlir::MLIRPassOptions passOptions;
+  passOptions.enableDissipationPass = true;
+  passOptions.dx = 0.25;
+  passOptions.order = 4;
+  passOptions.dissipationStrength = 0.05;
+  passOptions.enableMLIRCanonicalizePass = false;
+  passOptions.enableMLIRCSEPass = false;
+  passOptions.enableMLIRInlinePass = true;
+  passOptions.mlirDisableThreading = true;
+
+  auto opts = tensorium_mlir::makeMLIRGenOptions(
+      tensorium_mlir::OptimizationLevel::O2, passOptions);
+
+  if (!opts.enableEinsteinLoweringPass || !opts.enableStencilLoweringPass ||
+      !opts.enableDissipationPass || !opts.enableMLIRInlinePass) {
+    std::cerr << "FAIL: optimization preset/pass options were not merged\n";
+    return false;
+  }
+  if (opts.enableMLIRCanonicalizePass || opts.enableMLIRCSEPass) {
+    std::cerr << "FAIL: post-MLIR pass options were not applied\n";
+    return false;
+  }
+  if (opts.dx != 0.25 || opts.order != 4 ||
+      opts.dissipationStrength != 0.05 || !opts.mlirDisableThreading) {
+    std::cerr << "FAIL: numeric/diagnostic pass options were not applied\n";
+    return false;
+  }
+  return true;
 }
 
 static ::mlir::OwningOpRef<::mlir::ModuleOp>
@@ -292,6 +320,113 @@ static std::vector<int64_t> parseI64ArrayAttr(::mlir::ArrayAttr arr) {
       out.push_back(i.getInt());
   }
   return out;
+}
+
+static bool isStaticF64Memref(::mlir::Type type, int64_t size) {
+  auto memTy = llvm::dyn_cast<::mlir::MemRefType>(type);
+  return memTy && memTy.getRank() == 1 && memTy.getShape()[0] == size &&
+         memTy.getElementType().isF64();
+}
+
+static bool isDynamicF64Memref(::mlir::Type type) {
+  auto memTy = llvm::dyn_cast<::mlir::MemRefType>(type);
+  return memTy && memTy.getRank() == 1 &&
+         memTy.getShape()[0] == ::mlir::ShapedType::kDynamic &&
+         memTy.getElementType().isF64();
+}
+
+static std::optional<int64_t> getConstantIndexValueForTest(::mlir::Value value) {
+  if (auto indexOp = value.getDefiningOp<::mlir::arith::ConstantIndexOp>())
+    return indexOp.value();
+  if (auto constOp = value.getDefiningOp<::mlir::arith::ConstantOp>()) {
+    if (!value.getType().isIndex())
+      return std::nullopt;
+    if (auto intAttr = llvm::dyn_cast<::mlir::IntegerAttr>(constOp.getValue()))
+      return intAttr.getInt();
+  }
+  return std::nullopt;
+}
+
+static std::optional<double> getConstantF64ValueForTest(::mlir::Value value) {
+  if (auto floatOp = value.getDefiningOp<::mlir::arith::ConstantFloatOp>())
+    return floatOp.value().convertToDouble();
+  if (auto constOp = value.getDefiningOp<::mlir::arith::ConstantOp>()) {
+    if (auto floatAttr = llvm::dyn_cast<::mlir::FloatAttr>(constOp.getValue()))
+      return floatAttr.getValue().convertToDouble();
+  }
+  return std::nullopt;
+}
+
+static bool collectInitPointConstantStores(
+    ::mlir::func::FuncOp initPoint, unsigned firstOutputArg,
+    std::array<double, 1> &alpha, std::array<double, 9> &gamma,
+    std::array<double, 9> &gammaU) {
+  std::array<bool, 1> alphaSeen{};
+  std::array<bool, 9> gammaSeen{};
+  std::array<bool, 9> gammaUSeen{};
+  bool ok = true;
+
+  initPoint.walk([&](::mlir::memref::StoreOp store) {
+    if (!ok)
+      return;
+    auto outputArg = llvm::dyn_cast<::mlir::BlockArgument>(store.getMemref());
+    if (!outputArg || outputArg.getOwner() != &initPoint.getBody().front()) {
+      ok = false;
+      return;
+    }
+    const unsigned argNumber = outputArg.getArgNumber();
+    if (argNumber < firstOutputArg || argNumber > firstOutputArg + 2) {
+      ok = false;
+      return;
+    }
+    if (store.getIndices().size() != 1) {
+      ok = false;
+      return;
+    }
+
+    auto component = getConstantIndexValueForTest(store.getIndices().front());
+    auto value = getConstantF64ValueForTest(store.getValue());
+    if (!component || !value) {
+      ok = false;
+      return;
+    }
+
+    if (argNumber == firstOutputArg) {
+      if (*component != 0) {
+        ok = false;
+        return;
+      }
+      alpha[0] = *value;
+      alphaSeen[0] = true;
+      return;
+    }
+
+    if (*component < 0 || *component >= 9) {
+      ok = false;
+      return;
+    }
+    const auto idx = static_cast<std::size_t>(*component);
+    if (argNumber == firstOutputArg + 1) {
+      gamma[idx] = *value;
+      gammaSeen[idx] = true;
+    } else {
+      gammaU[idx] = *value;
+      gammaUSeen[idx] = true;
+    }
+  });
+
+  if (!ok)
+    return false;
+  for (bool seen : alphaSeen)
+    if (!seen)
+      return false;
+  for (bool seen : gammaSeen)
+    if (!seen)
+      return false;
+  for (bool seen : gammaUSeen)
+    if (!seen)
+      return false;
+  return true;
 }
 
 static bool verifyCommonGeneratedABIAttrs(::mlir::func::FuncOp fn,
@@ -1948,16 +2083,13 @@ static bool testSchwarzschildInitGridAffineLowering() {
   }
 
   bool hasAffineFor = false;
-  bool callsInitPoint = false;
+  bool hasMemrefStore = false;
   bool hasTensoriumOp = false;
   std::string tensoriumOpName;
   initGrid.walk([&](::mlir::Operation *op) {
     if (llvm::isa<::mlir::affine::AffineForOp>(op))
       hasAffineFor = true;
-    if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(op)) {
-      if (call.getCallee() == "tensorium_init_point")
-        callsInitPoint = true;
-    }
+    hasMemrefStore |= (op->getName().getStringRef() == "memref.store");
     if (op != initGrid.getOperation() &&
         op->getName().getDialectNamespace() == "tensorium") {
       hasTensoriumOp = true;
@@ -1973,8 +2105,8 @@ static bool testSchwarzschildInitGridAffineLowering() {
     std::cerr << "FAIL: tensorium_init_grid_affine must contain affine.for\n";
     return false;
   }
-  if (!callsInitPoint) {
-    std::cerr << "FAIL: tensorium_init_grid_affine must call tensorium_init_point\n";
+  if (!hasMemrefStore) {
+    std::cerr << "FAIL: tensorium_init_grid_affine must write grid outputs\n";
     return false;
   }
   return true;
@@ -2445,6 +2577,286 @@ static bool testGeneratedKernelABIMetadata() {
       !expectEqVec(rhsGridOutputs, {"H", "K"}) ||
       rhsGridWrites != std::vector<int64_t>({8, 11})) {
     std::cerr << "FAIL: rhs_grid_affine ABI metadata mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSpatialOffdiagNoParamABI() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/spatial_offdiag_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+
+  auto initPoint = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolInitPoint);
+  auto initGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolInitGridAffine);
+  auto rhsGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolRhsGridAffine);
+  if (!initPoint || !initGrid || !rhsGrid) {
+    std::cerr << "FAIL: missing generated spatial offdiag ABI functions\n";
+    return false;
+  }
+
+  std::string abiErr;
+  if (!verifyCommonGeneratedABIAttrs(initPoint,
+                                     tensorium_mlir::abi::kKindInitPoint,
+                                     abiErr) ||
+      !verifyCommonGeneratedABIAttrs(initGrid,
+                                     tensorium_mlir::abi::kKindInitGridAffine,
+                                     abiErr) ||
+      !verifyCommonGeneratedABIAttrs(rhsGrid,
+                                     tensorium_mlir::abi::kKindRhsGridAffine,
+                                     abiErr)) {
+    std::cerr << "FAIL: " << abiErr << "\n";
+    return false;
+  }
+
+  auto expectNoParams = [](const ::mlir::func::FuncOp fn,
+                           const char *label) {
+    auto params = parseStringArrayAttr(fn->getAttrOfType<::mlir::ArrayAttr>(
+        tensorium_mlir::abi::kAttrParamNames));
+    if (!params.empty()) {
+      std::cerr << "FAIL: " << label
+                << " must not expose implicit ABI params\n";
+      return false;
+    }
+    return true;
+  };
+  if (!expectNoParams(initPoint, "tensorium_init_point") ||
+      !expectNoParams(initGrid, "tensorium_init_grid_affine") ||
+      !expectNoParams(rhsGrid, "tensorium_rhs_grid_affine")) {
+    return false;
+  }
+
+  auto initInternalParams = parseStringArrayAttr(
+      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+          "tensorium.init.param_names"));
+  if (!initInternalParams.empty()) {
+    std::cerr << "FAIL: tensorium.init.param_names must stay empty\n";
+    return false;
+  }
+
+  if (initPoint.getNumArguments() != 6) {
+    std::cerr << "FAIL: spatial init_point must have 6 args, got "
+              << initPoint.getNumArguments() << "\n";
+    return false;
+  }
+  for (unsigned arg = 0; arg < 3; ++arg) {
+    if (!initPoint.getArgument(arg).getType().isF64()) {
+      std::cerr << "FAIL: spatial init_point coord arg " << arg
+                << " must be f64\n";
+      return false;
+    }
+  }
+  if (!isStaticF64Memref(initPoint.getArgument(3).getType(), 1) ||
+      !isStaticF64Memref(initPoint.getArgument(4).getType(), 9) ||
+      !isStaticF64Memref(initPoint.getArgument(5).getType(), 9)) {
+    std::cerr << "FAIL: spatial init_point output arg layout mismatch\n";
+    return false;
+  }
+
+  if (initGrid.getNumArguments() != 6) {
+    std::cerr << "FAIL: spatial init_grid_affine must have 6 args, got "
+              << initGrid.getNumArguments() << "\n";
+    return false;
+  }
+  for (unsigned arg = 0; arg < initGrid.getNumArguments(); ++arg) {
+    if (!isDynamicF64Memref(initGrid.getArgument(arg).getType())) {
+      std::cerr << "FAIL: spatial init_grid_affine arg " << arg
+                << " must be memref<?xf64>\n";
+      return false;
+    }
+  }
+
+  auto initPointWrites = parseI64ArrayAttr(
+      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrWriteArgIndices));
+  auto initGridWrites = parseI64ArrayAttr(
+      initGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrWriteArgIndices));
+  if (initPointWrites != std::vector<int64_t>({3, 4, 5}) ||
+      initGridWrites != std::vector<int64_t>({3, 4, 5})) {
+    std::cerr << "FAIL: spatial no-param write_arg_indices mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSpatialOffdiagGeneratedSplit3p1Constants() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/spatial_offdiag_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+  auto initPoint = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolInitPoint);
+  if (!initPoint) {
+    std::cerr << "FAIL: missing spatial init_point for constants test\n";
+    return false;
+  }
+
+  std::array<double, 1> alpha{};
+  std::array<double, 9> gamma{};
+  std::array<double, 9> gammaU{};
+  if (!collectInitPointConstantStores(initPoint, 3, alpha, gamma, gammaU)) {
+    std::cerr << "FAIL: spatial init_point did not lower to constant stores\n";
+    return false;
+  }
+
+  const std::array<double, 9> gammaExpected = {
+      2.0, 1.0, 0.0,
+      1.0, 3.0, 0.0,
+      0.0, 0.0, 4.0};
+  const std::array<double, 9> gammaUExpected = {
+      0.6, -0.2, 0.0,
+      -0.2, 0.4, 0.0,
+      0.0, 0.0, 0.25};
+
+  if (!almostEqual(alpha[0], 1.0)) {
+    std::cerr << "FAIL: generated spatial alpha constant mismatch\n";
+    return false;
+  }
+  for (std::size_t i = 0; i < gammaExpected.size(); ++i) {
+    if (!almostEqual(gamma[i], gammaExpected[i]) ||
+        !almostEqual(gammaU[i], gammaUExpected[i])) {
+      std::cerr << "FAIL: generated spatial 3+1 constant mismatch at component "
+                << i << "\n";
+      return false;
+    }
+  }
+  if (!almostEqual(gamma[1], gamma[3]) ||
+      !almostEqual(gammaU[1], gammaU[3])) {
+    std::cerr << "FAIL: enforce_symmetry lost off-diagonal components\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testSpatialOffdiagInitGridAffineNoLoopAlloc() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/spatial_offdiag_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+  auto initGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolInitGridAffine);
+  if (!initGrid) {
+    std::cerr << "FAIL: missing spatial init_grid_affine\n";
+    return false;
+  }
+
+  bool hasAffineFor = false;
+  bool hasAlloc = false;
+  bool hasDealloc = false;
+  bool callsInitPoint = false;
+  initGrid.walk([&](::mlir::Operation *op) {
+    hasAffineFor |= llvm::isa<::mlir::affine::AffineForOp>(op);
+    hasAlloc |= llvm::isa<::mlir::memref::AllocOp>(op);
+    hasDealloc |= llvm::isa<::mlir::memref::DeallocOp>(op);
+    if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(op))
+      callsInitPoint |= (call.getCallee() == tensorium_mlir::abi::kSymbolInitPoint);
+  });
+
+  if (!hasAffineFor) {
+    std::cerr << "FAIL: spatial init_grid_affine must contain affine.for\n";
+    return false;
+  }
+  if (hasAlloc || hasDealloc || callsInitPoint) {
+    std::cerr << "FAIL: spatial constant init_grid_affine must not allocate "
+                 "or call init_point per grid point\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSpatialOffdiagRhsCompactHessianAffineLowering() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridAffinePass = true;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/spatial_offdiag_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+  auto rhsGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolRhsGridAffine);
+  if (!rhsGrid) {
+    std::cerr << "FAIL: missing spatial rhs_grid_affine\n";
+    return false;
+  }
+
+  int affineLoopCount = 0;
+  int radiusOneLowerBounds = 0;
+  bool hasRadiusTwoLowerBound = false;
+  bool hasDxDxDenom = false;
+  bool hasDyDyDenom = false;
+  bool hasDzDzDenom = false;
+  bool hasMixedFourFactor = false;
+  bool hasCopy = false;
+  bool hasAlloc = false;
+
+  auto isArgSquare = [&](::mlir::arith::MulFOp mul, unsigned arg) {
+    return mul.getLhs() == rhsGrid.getArgument(arg) &&
+           mul.getRhs() == rhsGrid.getArgument(arg);
+  };
+
+  rhsGrid.walk([&](::mlir::Operation *op) {
+    if (auto loop = llvm::dyn_cast<::mlir::affine::AffineForOp>(op)) {
+      ++affineLoopCount;
+      if (loop.hasConstantLowerBound() && loop.getConstantLowerBound() == 1)
+        ++radiusOneLowerBounds;
+      if (loop.hasConstantLowerBound() && loop.getConstantLowerBound() == 2)
+        hasRadiusTwoLowerBound = true;
+    }
+    hasCopy |= llvm::isa<::mlir::memref::CopyOp>(op);
+    hasAlloc |= llvm::isa<::mlir::memref::AllocOp>(op);
+    if (auto mul = llvm::dyn_cast<::mlir::arith::MulFOp>(op)) {
+      hasDxDxDenom |= isArgSquare(mul, 3);
+      hasDyDyDenom |= isArgSquare(mul, 4);
+      hasDzDzDenom |= isArgSquare(mul, 5);
+      auto lhsConst = getConstantF64ValueForTest(mul.getLhs());
+      auto rhsConst = getConstantF64ValueForTest(mul.getRhs());
+      hasMixedFourFactor |=
+          (lhsConst && almostEqual(*lhsConst, 4.0)) ||
+          (rhsConst && almostEqual(*rhsConst, 4.0));
+    }
+  });
+
+  if (affineLoopCount < 3 || radiusOneLowerBounds < 3 ||
+      hasRadiusTwoLowerBound) {
+    std::cerr << "FAIL: spatial Hessian affine loops must use radius 1 bounds\n";
+    return false;
+  }
+  if (!hasDxDxDenom || !hasDyDyDenom || !hasDzDzDenom ||
+      !hasMixedFourFactor) {
+    std::cerr << "FAIL: spatial Hessian lowering did not expose compact "
+                 "diagonal and centered mixed denominators\n";
+    return false;
+  }
+  if (hasCopy || hasAlloc) {
+    std::cerr << "FAIL: spatial rhs_grid_affine must not copy or allocate "
+                 "dead snapshots\n";
     return false;
   }
 
@@ -4021,6 +4433,8 @@ int main() {
   };
 
   const NamedTest tests[] = {
+      {"testMLIRGenOptimizationPassOptions",
+       &testMLIRGenOptimizationPassOptions},
       {"testConTensor3Lowering", &testConTensor3Lowering},
       {"testIndexSetPolicy", &testIndexSetPolicy},
       {"testIRTensorTypeMappingForExternCall", &testIRTensorTypeMappingForExternCall},
@@ -4053,6 +4467,13 @@ int main() {
       {"testSchwarzschildRhsGridAffineLowering",
        &testSchwarzschildRhsGridAffineLowering},
       {"testGeneratedKernelABIMetadata", &testGeneratedKernelABIMetadata},
+      {"testSpatialOffdiagNoParamABI", &testSpatialOffdiagNoParamABI},
+      {"testSpatialOffdiagGeneratedSplit3p1Constants",
+       &testSpatialOffdiagGeneratedSplit3p1Constants},
+      {"testSpatialOffdiagInitGridAffineNoLoopAlloc",
+       &testSpatialOffdiagInitGridAffineNoLoopAlloc},
+      {"testSpatialOffdiagRhsCompactHessianAffineLowering",
+       &testSpatialOffdiagRhsCompactHessianAffineLowering},
       {"testLoweredGridLLVMABISignature", &testLoweredGridLLVMABISignature},
       {"testStripSourceFuncsAfterGridLowering",
        &testStripSourceFuncsAfterGridLowering},

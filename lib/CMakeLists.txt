@@ -34,6 +34,7 @@ add_library(tensoriumSema
   Sema/Sema.cpp
   Sema/SemaInitialData.cpp
   Sema/SemaMetricRules.cpp
+  Sema/SemaNabla.cpp
   Sema/SemaSimulation.cpp
 )
 tensorium_configure_public_headers(tensoriumSema)
@@ -257,6 +258,7 @@ add_library(tensoriumMlirCodegen
   tensorium_mlir/Target/MLIRGen/MLIRGenInitialData.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenExpr.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenOptions.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenPipeline.cpp
   tensorium_mlir/Init/Registry.cpp
   tensorium_mlir/Init/Passes.cpp

@@ -127,6 +127,94 @@ static LogicalResult collectRhsWriteArgIndices(func::FuncOp rhs,
   return success();
 }
 
+static LogicalResult collectRhsReadArgIndices(func::FuncOp rhs,
+                                              std::vector<int64_t> &out) {
+  llvm::SmallSetVector<int64_t, 8> indices;
+  for (Operation &op : rhs.getBody().front().without_terminator()) {
+    auto ref = dyn_cast<RefOp>(&op);
+    if (!ref)
+      continue;
+    auto fieldArg = dyn_cast<BlockArgument>(ref.getSource());
+    if (!fieldArg || fieldArg.getOwner() != &rhs.getBody().front()) {
+      ref.emitError("rhs-grid-abi: ref source must be rhs block argument");
+      return failure();
+    }
+    indices.insert(static_cast<int64_t>(fieldArg.getArgNumber()));
+  }
+
+  out.assign(indices.begin(), indices.end());
+  std::sort(out.begin(), out.end());
+  return success();
+}
+
+static unsigned maxAbsRefOffset(RefOp ref) {
+  unsigned radius = 0;
+  ArrayAttr offsets = ref.getOffsetsAttr();
+  if (!offsets)
+    return radius;
+  for (Attribute attr : offsets) {
+    auto intAttr = dyn_cast<IntegerAttr>(attr);
+    if (!intAttr)
+      continue;
+    radius = std::max<unsigned>(
+        radius, static_cast<unsigned>(std::abs(intAttr.getInt())));
+  }
+  return radius;
+}
+
+static unsigned requiredStencilRadiusForValue(Value v) {
+  Operation *def = v.getDefiningOp();
+  if (!def)
+    return 0;
+  if (isa<ConstOp, ParamOp, CoordOp>(def))
+    return 0;
+  if (auto ref = dyn_cast<RefOp>(def))
+    return maxAbsRefOffset(ref);
+  if (auto promote = dyn_cast<PromoteOp>(def))
+    return requiredStencilRadiusForValue(promote.getIn());
+  if (auto add = dyn_cast<AddOp>(def)) {
+    return std::max(requiredStencilRadiusForValue(add.getLhs()),
+                    requiredStencilRadiusForValue(add.getRhs()));
+  }
+  if (auto sub = dyn_cast<SubOp>(def)) {
+    return std::max(requiredStencilRadiusForValue(sub.getLhs()),
+                    requiredStencilRadiusForValue(sub.getRhs()));
+  }
+  if (auto mul = dyn_cast<MulOp>(def)) {
+    return std::max(requiredStencilRadiusForValue(mul.getLhs()),
+                    requiredStencilRadiusForValue(mul.getRhs()));
+  }
+  if (auto div = dyn_cast<DivOp>(def)) {
+    return std::max(requiredStencilRadiusForValue(div.getLhs()),
+                    requiredStencilRadiusForValue(div.getRhs()));
+  }
+  if (auto contract = dyn_cast<ContractOp>(def))
+    return requiredStencilRadiusForValue(contract.getIn());
+  if (auto einsum = dyn_cast<EinsumOp>(def)) {
+    unsigned radius = 0;
+    for (Value input : einsum.getInputs())
+      radius = std::max(radius, requiredStencilRadiusForValue(input));
+    return radius;
+  }
+  if (auto deriv = dyn_cast<DerivOp>(def)) {
+    if (auto inner = deriv.getIn().getDefiningOp<DerivOp>())
+      return requiredStencilRadiusForValue(inner.getIn()) + 1;
+    return requiredStencilRadiusForValue(deriv.getIn()) + 1;
+  }
+  return 0;
+}
+
+static unsigned requiredRhsStencilRadius(func::FuncOp rhs) {
+  unsigned radius = 0;
+  for (Operation &op : rhs.getBody().front().without_terminator()) {
+    auto dt = dyn_cast<DtAssignOp>(&op);
+    if (!dt)
+      continue;
+    radius = std::max(radius, requiredStencilRadiusForValue(dt.getRhs()));
+  }
+  return std::max(radius, 1u);
+}
+
 static bool parseEinsumOutIndices(EinsumOp op, std::vector<std::string> &out) {
   out.clear();
   if (auto outAttr = op->getAttrOfType<ArrayAttr>("tin.idx.out")) {
@@ -421,6 +509,116 @@ private:
         return failure();
       }
 
+      if (auto innerDeriv = deriv.getIn().getDefiningOp<DerivOp>()) {
+        auto innerIdxAttr = innerDeriv->getAttrOfType<StringAttr>("index");
+        if (!innerIdxAttr) {
+          innerDeriv.emitError("rhs-grid-scf: inner deriv missing index attribute");
+          return failure();
+        }
+
+        auto base0 = evalValue(innerDeriv.getIn(), shift);
+        if (failed(base0))
+          return failure();
+
+        TensorScalars out;
+        out.indices = base0->indices;
+        out.indices.push_back(innerIdxAttr.getValue().str());
+        out.indices.push_back(derivIdxAttr.getValue().str());
+        out.comps.assign(base0->comps.size() * spatialDim * spatialDim,
+                         Value());
+
+        Value two = b.create<arith::ConstantFloatOp>(
+            loc, APFloat(2.0), llvm::cast<FloatType>(b.getF64Type()));
+        Value four = b.create<arith::ConstantFloatOp>(
+            loc, APFloat(4.0), llvm::cast<FloatType>(b.getF64Type()));
+
+        for (unsigned innerAxis = 0; innerAxis < spatialDim; ++innerAxis) {
+          for (unsigned outerAxis = 0; outerAxis < spatialDim; ++outerAxis) {
+            Value innerSpacing =
+                innerAxis == 0 ? dx : (innerAxis == 1 ? dy : dz);
+            Value outerSpacing =
+                outerAxis == 0 ? dx : (outerAxis == 1 ? dy : dz);
+
+            if (innerAxis == outerAxis) {
+              Shift3 plus = shift;
+              Shift3 minus = shift;
+              addAxisShift(plus, innerAxis, 1);
+              addAxisShift(minus, innerAxis, -1);
+
+              auto plusVal = evalValue(innerDeriv.getIn(), plus);
+              auto minusVal = evalValue(innerDeriv.getIn(), minus);
+              if (failed(plusVal) || failed(minusVal))
+                return failure();
+              if (plusVal->comps.size() != base0->comps.size() ||
+                  minusVal->comps.size() != base0->comps.size()) {
+                deriv.emitError(
+                    "rhs-grid-scf: inconsistent compact Hessian component size");
+                return failure();
+              }
+
+              Value spacingSq =
+                  b.create<arith::MulFOp>(loc, innerSpacing, innerSpacing);
+              for (std::size_t c = 0; c < base0->comps.size(); ++c) {
+                Value twoCenter =
+                    b.create<arith::MulFOp>(loc, two, base0->comps[c]);
+                Value sum =
+                    b.create<arith::AddFOp>(loc, plusVal->comps[c],
+                                            minusVal->comps[c]);
+                Value numer = b.create<arith::SubFOp>(loc, sum, twoCenter);
+                out.comps[(c * spatialDim + innerAxis) * spatialDim +
+                          outerAxis] =
+                    b.create<arith::DivFOp>(loc, numer, spacingSq);
+              }
+              continue;
+            }
+
+            Shift3 pp = shift;
+            Shift3 pm = shift;
+            Shift3 mp = shift;
+            Shift3 mm = shift;
+            addAxisShift(pp, outerAxis, 1);
+            addAxisShift(pp, innerAxis, 1);
+            addAxisShift(pm, outerAxis, 1);
+            addAxisShift(pm, innerAxis, -1);
+            addAxisShift(mp, outerAxis, -1);
+            addAxisShift(mp, innerAxis, 1);
+            addAxisShift(mm, outerAxis, -1);
+            addAxisShift(mm, innerAxis, -1);
+
+            auto ppVal = evalValue(innerDeriv.getIn(), pp);
+            auto pmVal = evalValue(innerDeriv.getIn(), pm);
+            auto mpVal = evalValue(innerDeriv.getIn(), mp);
+            auto mmVal = evalValue(innerDeriv.getIn(), mm);
+            if (failed(ppVal) || failed(pmVal) || failed(mpVal) ||
+                failed(mmVal))
+              return failure();
+            if (ppVal->comps.size() != base0->comps.size() ||
+                pmVal->comps.size() != base0->comps.size() ||
+                mpVal->comps.size() != base0->comps.size() ||
+                mmVal->comps.size() != base0->comps.size()) {
+              deriv.emitError(
+                  "rhs-grid-scf: inconsistent mixed Hessian component size");
+              return failure();
+            }
+
+            Value spacingProd =
+                b.create<arith::MulFOp>(loc, innerSpacing, outerSpacing);
+            Value denom = b.create<arith::MulFOp>(loc, four, spacingProd);
+            for (std::size_t c = 0; c < base0->comps.size(); ++c) {
+              Value pos = b.create<arith::AddFOp>(loc, ppVal->comps[c],
+                                                  mmVal->comps[c]);
+              Value neg = b.create<arith::AddFOp>(loc, pmVal->comps[c],
+                                                  mpVal->comps[c]);
+              Value numer = b.create<arith::SubFOp>(loc, pos, neg);
+              out.comps[(c * spatialDim + innerAxis) * spatialDim +
+                        outerAxis] =
+                  b.create<arith::DivFOp>(loc, numer, denom);
+            }
+          }
+        }
+        return out;
+      }
+
       auto in0 = evalValue(deriv.getIn(), shift);
       if (failed(in0))
         return failure();
@@ -704,6 +902,15 @@ private:
     return b.create<arith::AddIOp>(loc, base, c);
   }
 
+  static void addAxisShift(Shift3 &shift, unsigned axis, int delta) {
+    if (axis == 0)
+      shift.x += delta;
+    else if (axis == 1)
+      shift.y += delta;
+    else
+      shift.z += delta;
+  }
+
   Value pointLinear(Shift3 shift) {
     Value x = addIdx(ix, shift.x);
     Value y = addIdx(iy, shift.y);
@@ -788,7 +995,16 @@ struct RhsGridScfPass
       signalPassFailure();
       return;
     }
-
+    std::vector<int64_t> readFieldArgIndices;
+    if (failed(collectRhsReadArgIndices(rhs, readFieldArgIndices))) {
+      signalPassFailure();
+      return;
+    }
+    std::unordered_set<int64_t> readFieldArgSet(readFieldArgIndices.begin(),
+                                                readFieldArgIndices.end());
+    std::unordered_set<int64_t> writeFieldArgSet(writeFieldArgIndices.begin(),
+                                                 writeFieldArgIndices.end());
+    const unsigned stencilRadius = requiredRhsStencilRadius(rhs);
     SmallVector<Type> args;
     args.push_back(idxTy); // nx
     args.push_back(idxTy); // ny
@@ -861,28 +1077,39 @@ struct RhsGridScfPass
     for (unsigned i = 0; i < rhs.getNumArguments(); ++i)
       fieldMemrefs.push_back(entry->getArgument(fieldBase + i));
 
-    SmallVector<Value> snapshotMemrefs;
-    snapshotMemrefs.reserve(fieldMemrefs.size());
+    SmallVector<Value> inputMemrefs;
+    SmallVector<Value> allocatedSnapshots;
+    inputMemrefs.reserve(fieldMemrefs.size());
     Value zeroIdx = b.create<arith::ConstantIndexOp>(loc, 0);
-    for (Value mem : fieldMemrefs) {
+    for (unsigned fieldIdx = 0; fieldIdx < fieldMemrefs.size(); ++fieldIdx) {
+      Value mem = fieldMemrefs[fieldIdx];
+      const int64_t argIdx = static_cast<int64_t>(fieldIdx);
+      const bool needsOldStateSnapshot =
+          readFieldArgSet.count(argIdx) && writeFieldArgSet.count(argIdx);
+      if (!needsOldStateSnapshot) {
+        inputMemrefs.push_back(mem);
+        continue;
+      }
       Value size = b.create<memref::DimOp>(loc, mem, zeroIdx);
       auto snap = b.create<memref::AllocOp>(
           loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
       b.create<memref::CopyOp>(loc, mem, snap);
-      snapshotMemrefs.push_back(snap);
+      inputMemrefs.push_back(snap);
+      allocatedSnapshots.push_back(snap);
     }
 
     Value c1 = b.create<arith::ConstantIndexOp>(loc, 1);
-    Value c2 = b.create<arith::ConstantIndexOp>(loc, 2);
-    Value ubX = b.create<arith::SubIOp>(loc, nx, c2);
-    Value ubY = b.create<arith::SubIOp>(loc, ny, c2);
-    Value ubZ = b.create<arith::SubIOp>(loc, nz, c2);
+    Value cRadius =
+        b.create<arith::ConstantIndexOp>(loc, static_cast<int64_t>(stencilRadius));
+    Value ubX = b.create<arith::SubIOp>(loc, nx, cRadius);
+    Value ubY = b.create<arith::SubIOp>(loc, ny, cRadius);
+    Value ubZ = b.create<arith::SubIOp>(loc, nz, cRadius);
 
-    auto loopX = b.create<scf::ForOp>(loc, c2, ubX, c1);
+    auto loopX = b.create<scf::ForOp>(loc, cRadius, ubX, c1);
     b.setInsertionPointToStart(loopX.getBody());
-    auto loopY = b.create<scf::ForOp>(loc, c2, ubY, c1);
+    auto loopY = b.create<scf::ForOp>(loc, cRadius, ubY, c1);
     b.setInsertionPointToStart(loopY.getBody());
-    auto loopZ = b.create<scf::ForOp>(loc, c2, ubZ, c1);
+    auto loopZ = b.create<scf::ForOp>(loc, cRadius, ubZ, c1);
 
     {
       OpBuilder ib = OpBuilder::atBlockBegin(loopZ.getBody());
@@ -891,7 +1118,7 @@ struct RhsGridScfPass
       Value iz = loopZ.getInductionVar();
 
       RhsScalarizer scalarizer(ib, loc, rhs, nx, ny, nz, dx, dy, dz, ix, iy, iz,
-                               snapshotMemrefs, fieldMemrefs, paramScalars);
+                               inputMemrefs, fieldMemrefs, paramScalars);
 
       for (Operation &op : rhs.getBody().front().without_terminator()) {
         if (auto dt = dyn_cast<DtAssignOp>(&op)) {
@@ -905,7 +1132,7 @@ struct RhsGridScfPass
     }
 
     b.setInsertionPointAfter(loopX);
-    for (Value snap : snapshotMemrefs)
+    for (Value snap : allocatedSnapshots)
       b.create<memref::DeallocOp>(loc, snap);
     b.create<func::ReturnOp>(loc);
 
@@ -954,6 +1181,16 @@ struct RhsGridAffinePass
       signalPassFailure();
       return;
     }
+    std::vector<int64_t> readFieldArgIndices;
+    if (failed(collectRhsReadArgIndices(rhs, readFieldArgIndices))) {
+      signalPassFailure();
+      return;
+    }
+    std::unordered_set<int64_t> readFieldArgSet(readFieldArgIndices.begin(),
+                                                readFieldArgIndices.end());
+    std::unordered_set<int64_t> writeFieldArgSet(writeFieldArgIndices.begin(),
+                                                 writeFieldArgIndices.end());
+    const unsigned stencilRadius = requiredRhsStencilRadius(rhs);
 
     SmallVector<Type> args;
     args.push_back(idxTy); // nx
@@ -1029,23 +1266,36 @@ struct RhsGridAffinePass
     for (unsigned i = 0; i < rhs.getNumArguments(); ++i)
       fieldMemrefs.push_back(entry->getArgument(fieldBase + i));
 
-    SmallVector<Value> snapshotMemrefs;
-    snapshotMemrefs.reserve(fieldMemrefs.size());
+    SmallVector<Value> inputMemrefs;
+    SmallVector<Value> allocatedSnapshots;
+    inputMemrefs.reserve(fieldMemrefs.size());
     Value zeroIdx = b.create<arith::ConstantIndexOp>(loc, 0);
-    for (Value mem : fieldMemrefs) {
+    for (unsigned fieldIdx = 0; fieldIdx < fieldMemrefs.size(); ++fieldIdx) {
+      Value mem = fieldMemrefs[fieldIdx];
+      const int64_t argIdx = static_cast<int64_t>(fieldIdx);
+      const bool needsOldStateSnapshot =
+          readFieldArgSet.count(argIdx) && writeFieldArgSet.count(argIdx);
+      if (!needsOldStateSnapshot) {
+        inputMemrefs.push_back(mem);
+        continue;
+      }
       Value size = b.create<memref::DimOp>(loc, mem, zeroIdx);
       auto snap = b.create<memref::AllocOp>(
           loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
       b.create<memref::CopyOp>(loc, mem, snap);
-      snapshotMemrefs.push_back(snap);
+      inputMemrefs.push_back(snap);
+      allocatedSnapshots.push_back(snap);
     }
 
-    Value c2 = b.create<arith::ConstantIndexOp>(loc, 2);
-    Value ubX = b.create<arith::SubIOp>(loc, nx, c2);
-    Value ubY = b.create<arith::SubIOp>(loc, ny, c2);
-    Value ubZ = b.create<arith::SubIOp>(loc, nz, c2);
+    Value cRadius =
+        b.create<arith::ConstantIndexOp>(loc, static_cast<int64_t>(stencilRadius));
+    Value ubX = b.create<arith::SubIOp>(loc, nx, cRadius);
+    Value ubY = b.create<arith::SubIOp>(loc, ny, cRadius);
+    Value ubZ = b.create<arith::SubIOp>(loc, nz, cRadius);
 
-    AffineMap lbMap = AffineMap::getConstantMap(2, &getContext());
+    AffineMap lbMap =
+        AffineMap::getConstantMap(static_cast<int64_t>(stencilRadius),
+                                  &getContext());
     AffineExpr s0 = b.getAffineSymbolExpr(0);
     AffineMap ubMap = AffineMap::get(0, 1, s0);
 
@@ -1065,7 +1315,7 @@ struct RhsGridAffinePass
       Value iz = loopZ.getInductionVar();
 
       RhsScalarizer scalarizer(ib, loc, rhs, nx, ny, nz, dx, dy, dz, ix, iy,
-                               iz, snapshotMemrefs, fieldMemrefs, paramScalars);
+                               iz, inputMemrefs, fieldMemrefs, paramScalars);
 
       for (Operation &op : rhs.getBody().front().without_terminator()) {
         if (auto dt = dyn_cast<DtAssignOp>(&op)) {
@@ -1079,7 +1329,7 @@ struct RhsGridAffinePass
     }
 
     b.setInsertionPointAfter(loopX);
-    for (Value snap : snapshotMemrefs)
+    for (Value snap : allocatedSnapshots)
       b.create<memref::DeallocOp>(loc, snap);
     b.create<func::ReturnOp>(loc);
 

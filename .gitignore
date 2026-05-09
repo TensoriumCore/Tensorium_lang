@@ -5,6 +5,7 @@ CODEX_NEXT_STEPS.md
 pybuild/
 build/
 *.o
+CODEX_NEXT_STEPS.md
 *.so
 *.a
 *.csv

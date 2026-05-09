@@ -4,16 +4,15 @@
 #include <stdlib.h>
 
 extern void tensorium_init_grid_affine(
-    double unused_param, double *x_alloc, double *x_aligned, int64_t x_offset,
-    int64_t x_size, int64_t x_stride, double *y_alloc, double *y_aligned,
-    int64_t y_offset, int64_t y_size, int64_t y_stride, double *z_alloc,
-    double *z_aligned, int64_t z_offset, int64_t z_size, int64_t z_stride,
-    double *alpha_alloc, double *alpha_aligned,
-    int64_t alpha_offset, int64_t alpha_size, int64_t alpha_stride,
-    double *gamma_alloc, double *gamma_aligned, int64_t gamma_offset,
-    int64_t gamma_size, int64_t gamma_stride, double *gammaU_alloc,
-    double *gammaU_aligned, int64_t gammaU_offset, int64_t gammaU_size,
-    int64_t gammaU_stride);
+    double *x_alloc, double *x_aligned, int64_t x_offset, int64_t x_size,
+    int64_t x_stride, double *y_alloc, double *y_aligned, int64_t y_offset,
+    int64_t y_size, int64_t y_stride, double *z_alloc, double *z_aligned,
+    int64_t z_offset, int64_t z_size, int64_t z_stride, double *alpha_alloc,
+    double *alpha_aligned, int64_t alpha_offset, int64_t alpha_size,
+    int64_t alpha_stride, double *gamma_alloc, double *gamma_aligned,
+    int64_t gamma_offset, int64_t gamma_size, int64_t gamma_stride,
+    double *gammaU_alloc, double *gammaU_aligned, int64_t gammaU_offset,
+    int64_t gammaU_size, int64_t gammaU_stride);
 
 extern void tensorium_rhs_grid_affine(
     int64_t nx, int64_t ny, int64_t nz, double dr, double dtheta, double dphi,
@@ -70,7 +69,6 @@ int main(void) {
 
   // Minkowski metric in Cartesian coordinates:
   // gamma_ij = delta_ij, Christoffel^i_jk = 0, Ricci_ij = 0.
-  const double unused_param = 0.0;
   const double x0 = 1.0;
   const double y0 = -0.25;
   const double z0 = 0.5;
@@ -102,9 +100,9 @@ int main(void) {
     }
   }
 
-  tensorium_init_grid_affine(unused_param, x, x, 0, n, 1, y, y, 0, n, 1, z, z,
-                             0, n, 1, alpha, alpha, 0, n, 1, gamma, gamma, 0,
-                             9 * n, 1, gammaU, gammaU, 0, 9 * n, 1);
+  tensorium_init_grid_affine(x, x, 0, n, 1, y, y, 0, n, 1, z, z, 0, n, 1,
+                             alpha, alpha, 0, n, 1, gamma, gamma, 0, 9 * n,
+                             1, gammaU, gammaU, 0, 9 * n, 1);
 
   tensorium_rhs_grid_affine(nx, ny, nz, dr, dtheta, dphi, gamma, gamma, 0,
                             9 * n, 1, gammaU, gammaU, 0, 9 * n, 1, chr, chr, 0,

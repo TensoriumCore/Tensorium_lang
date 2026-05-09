@@ -40,6 +40,89 @@ static void writeFile(const std::string &path, const std::string &content) {
     throw std::runtime_error("failed to write output file: " + path);
 }
 
+static void printUsage(std::ostream &os) {
+  os << "usage: Tensorium_cc [options] file1.tn [file2.tn ...]\n"
+     << "  -O0|-O1|-O2|-O3              select clang-style Tensorium pipeline preset\n"
+     << "  --dump-mlir|--emit-mlir PATH  emit MLIR after selected Tensorium passes\n"
+     << "  --dump-llvm-ir|--emit-llvm PATH emit final LLVM IR\n"
+     << "  --tensorium-dx VALUE          finite-difference grid spacing for stencil passes\n"
+     << "  --tensorium-stencil-order N   stencil order, supported values depend on pass\n"
+     << "  --tensorium-dissipation-strength VALUE\n"
+     << "                                artificial dissipation strength\n"
+     << "  --mlir-inline                 run MLIR inliner in post-generation pipeline\n"
+     << "  --mlir-no-canonicalize        disable post-generation canonicalizer\n"
+     << "  --mlir-no-cse                 disable post-generation CSE\n"
+     << "  --mlir-best-effort            do not fail on Tensorium MLIR pipeline errors\n";
+}
+
+static bool parseOptimizationLevelArg(
+    const std::string &arg, tensorium_mlir::OptimizationLevel &out) {
+  if (arg == "-O0" || arg == "--O0" || arg == "--tensorium-O0") {
+    out = tensorium_mlir::OptimizationLevel::O0;
+    return true;
+  }
+  if (arg == "-O1" || arg == "--O1" || arg == "--tensorium-O1") {
+    out = tensorium_mlir::OptimizationLevel::O1;
+    return true;
+  }
+  if (arg == "-O2" || arg == "--O2" || arg == "--tensorium-O2") {
+    out = tensorium_mlir::OptimizationLevel::O2;
+    return true;
+  }
+  if (arg == "-O3" || arg == "--O3" || arg == "--tensorium-O3") {
+    out = tensorium_mlir::OptimizationLevel::O3;
+    return true;
+  }
+  return false;
+}
+
+static bool takeOptionValue(const std::string &arg, const std::string &option,
+                            int &i, int argc, char **argv,
+                            std::string &out) {
+  const std::string prefix = option + "=";
+  if (arg.rfind(prefix, 0) == 0) {
+    out = arg.substr(prefix.size());
+    if (out.empty())
+      throw std::runtime_error(option + " requires a non-empty value");
+    return true;
+  }
+  if (arg == option) {
+    if (i + 1 >= argc)
+      throw std::runtime_error(option + " expects a value");
+    out = argv[++i];
+    if (out.empty())
+      throw std::runtime_error(option + " requires a non-empty value");
+    return true;
+  }
+  return false;
+}
+
+static double parseDoubleOption(const std::string &option,
+                                const std::string &value) {
+  try {
+    size_t consumed = 0;
+    double parsed = std::stod(value, &consumed);
+    if (consumed != value.size())
+      throw std::runtime_error("");
+    return parsed;
+  } catch (...) {
+    throw std::runtime_error(option + " expects a floating point value");
+  }
+}
+
+static int parseIntOption(const std::string &option,
+                          const std::string &value) {
+  try {
+    size_t consumed = 0;
+    int parsed = std::stoi(value, &consumed);
+    if (consumed != value.size())
+      throw std::runtime_error("");
+    return parsed;
+  } catch (...) {
+    throw std::runtime_error(option + " expects an integer value");
+  }
+}
+
 static void printIndexedType(const IndexedExpr *e) {
   if (!e)
     return;
@@ -122,32 +205,17 @@ int main(int argc, char **argv) {
   bool dumpLLVMIR = false;
   std::string emitMLIRPath;
   std::string emitLLVMIRPath;
-  bool enableNoOpPass = false;
-  bool enableAnalysisPass = false;
+  tensorium_mlir::MLIRPassOptions passOptions;
   bool validateOnly = false;
-  bool enableEinsteinLoweringPass = false;
-  bool enableEinsteinValidityPass = false;
-  bool enableIndexAnalyzePass = false;
-  bool enableEinsteinCanonicalizePass = false;
-  bool enableEinsteinAnalyzeEinsumPass = false;
-  bool enableMetricLoweringPass = false;
-  bool enableInitStdLoweringPass = false;
-  bool enableInitGridScfPass = false;
-  bool enableInitGridAffinePass = false;
-  bool enableRhsGridScfPass = false;
-  bool enableRhsGridAffinePass = false;
-  bool enableStripSourceFuncsPass = false;
-  bool enableStencilLoweringPass = false;
-  bool enableDissipationPass = false;
-  bool mlirDisableThreading = false;
-  bool mlirPrintOpOnDiagnostic = false;
-  bool mlirPrintIRAfterFailure = false;
   bool failOnMLIRPipelineFailure = true;
+  bool hasOptimizationLevel = false;
+  tensorium_mlir::OptimizationLevel optimizationLevel =
+      tensorium_mlir::OptimizationLevel::O0;
   ColorMode colorMode = ColorMode::Auto;
   CompilationMode compilationMode = CompilationMode::Executable;
 
   if (argc < 2) {
-    std::cerr << "usage: Tensorium_cc [--dump-ast] file1.tn [file2.tn ...]\n";
+    printUsage(std::cerr);
     return 1;
   }
 
@@ -155,8 +223,14 @@ int main(int argc, char **argv) {
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
+    std::string optionValue;
 
-    if (arg == "--dump-ast") {
+    if (arg == "--help" || arg == "-h") {
+      printUsage(std::cout);
+      return 0;
+    } else if (parseOptimizationLevelArg(arg, optimizationLevel)) {
+      hasOptimizationLevel = true;
+    } else if (arg == "--dump-ast") {
       dumpAST = true;
     } else if (arg == "--dump-indexed") {
       dumpIndexed = true;
@@ -165,39 +239,52 @@ int main(int argc, char **argv) {
     } else if (arg == "--dump-backend-expr") {
       dumpBackendExpr = true;
     } else if (arg == "--tensorium-noop") {
-      enableNoOpPass = true;
+      passOptions.enableNoOpPass = true;
     } else if (arg == "--tensorium-analyze") {
-      enableAnalysisPass = true;
+      passOptions.enableAnalysisPass = true;
     } else if (arg == "--run-cpu") {
       runCpu = true;
     } else if (arg == "--tensorium-einstein-lower") {
-      enableEinsteinLoweringPass = true;
+      passOptions.enableEinsteinLoweringPass = true;
     } else if (arg == "--tensorium-index-analyze") {
-      enableIndexAnalyzePass = true;
+      passOptions.enableIndexAnalyzePass = true;
+    } else if (arg == "--tensorium-index-role-analyze") {
+      passOptions.enableIndexRoleAnalysisPass = true;
     } else if (arg == "--tensorium-einstein-validate") {
-      enableEinsteinValidityPass = true;
+      passOptions.enableEinsteinValidityPass = true;
     } else if (arg == "--tensorium-einstein-canonicalize") {
-      enableEinsteinCanonicalizePass = true;
+      passOptions.enableEinsteinCanonicalizePass = true;
     } else if (arg == "--tensorium-einstein-analyze-einsum") {
-      enableEinsteinAnalyzeEinsumPass = true;
+      passOptions.enableEinsteinAnalyzeEinsumPass = true;
     } else if (arg == "--tensorium-metric-lower") {
-      enableMetricLoweringPass = true;
+      passOptions.enableMetricLoweringPass = true;
     } else if (arg == "--tensorium-init-std-lower") {
-      enableInitStdLoweringPass = true;
+      passOptions.enableInitStdLoweringPass = true;
     } else if (arg == "--tensorium-init-grid-scf-lower") {
-      enableInitGridScfPass = true;
+      passOptions.enableInitGridScfPass = true;
     } else if (arg == "--tensorium-init-grid-affine-lower") {
-      enableInitGridAffinePass = true;
+      passOptions.enableInitGridAffinePass = true;
     } else if (arg == "--tensorium-rhs-grid-scf-lower") {
-      enableRhsGridScfPass = true;
+      passOptions.enableRhsGridScfPass = true;
     } else if (arg == "--tensorium-rhs-grid-affine-lower") {
-      enableRhsGridAffinePass = true;
+      passOptions.enableRhsGridAffinePass = true;
     } else if (arg == "--tensorium-strip-source-funcs") {
-      enableStripSourceFuncsPass = true;
+      passOptions.enableStripSourceFuncsPass = true;
     } else if (arg == "--tensorium-stencil-lower") {
-      enableStencilLoweringPass = true;
+      passOptions.enableStencilLoweringPass = true;
     } else if (arg == "--tensorium-dissipation") {
-      enableDissipationPass = true;
+      passOptions.enableDissipationPass = true;
+    } else if (takeOptionValue(arg, "--tensorium-dx", i, argc, argv,
+                               optionValue)) {
+      passOptions.dx = parseDoubleOption("--tensorium-dx", optionValue);
+    } else if (takeOptionValue(arg, "--tensorium-stencil-order", i, argc, argv,
+                               optionValue)) {
+      passOptions.order =
+          parseIntOption("--tensorium-stencil-order", optionValue);
+    } else if (takeOptionValue(arg, "--tensorium-dissipation-strength", i, argc,
+                               argv, optionValue)) {
+      passOptions.dissipationStrength =
+          parseDoubleOption("--tensorium-dissipation-strength", optionValue);
     } else if (arg == "--dump-mlir") {
       dumpMLIR = true;
     } else if (arg.rfind("--emit-mlir=", 0) == 0) {
@@ -223,11 +310,17 @@ int main(int argc, char **argv) {
       if (emitLLVMIRPath.empty())
         throw std::runtime_error("--emit-llvm requires a non-empty path");
     } else if (arg == "--mlir-disable-threading") {
-      mlirDisableThreading = true;
+      passOptions.mlirDisableThreading = true;
     } else if (arg == "--mlir-print-op-on-diagnostic") {
-      mlirPrintOpOnDiagnostic = true;
+      passOptions.mlirPrintOpOnDiagnostic = true;
     } else if (arg == "--mlir-print-ir-after-failure") {
-      mlirPrintIRAfterFailure = true;
+      passOptions.mlirPrintIRAfterFailure = true;
+    } else if (arg == "--mlir-inline") {
+      passOptions.enableMLIRInlinePass = true;
+    } else if (arg == "--mlir-no-canonicalize") {
+      passOptions.enableMLIRCanonicalizePass = false;
+    } else if (arg == "--mlir-no-cse") {
+      passOptions.enableMLIRCSEPass = false;
     } else if (arg == "--mlir-strict-pipeline") {
       failOnMLIRPipelineFailure = true;
     } else if (arg == "--mlir-best-effort") {
@@ -291,24 +384,32 @@ int main(int argc, char **argv) {
   }
 
   const bool hasExplicitTensoriumPipelineSelection =
-      enableNoOpPass || enableAnalysisPass || enableEinsteinLoweringPass ||
-      enableEinsteinValidityPass || enableIndexAnalyzePass ||
-      enableEinsteinCanonicalizePass || enableEinsteinAnalyzeEinsumPass ||
-      enableMetricLoweringPass || enableInitStdLoweringPass ||
-      enableInitGridScfPass || enableInitGridAffinePass ||
-      enableRhsGridScfPass || enableRhsGridAffinePass ||
-      enableStripSourceFuncsPass || enableStencilLoweringPass ||
-      enableDissipationPass;
+      passOptions.enableNoOpPass || passOptions.enableAnalysisPass ||
+      passOptions.enableEinsteinLoweringPass ||
+      passOptions.enableIndexRoleAnalysisPass ||
+      passOptions.enableEinsteinValidityPass ||
+      passOptions.enableIndexAnalyzePass ||
+      passOptions.enableEinsteinCanonicalizePass ||
+      passOptions.enableEinsteinAnalyzeEinsumPass ||
+      passOptions.enableMetricLoweringPass ||
+      passOptions.enableInitStdLoweringPass ||
+      passOptions.enableInitGridScfPass ||
+      passOptions.enableInitGridAffinePass ||
+      passOptions.enableRhsGridScfPass ||
+      passOptions.enableRhsGridAffinePass ||
+      passOptions.enableStripSourceFuncsPass ||
+      passOptions.enableStencilLoweringPass ||
+      passOptions.enableDissipationPass;
 
   // Make LLVM IR emission usable out-of-the-box for executable kernels.
   if ((dumpLLVMIR || !emitLLVMIRPath.empty()) &&
       compilationMode == CompilationMode::Executable &&
       !hasExplicitTensoriumPipelineSelection) {
-    enableMetricLoweringPass = true;
-    enableInitStdLoweringPass = true;
-    enableInitGridAffinePass = true;
-    enableRhsGridAffinePass = true;
-    enableStripSourceFuncsPass = true;
+    passOptions.enableMetricLoweringPass = true;
+    passOptions.enableInitStdLoweringPass = true;
+    passOptions.enableInitGridAffinePass = true;
+    passOptions.enableRhsGridAffinePass = true;
+    passOptions.enableStripSourceFuncsPass = true;
   }
 
   PrintDiagnosticOptions diagPrintOpts;
@@ -434,27 +535,10 @@ int main(int argc, char **argv) {
       }
 
       auto makeMLIRGenOptions = [&]() {
-        tensorium_mlir::MLIRGenOptions opts;
-        opts.enableNoOpPass = enableNoOpPass;
-        opts.enableAnalysisPass = enableAnalysisPass;
-        opts.enableEinsteinLoweringPass = enableEinsteinLoweringPass;
-        opts.enableEinsteinValidityPass = enableEinsteinValidityPass;
-        opts.enableIndexAnalyzePass = enableIndexAnalyzePass;
-        opts.enableEinsteinCanonicalizePass = enableEinsteinCanonicalizePass;
-        opts.enableEinsteinAnalyzeEinsumPass = enableEinsteinAnalyzeEinsumPass;
-        opts.enableMetricLoweringPass = enableMetricLoweringPass;
-        opts.enableInitStdLoweringPass = enableInitStdLoweringPass;
-        opts.enableInitGridScfPass = enableInitGridScfPass;
-        opts.enableInitGridAffinePass = enableInitGridAffinePass;
-        opts.enableRhsGridScfPass = enableRhsGridScfPass;
-        opts.enableRhsGridAffinePass = enableRhsGridAffinePass;
-        opts.enableStripSourceFuncsPass = enableStripSourceFuncsPass;
-        opts.enableStencilLoweringPass = enableStencilLoweringPass;
-        opts.enableDissipationPass = enableDissipationPass;
-        opts.mlirDisableThreading = mlirDisableThreading;
-        opts.mlirPrintOpOnDiagnostic = mlirPrintOpOnDiagnostic;
-        opts.mlirPrintIRAfterFailure = mlirPrintIRAfterFailure;
-        return opts;
+        const auto level =
+            hasOptimizationLevel ? optimizationLevel
+                                 : tensorium_mlir::OptimizationLevel::O0;
+        return tensorium_mlir::makeMLIRGenOptions(level, passOptions);
       };
 
       if (dumpMLIR || !emitMLIRPath.empty()) {

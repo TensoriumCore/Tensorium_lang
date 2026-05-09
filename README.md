@@ -50,6 +50,25 @@ To compile and analyze a Tensorium source file (.tn):
   tests/01_scalar_minimal.tn
 ```
 
+The driver also exposes clang-like presets:
+
+```bash
+./build/tools/driver/Tensorium_cc -O3 --emit-llvm out.ll tests/fixtures/gr/schwarzschild_3d.tn
+```
+
+`-O3` enables the deterministic analysis/lowering pipeline through final IR-ready passes. Individual `--tensorium-*` flags remain additive when a preset is used, and pass parameters can be overridden:
+
+```bash
+./build/tools/driver/Tensorium_cc \
+  -O3 \
+  --tensorium-dx 0.25 \
+  --tensorium-stencil-order 4 \
+  --tensorium-dissipation \
+  --tensorium-dissipation-strength 0.05 \
+  --emit-llvm out.ll \
+  tests/fixtures/gr/schwarzschild_3d.tn
+```
+
 This pipeline perform:
 
 - stencil lowering
