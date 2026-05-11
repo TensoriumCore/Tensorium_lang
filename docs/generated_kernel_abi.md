@@ -51,6 +51,27 @@ The helper host-side shape is provided as:
 
 in `include/tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h`.
 
+## Generated C Host Header
+
+The driver can emit a C header that mirrors the lowered ABI and adds thin
+buffer wrappers:
+
+```bash
+Tensorium_cc --emit-host-header tensorium_generated_host.h <file.tn>
+```
+
+The header contains:
+
+- raw `extern void tensorium_*` prototypes with expanded memref descriptors,
+- `tensorium_memref1d_f64` for callers that need descriptor-level access,
+- convenience wrappers such as `tensorium_call_init_grid_affine(...)` and
+  `tensorium_call_rhs_grid_affine(...)`.
+
+Convenience wrappers accept plain `double *` buffers and compute descriptor
+sizes from ABI metadata and field tensor ranks. For example, a rank-2 spatial
+field uses `9 * n_points` in 3D, and a rank-3 spatial field uses
+`27 * n_points`.
+
 ## Signature contracts
 
 ### `tensorium_init_point`
@@ -103,4 +124,3 @@ Examples:
 `tensorium_rhs_grid_*` snapshots all field buffers before stencil reads, then
 writes `dt_assign` targets to original field buffers. This guarantees read
 consistency within one RHS sweep and avoids write-after-read hazards.
-

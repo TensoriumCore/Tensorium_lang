@@ -912,8 +912,9 @@ Planned commit sequence (one intention per commit):
     (contravariant/covariant) and validates rank consistency.
 - Added GR regression fixture:
   - `tests/fixtures/gr/schwarzschild_ricci_3d.tn`
-  - Builds `Ricci[i,j]` directly from Christoffel symbols derived from
-    `metric4`/`split_3p1`.
+  - Builds the 3D spatial `Ricci[i,j]` directly from Christoffel symbols
+    derived from `metric4`/`split_3p1`; this is not the 4D vacuum
+    `Ricci_mu_nu`.
 - Added the fixture to automated GR checks in `run_test.sh` to prevent future
   regressions.
 - Added end-to-end LLVM smoke for Ricci execution with full matrix prints:
@@ -924,4 +925,7 @@ Planned commit sequence (one intention per commit):
   - runtime output prints reconstructed `g_uv`, `Gamma_ij`, `GammaU^ij`,
     `Christoffel^i_{jk}` and `Ricci_ij` at the grid center,
   - fixture: `tests/fixtures/gr/minkowski_ricci_3d.tn` (exact check:
-    `Christoffel = 0`, `Ricci = 0`).
+    `Christoffel = 0`, `Ricci = 0`),
+  - fixture: `tests/fixtures/gr/schwarzschild_ricci_3d.tn` compares true
+    non-zero 3D spatial Ricci components and checks the contracted scalar
+    `gammaU^ij Ricci_ij ~= 0`.

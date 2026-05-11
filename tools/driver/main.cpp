@@ -45,6 +45,7 @@ static void printUsage(std::ostream &os) {
      << "  -O0|-O1|-O2|-O3              select clang-style Tensorium pipeline preset\n"
      << "  --dump-mlir|--emit-mlir PATH  emit MLIR after selected Tensorium passes\n"
      << "  --dump-llvm-ir|--emit-llvm PATH emit final LLVM IR\n"
+     << "  --emit-host-header PATH       emit C host-call wrappers for generated kernels\n"
      << "  --tensorium-dx VALUE          finite-difference grid spacing for stencil passes\n"
      << "  --tensorium-stencil-order N   stencil order, supported values depend on pass\n"
      << "  --tensorium-dissipation-strength VALUE\n"
@@ -205,6 +206,7 @@ int main(int argc, char **argv) {
   bool dumpLLVMIR = false;
   std::string emitMLIRPath;
   std::string emitLLVMIRPath;
+  std::string emitHostHeaderPath;
   tensorium_mlir::MLIRPassOptions passOptions;
   bool validateOnly = false;
   bool failOnMLIRPipelineFailure = true;
@@ -309,6 +311,19 @@ int main(int argc, char **argv) {
       emitLLVMIRPath = argv[++i];
       if (emitLLVMIRPath.empty())
         throw std::runtime_error("--emit-llvm requires a non-empty path");
+    } else if (arg.rfind("--emit-host-header=", 0) == 0) {
+      emitHostHeaderPath =
+          arg.substr(std::string("--emit-host-header=").size());
+      if (emitHostHeaderPath.empty())
+        throw std::runtime_error(
+            "--emit-host-header requires a non-empty path");
+    } else if (arg == "--emit-host-header") {
+      if (i + 1 >= argc)
+        throw std::runtime_error("--emit-host-header expects a file path");
+      emitHostHeaderPath = argv[++i];
+      if (emitHostHeaderPath.empty())
+        throw std::runtime_error(
+            "--emit-host-header requires a non-empty path");
     } else if (arg == "--mlir-disable-threading") {
       passOptions.mlirDisableThreading = true;
     } else if (arg == "--mlir-print-op-on-diagnostic") {
@@ -373,12 +388,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if ((!emitMLIRPath.empty() || !emitLLVMIRPath.empty()) &&
+  if ((!emitMLIRPath.empty() || !emitLLVMIRPath.empty() ||
+       !emitHostHeaderPath.empty()) &&
       files.size() != 1) {
     PrintDiagnosticOptions opts;
     opts.colorMode = colorMode;
     printDiagnostic(std::cerr, "<command line>", {}, DiagnosticLevel::Error,
-                    "--emit-mlir/--emit-llvm require exactly one input file",
+                    "--emit-mlir/--emit-llvm/--emit-host-header require exactly one input file",
                     {}, "E9002", opts);
     return 1;
   }
@@ -402,7 +418,7 @@ int main(int argc, char **argv) {
       passOptions.enableDissipationPass;
 
   // Make LLVM IR emission usable out-of-the-box for executable kernels.
-  if ((dumpLLVMIR || !emitLLVMIRPath.empty()) &&
+  if ((dumpLLVMIR || !emitLLVMIRPath.empty() || !emitHostHeaderPath.empty()) &&
       compilationMode == CompilationMode::Executable &&
       !hasExplicitTensoriumPipelineSelection) {
     passOptions.enableMetricLoweringPass = true;
@@ -582,6 +598,22 @@ int main(int argc, char **argv) {
         }
         if (dumpLLVMIR)
           std::cerr << "==============================\n";
+      }
+      if (!emitHostHeaderPath.empty()) {
+        auto opts = makeMLIRGenOptions();
+        std::string headerText;
+        const bool pipelineOK =
+            tensorium_mlir::emitHostHeader(mod, opts, &headerText);
+        if (pipelineOK)
+          writeFile(emitHostHeaderPath, headerText);
+        if (!pipelineOK) {
+          fileOK = false;
+          printDiagnostic(std::cerr, path, currentSource, DiagnosticLevel::Error,
+                          "host header generation pipeline failed", {},
+                          "E3103", diagPrintOpts);
+          if (failOnMLIRPipelineFailure)
+            return 1;
+        }
       }
       if (runCpu) {
         tensorium::runtime::RunOptions opt;

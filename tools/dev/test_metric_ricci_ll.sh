@@ -79,20 +79,25 @@ fi
 LL_PATH="/tmp/tensorium_${CASE_NAME}_ricci.ll"
 OBJ_PATH="/tmp/tensorium_${CASE_NAME}_ricci_ll.o"
 EXE_PATH="/tmp/tensorium_${CASE_NAME}_ricci_ll_runner"
+HOST_HEADER="/tmp/tensorium_${CASE_NAME}_generated_host.h"
+
+TENSORIUM_PASSES=(
+  --tensorium-metric-lower
+  --tensorium-init-std-lower
+  --tensorium-init-grid-affine-lower
+  --tensorium-rhs-grid-affine-lower
+  --tensorium-stencil-lower
+  --tensorium-einstein-lower
+  --tensorium-einstein-analyze-einsum
+  --tensorium-einstein-canonicalize
+  --tensorium-einstein-validate
+  --tensorium-strip-source-funcs
+)
 
 echo "[ll-smoke] generating Ricci LLVM IR ($CASE_NAME): $LL_PATH"
 RAW_OUT="$(mktemp)"
 "$DRIVER" \
-  --tensorium-metric-lower \
-  --tensorium-init-std-lower \
-  --tensorium-init-grid-affine-lower \
-  --tensorium-rhs-grid-affine-lower \
-  --tensorium-stencil-lower \
-  --tensorium-einstein-lower \
-  --tensorium-einstein-analyze-einsum \
-  --tensorium-einstein-canonicalize \
-  --tensorium-einstein-validate \
-  --tensorium-strip-source-funcs \
+  "${TENSORIUM_PASSES[@]}" \
   --dump-llvm-ir \
   "$FIXTURE" >"$RAW_OUT"
 
@@ -107,6 +112,12 @@ if [[ ! -s "$LL_PATH" ]]; then
   exit 2
 fi
 
+echo "[ll-smoke] generating Ricci host header ($CASE_NAME): $HOST_HEADER"
+"$DRIVER" \
+  "${TENSORIUM_PASSES[@]}" \
+  --emit-host-header "$HOST_HEADER" \
+  "$FIXTURE" >/dev/null
+
 echo "[ll-smoke] compiling Ricci LLVM IR object ($CASE_NAME)"
 if command -v "$LLC_BIN" >/dev/null 2>&1; then
   "$LLC_BIN" -filetype=obj "$LL_PATH" -o "$OBJ_PATH"
@@ -115,7 +126,7 @@ else
 fi
 
 echo "[ll-smoke] compiling Ricci C runner + linking ($CASE_NAME)"
-"$CC_BIN" -O0 -std=c11 "$RUNNER_SRC" "$OBJ_PATH" -lm -o "$EXE_PATH"
+"$CC_BIN" -O0 -std=c11 -include "$HOST_HEADER" "$RUNNER_SRC" "$OBJ_PATH" -lm -o "$EXE_PATH"
 
 echo "[ll-smoke] running Ricci executable ($CASE_NAME)"
 "$EXE_PATH"

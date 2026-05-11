@@ -3064,6 +3064,49 @@ static bool testLoweredGridModuleLLVMIREmission() {
   return true;
 }
 
+static bool testLoweredGridHostHeaderEmission() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+
+  backend::ModuleIR mod =
+      buildModuleFromFile("tests/fixtures/gr/schwarzschild_ricci_3d.tn",
+                          CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  auto verify = validation::verifyIR(mod);
+  if (!verify.ok()) {
+    std::cerr << "FAIL: IR verification failed before host header test\n";
+    return false;
+  }
+
+  std::string header;
+  if (!tensorium_mlir::emitHostHeader(mod, opts, &header)) {
+    std::cerr << "FAIL: emitHostHeader failed for lowered Ricci grid module\n";
+    return false;
+  }
+
+  if (header.find("tensorium_call_init_grid_affine") == std::string::npos ||
+      header.find("tensorium_call_rhs_grid_affine") == std::string::npos ||
+      header.find("double *Christoffel") == std::string::npos ||
+      header.find("27 * n_points") == std::string::npos ||
+      header.find("9 * n_points") == std::string::npos) {
+    std::cerr << "FAIL: generated host header missing expected grid wrappers "
+                 "or component sizes\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testCompilerApiCompileFileToLLVMIR() {
   tensorium::api::CompileOptions compileOpts;
   compileOpts.mode = CompilationMode::Executable;
@@ -4480,6 +4523,8 @@ int main() {
       {"testStripSourceFuncsRhsOnly", &testStripSourceFuncsRhsOnly},
       {"testLoweredGridModuleLLVMIREmission",
        &testLoweredGridModuleLLVMIREmission},
+      {"testLoweredGridHostHeaderEmission",
+       &testLoweredGridHostHeaderEmission},
       {"testCompilerApiCompileFileToLLVMIR",
        &testCompilerApiCompileFileToLLVMIR},
       {"testCompilerApiSymbolicWarningPropagation",
