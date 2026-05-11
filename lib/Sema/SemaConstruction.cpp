@@ -83,7 +83,8 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
   for (const auto &m : prog.metrics) {
     for (const auto &entry : m.entries) {
       if (entry.lhs.indices.empty())
-        metricScalarLocals[entry.lhs.base] = true;
+        metricScalarLocals[entry.lhs.base] =
+            TensorTypeDesc{TensorKind::Scalar, 0, 0};
     }
   }
   for (const auto &m : prog.metrics) {

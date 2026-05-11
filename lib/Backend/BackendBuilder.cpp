@@ -646,6 +646,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
     for (const auto &tmp : indexed.temp) {
       TempAssignIR ot;
       ot.name = tmp.tensor;
+      ot.indices = tmp.indices;
       ot.indexOffsets = tmp.indexOffsets;
       ot.rhs = lowerIndexedExpr(tmp.rhs.get(), true, hasConnectionTensor);
       out.temporaries.push_back(std::move(ot));

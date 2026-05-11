@@ -17,7 +17,6 @@ static int64_t flat_index(int64_t i, int64_t j, int64_t k, int64_t ny,
 }
 
 static int comp2(int i, int j) { return i * 3 + j; }
-static int comp3(int i, int j, int k) { return (i * 3 + j) * 3 + k; }
 
 static void print_matrix3(const char *name, const double m[3][3]) {
   printf("%s = [[%.17g, %.17g, %.17g],\n", name, m[0][0], m[0][1], m[0][2]);
@@ -47,11 +46,10 @@ int main(void) {
   double *y = (double *)malloc((size_t)n * sizeof(double));
   double *z = (double *)malloc((size_t)n * sizeof(double));
   double *alpha = (double *)malloc((size_t)n * sizeof(double));
-  double *gamma = (double *)malloc((size_t)(16 * n) * sizeof(double));
-  double *gammaU = (double *)malloc((size_t)(16 * n) * sizeof(double));
-  double *chr = (double *)malloc((size_t)(27 * n) * sizeof(double));
-  double *ricci = (double *)malloc((size_t)(16 * n) * sizeof(double));
-  if (!x || !y || !z || !alpha || !gamma || !gammaU || !chr || !ricci) {
+  double *gamma = (double *)malloc((size_t)(9 * n) * sizeof(double));
+  double *gammaU = (double *)malloc((size_t)(9 * n) * sizeof(double));
+  double *ricci = (double *)malloc((size_t)(9 * n) * sizeof(double));
+  if (!x || !y || !z || !alpha || !gamma || !gammaU || !ricci) {
     fprintf(stderr, "allocation failure\n");
     return 2;
   }
@@ -69,31 +67,17 @@ int main(void) {
 
   tensorium_call_init_grid_affine(M, x, y, z, alpha, gamma, gammaU, n);
 
-  // First pass computes Christoffel from gamma/gammaU into chr.
   tensorium_call_rhs_grid_affine(nx, ny, nz, dr, dtheta, dphi, gamma, gammaU,
-                                 chr, ricci);
-  // Second pass evaluates Ricci with the updated Christoffel state.
-  tensorium_call_rhs_grid_affine(nx, ny, nz, dr, dtheta, dphi, gamma, gammaU,
-                                 chr, ricci);
+                                 ricci);
 
   double gamma_cov[3][3] = {{0.0}};
   double gamma_con[3][3] = {{0.0}};
   double ricci_cov[3][3] = {{0.0}};
-  double chr_r[3][3] = {{0.0}};
-  double chr_th[3][3] = {{0.0}};
-  double chr_ph[3][3] = {{0.0}};
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
       gamma_cov[i][j] = gamma[(int64_t)comp2(i, j) * n + cidx];
       gamma_con[i][j] = gammaU[(int64_t)comp2(i, j) * n + cidx];
       ricci_cov[i][j] = ricci[(int64_t)comp2(i, j) * n + cidx];
-    }
-  }
-  for (int j = 0; j < 3; ++j) {
-    for (int k = 0; k < 3; ++k) {
-      chr_r[j][k] = chr[(int64_t)comp3(0, j, k) * n + cidx];
-      chr_th[j][k] = chr[(int64_t)comp3(1, j, k) * n + cidx];
-      chr_ph[j][k] = chr[(int64_t)comp3(2, j, k) * n + cidx];
     }
   }
 
@@ -115,9 +99,6 @@ int main(void) {
   printf("  note: this is the 3D Ricci(gamma_ij), not the 4D vacuum Ricci_mu_nu\n");
   print_matrix3("gamma_ij", gamma_cov);
   print_matrix3("gammaU^ij", gamma_con);
-  print_matrix3("Christoffel^r_jk", chr_r);
-  print_matrix3("Christoffel^theta_jk", chr_th);
-  print_matrix3("Christoffel^phi_jk", chr_ph);
   print_matrix3("spatial Ricci_ij", ricci_cov);
   printf("spatial Ricci_rr expected=%.17g got=%.17g\n", exp_rr,
          ricci_cov[0][0]);
@@ -155,7 +136,6 @@ int main(void) {
   free(alpha);
   free(gamma);
   free(gammaU);
-  free(chr);
   free(ricci);
 
   if (!ok) {

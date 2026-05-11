@@ -3096,11 +3096,15 @@ static bool testLoweredGridHostHeaderEmission() {
 
   if (header.find("tensorium_call_init_grid_affine") == std::string::npos ||
       header.find("tensorium_call_rhs_grid_affine") == std::string::npos ||
-      header.find("double *Christoffel") == std::string::npos ||
-      header.find("27 * n_points") == std::string::npos ||
       header.find("9 * n_points") == std::string::npos) {
     std::cerr << "FAIL: generated host header missing expected grid wrappers "
                  "or component sizes\n";
+    return false;
+  }
+  if (header.find("double *Christoffel") != std::string::npos ||
+      header.find("27 * n_points") != std::string::npos) {
+    std::cerr << "FAIL: Ricci host header should not expose local Christoffel "
+                 "temporary as an ABI buffer\n";
     return false;
   }
 

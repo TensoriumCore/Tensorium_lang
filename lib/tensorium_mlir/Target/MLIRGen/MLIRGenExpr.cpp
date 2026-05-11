@@ -24,13 +24,14 @@ static mlir::ArrayAttr makeIndicesAttr(mlir::OpBuilder &b,
 
 static mlir::Value emitFieldRefFromSource(mlir::OpBuilder &b, mlir::Location loc,
                                           mlir::Value source,
-                                          llvm::ArrayRef<std::string> names) {
+                                          llvm::ArrayRef<std::string> names,
+                                          llvm::StringRef kind = "field") {
   auto sourceType = mlir::dyn_cast<tensorium::mlir::FieldType>(source.getType());
   if (!sourceType)
     emitUnsupportedExprError(loc, "field source does not have tensorium.field type");
 
   auto ref = b.create<tensorium::mlir::RefOp>(
-      loc, sourceType, source, b.getStringAttr("field"),
+      loc, sourceType, source, b.getStringAttr(kind),
       makeIndicesAttr(b, names), mlir::ArrayAttr());
   return ref.getResult();
 }
@@ -116,7 +117,10 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
         emitUnsupportedExprError(
             loc, "temporary '" + v->name + "' referenced before definition");
       }
-      return itLocal->second;
+      if (v->tensorIndexNames.empty())
+        return itLocal->second;
+      return emitFieldRefFromSource(b, loc, itLocal->second,
+                                    v->tensorIndexNames, "local");
     }
 
     if (v->vkind == VarKind::Param) {
@@ -399,12 +403,9 @@ void emitEvolutionOps(
     llvm::StringMap<mlir::Value> tempValues;
 
     for (const auto &tmp : evo.temporaries) {
-      if (!tmp.indexOffsets.empty()) {
-        emitUnsupportedExprError(
-            loc, "non-scalar temporary '" + tmp.name +
-                     "' is not supported in executable mode");
-      }
       auto rhsV = emitExpr(b, loc, tmp.rhs.get(), fieldArg, &tempValues);
+      if (!tmp.indices.empty())
+        rhsV = emitFieldRefFromSource(b, loc, rhsV, tmp.indices, "assign");
       tempValues[tmp.name] = rhsV;
     }
 

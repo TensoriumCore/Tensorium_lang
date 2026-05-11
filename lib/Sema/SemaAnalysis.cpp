@@ -4,22 +4,45 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace tensorium {
 namespace {
 struct LocalScopeGuard {
-  std::unordered_map<std::string, bool> &locals;
-  std::unordered_map<std::string, bool> saved;
+  std::unordered_map<std::string, TensorTypeDesc> &locals;
+  std::unordered_map<std::string, TensorTypeDesc> saved;
 
-  LocalScopeGuard(std::unordered_map<std::string, bool> &localsIn,
-                  std::unordered_map<std::string, bool> replacement)
+  LocalScopeGuard(std::unordered_map<std::string, TensorTypeDesc> &localsIn,
+                  std::unordered_map<std::string, TensorTypeDesc> replacement)
       : locals(localsIn), saved(localsIn) {
     locals = std::move(replacement);
   }
 
   ~LocalScopeGuard() { locals = std::move(saved); }
 };
+
+static TensorKind deduceKind(int up, int down) {
+  if (up == 0 && down == 0)
+    return TensorKind::Scalar;
+  if (up == 1 && down == 0)
+    return TensorKind::Vector;
+  if (up == 0 && down == 1)
+    return TensorKind::Covector;
+  if (up == 0 && down == 2)
+    return TensorKind::CovTensor2;
+  if (up == 2 && down == 0)
+    return TensorKind::ConTensor2;
+  if (up == 0 && down == 3)
+    return TensorKind::CovTensor3;
+  if (up == 3 && down == 0)
+    return TensorKind::ConTensor3;
+  if (up == 0 && down == 4)
+    return TensorKind::CovTensor4;
+  if (up == 4 && down == 0)
+    return TensorKind::ConTensor4;
+  return TensorKind::MixedTensor;
+}
 } // namespace
 
 IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
@@ -60,12 +83,19 @@ IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
 }
 
 IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
-  LocalScopeGuard localsScope(locals, std::unordered_map<std::string, bool>{});
+  LocalScopeGuard localsScope(
+      locals, std::unordered_map<std::string, TensorTypeDesc>{});
   coordIndex.clear();
   locals.clear();
 
   IndexedEvolution out;
   out.name = evo.name;
+
+  for (const auto &tmp : evo.tempAssignments)
+    for (const auto &idx : tmp.lhs.indices) {
+      validateSpatialIndex(idx);
+      coordIndex[idx] = -1;
+    }
 
   for (const auto &eq : evo.equations)
     for (const auto &idx : eq.indices) {
@@ -73,11 +103,10 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
       coordIndex[idx] = -1;
     }
 
-  for (const auto &tmp : evo.tempAssignments) {
-    if (!tmp.lhs.indices.empty()) {
-      continue;
-    }
+  TensorTypeChecker checker(hasConnectionTensor);
+  std::unordered_set<std::string> tempNames;
 
+  for (const auto &tmp : evo.tempAssignments) {
     if (params.count(tmp.lhs.base)) {
       throw std::runtime_error("Cannot redeclare parameter '" + tmp.lhs.base +
                                "' as local");
@@ -88,10 +117,32 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
                                "' as local");
     }
 
-    locals[tmp.lhs.base] = true;
+    if (!tempNames.insert(tmp.lhs.base).second) {
+      throw std::runtime_error("Cannot redeclare local '" + tmp.lhs.base + "'");
+    }
+
+    if (tmp.lhs.indices.empty())
+      locals[tmp.lhs.base] = TensorTypeDesc{TensorKind::Scalar, 0, 0};
   }
 
-  TensorTypeChecker checker(hasConnectionTensor);
+  for (const auto &tmp : evo.tempAssignments) {
+    auto rhs = transformExpr(tmp.rhs.get());
+    TensorType rhsType = checker.infer(rhs.get());
+    TensorType lhsType{rhsType.up, rhsType.down};
+    checker.checkAssignmentVariance(lhsType, tmp.lhs.indices, rhs.get());
+
+    IndexedAssignment ia;
+    ia.tensor = tmp.lhs.base;
+    ia.indices = tmp.lhs.indices;
+    for (auto &idx : tmp.lhs.indices)
+      ia.indexOffsets.push_back(resolveIndex(idx));
+    ia.rhs = std::move(rhs);
+    out.temp.push_back(std::move(ia));
+
+    locals[tmp.lhs.base] =
+        TensorTypeDesc{deduceKind(rhsType.up, rhsType.down), rhsType.up,
+                       rhsType.down};
+  }
 
   for (const auto &eq : evo.equations) {
 
@@ -129,20 +180,6 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
     ie.rhs->inferredType.down = fd->down;
 
     out.equations.push_back(std::move(ie));
-  }
-
-  for (const auto &tmp : evo.tempAssignments) {
-    auto rhs = transformExpr(tmp.rhs.get());
-    TensorType lhsType{0, 0};
-    checker.checkAssignmentVariance(lhsType, tmp.lhs.indices, rhs.get());
-    checker.infer(rhs.get());
-
-    IndexedAssignment ia;
-    ia.tensor = tmp.lhs.base;
-    for (auto &idx : tmp.lhs.indices)
-      ia.indexOffsets.push_back(resolveIndex(idx));
-    ia.rhs = std::move(rhs);
-    out.temp.push_back(std::move(ia));
   }
 
   return out;

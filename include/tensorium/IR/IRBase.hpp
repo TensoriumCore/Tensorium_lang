@@ -122,6 +122,7 @@ struct EquationIR {
 
 struct TempAssignIR {
   std::string name;
+  std::vector<std::string> indices;
   std::vector<int> indexOffsets;
   std::unique_ptr<ExprIR> rhs;
 };

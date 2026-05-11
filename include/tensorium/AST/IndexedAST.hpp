@@ -56,6 +56,7 @@ struct IndexedCall : IndexedExpr {
 
 struct IndexedAssignment {
   std::string tensor;
+  std::vector<std::string> indices;
   std::vector<int> indexOffsets;
   std::unique_ptr<IndexedExpr> rhs;
 };

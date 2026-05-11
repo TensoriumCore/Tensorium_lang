@@ -135,10 +135,8 @@ static LogicalResult collectRhsReadArgIndices(func::FuncOp rhs,
     if (!ref)
       continue;
     auto fieldArg = dyn_cast<BlockArgument>(ref.getSource());
-    if (!fieldArg || fieldArg.getOwner() != &rhs.getBody().front()) {
-      ref.emitError("rhs-grid-abi: ref source must be rhs block argument");
-      return failure();
-    }
+    if (!fieldArg || fieldArg.getOwner() != &rhs.getBody().front())
+      continue;
     indices.insert(static_cast<int64_t>(fieldArg.getArgNumber()));
   }
 
@@ -168,8 +166,12 @@ static unsigned requiredStencilRadiusForValue(Value v) {
     return 0;
   if (isa<ConstOp, ParamOp, CoordOp>(def))
     return 0;
-  if (auto ref = dyn_cast<RefOp>(def))
-    return maxAbsRefOffset(ref);
+  if (auto ref = dyn_cast<RefOp>(def)) {
+    unsigned radius = maxAbsRefOffset(ref);
+    if (ref.getSource().getDefiningOp())
+      radius += requiredStencilRadiusForValue(ref.getSource());
+    return radius;
+  }
   if (auto promote = dyn_cast<PromoteOp>(def))
     return requiredStencilRadiusForValue(promote.getIn());
   if (auto add = dyn_cast<AddOp>(def)) {
@@ -371,16 +373,6 @@ private:
     }
 
     if (auto ref = dyn_cast_or_null<RefOp>(v.getDefiningOp())) {
-      auto srcArg = dyn_cast<BlockArgument>(ref.getSource());
-      if (!srcArg || srcArg.getOwner() != &srcRhs.getBody().front()) {
-        ref.emitError("rhs-grid-scf: ref source must be rhs block argument");
-        return failure();
-      }
-      if (srcArg.getArgNumber() >= inputFieldMemrefs.size()) {
-        ref.emitError("rhs-grid-scf: ref source arg index out of range");
-        return failure();
-      }
-
       auto resultTy = dyn_cast<FieldType>(ref.getResult().getType());
       if (!resultTy) {
         ref.emitError("rhs-grid-scf: ref result must be tensorium.field");
@@ -406,6 +398,43 @@ private:
       Shift3 total{shift.x + static_cast<int>(refOffsets[0]),
                    shift.y + static_cast<int>(refOffsets[1]),
                    shift.z + static_cast<int>(refOffsets[2])};
+
+      auto srcArg = dyn_cast<BlockArgument>(ref.getSource());
+      if (!srcArg || srcArg.getOwner() != &srcRhs.getBody().front()) {
+        auto source = evalValue(ref.getSource(), total);
+        if (failed(source))
+          return failure();
+
+        const std::size_t count = powU(spatialDim, resultTy.getRank());
+        out.comps.reserve(count);
+
+        if (ref.getKind() != "assign") {
+          if (source->comps.size() != count) {
+            ref.emitError("rhs-grid-scf: local ref component count mismatch");
+            return failure();
+          }
+          out.comps.assign(source->comps.begin(), source->comps.end());
+          return out;
+        }
+
+        for (std::size_t comp = 0; comp < count; ++comp) {
+          auto axes = unflattenAxes(comp, resultTy.getRank(), spatialDim);
+          std::unordered_map<std::string, unsigned> values;
+          for (std::size_t i = 0; i < out.indices.size(); ++i)
+            values[out.indices[i]] = axes[i];
+
+          auto sourceCompOr =
+              componentFromIndexMap(*source, values, ref.getOperation());
+          if (!sourceCompOr)
+            return failure();
+          out.comps.push_back(source->comps[*sourceCompOr]);
+        }
+        return out;
+      }
+      if (srcArg.getArgNumber() >= inputFieldMemrefs.size()) {
+        ref.emitError("rhs-grid-scf: ref source arg index out of range");
+        return failure();
+      }
       const std::size_t count = powU(spatialDim, resultTy.getRank());
       out.comps.reserve(count);
 

@@ -59,9 +59,11 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       iv->tensorKind = TensorKind::Scalar;
       return iv;
     }
-    if (locals.count(v->name)) {
+    if (auto itLocal = locals.find(v->name); itLocal != locals.end()) {
       auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Local);
-      iv->tensorKind = TensorKind::Scalar;
+      iv->tensorKind = itLocal->second.kind;
+      iv->up = itLocal->second.up;
+      iv->down = itLocal->second.down;
       return iv;
     }
 
@@ -92,22 +94,36 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
     return transformExpr(p->inner.get());
 
   if (auto iv = dynamic_cast<const IndexedVarExpr *>(e)) {
-    auto it = fields.find(iv->base);
-    if (it == fields.end())
-      throw std::runtime_error("Unknown indexed tensor: " + iv->base);
+    IndexedVarKind outKind = IndexedVarKind::Field;
+    TensorKind tensorKind = TensorKind::Scalar;
+    int up = 0;
+    int down = 0;
 
-    const FieldDecl *fd = it->second;
-    size_t expected = static_cast<size_t>(fd->up + fd->down);
+    if (auto itLocal = locals.find(iv->base); itLocal != locals.end()) {
+      outKind = IndexedVarKind::Local;
+      tensorKind = itLocal->second.kind;
+      up = itLocal->second.up;
+      down = itLocal->second.down;
+    } else if (auto it = fields.find(iv->base); it != fields.end()) {
+      const FieldDecl *fd = it->second;
+      tensorKind = fd->kind;
+      up = fd->up;
+      down = fd->down;
+    } else {
+      throw std::runtime_error("Unknown indexed tensor: " + iv->base);
+    }
+
+    size_t expected = static_cast<size_t>(up + down);
 
     if (iv->indices.size() != expected)
       throw std::runtime_error("Tensor '" + iv->base + "' expects " +
                                std::to_string(expected) + " indices, got " +
                                std::to_string(iv->indices.size()));
 
-    auto out = std::make_unique<IndexedVar>(iv->base, IndexedVarKind::Field);
-    out->tensorKind = fd->kind;
-    out->up = fd->up;
-    out->down = fd->down;
+    auto out = std::make_unique<IndexedVar>(iv->base, outKind);
+    out->tensorKind = tensorKind;
+    out->up = up;
+    out->down = down;
 
     size_t pos = 0;
     for (size_t i = 0; i < iv->indices.size(); ++i) {
@@ -123,7 +139,7 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       if (i < iv->indexOffsets.size())
         idxOff = iv->indexOffsets[i];
       out->tensorIndexOffsets.push_back(idxOff);
-      bool isUp = pos < static_cast<size_t>(fd->up);
+      bool isUp = pos < static_cast<size_t>(up);
       out->tensorIndexIsUp.push_back(isUp);
       ++pos;
     }

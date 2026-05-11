@@ -15,9 +15,9 @@ class SemanticAnalyzer {
   CompilationMode mode;
   std::unordered_map<std::string, int> coordIndex;
   // Active local scope for the block currently being analyzed (metric/evolution).
-  std::unordered_map<std::string, bool> locals;
+  std::unordered_map<std::string, TensorTypeDesc> locals;
   // Metric scalar aliases collected from metric assignments with scalar LHS.
-  std::unordered_map<std::string, bool> metricScalarLocals;
+  std::unordered_map<std::string, TensorTypeDesc> metricScalarLocals;
   std::unordered_set<std::string> params;
   std::unordered_map<std::string, const FieldDecl *> fields;
   std::unordered_map<std::string, const ExternDecl *> externSignatures;
