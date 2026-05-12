@@ -87,10 +87,6 @@ TENSORIUM_PASSES=(
   --tensorium-init-grid-affine-lower
   --tensorium-rhs-grid-affine-lower
   --tensorium-stencil-lower
-  --tensorium-einstein-lower
-  --tensorium-einstein-analyze-einsum
-  --tensorium-einstein-canonicalize
-  --tensorium-einstein-validate
   --tensorium-strip-source-funcs
 )
 

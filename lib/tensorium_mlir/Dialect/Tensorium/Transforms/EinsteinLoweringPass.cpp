@@ -405,6 +405,14 @@ struct TensoriumEinsteinLoweringPass final
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
+    bool hasCandidate = false;
+    m.walk([&](Operation *op) {
+      if (isa<tensorium::mlir::ContractOp, tensorium::mlir::DtAssignOp>(op))
+        hasCandidate = true;
+    });
+    if (!hasCandidate)
+      return;
+
     RewritePatternSet patterns(&getContext());
     patterns.add<LowerContractToEinsum>(&getContext());
     patterns.add<LowerContractOp>(&getContext());
