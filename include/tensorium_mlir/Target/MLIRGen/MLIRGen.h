@@ -108,4 +108,9 @@ bool emitLLVMIR(const tensorium::backend::ModuleIR &module,
 bool emitHostHeader(const tensorium::backend::ModuleIR &module,
                     const MLIRGenOptions &opts = {},
                     std::string *headerText = nullptr);
+
+bool emitLLVMIRAndHostHeader(const tensorium::backend::ModuleIR &module,
+                             const MLIRGenOptions &opts = {},
+                             std::string *llvmIRText = nullptr,
+                             std::string *headerText = nullptr);
 } // namespace tensorium_mlir

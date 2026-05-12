@@ -94,29 +94,21 @@ TENSORIUM_PASSES=(
   --tensorium-strip-source-funcs
 )
 
-echo "[ll-smoke] generating Ricci LLVM IR ($CASE_NAME): $LL_PATH"
-RAW_OUT="$(mktemp)"
+echo "[ll-smoke] generating Ricci LLVM IR and host header ($CASE_NAME): $LL_PATH"
 "$DRIVER" \
   "${TENSORIUM_PASSES[@]}" \
-  --dump-llvm-ir \
-  "$FIXTURE" >"$RAW_OUT"
-
-awk '
-  /^\[Tensorium\]/ {exit}
-  {print}
-' "$RAW_OUT" >"$LL_PATH"
-rm -f "$RAW_OUT"
+  --emit-llvm "$LL_PATH" \
+  --emit-host-header "$HOST_HEADER" \
+  "$FIXTURE" >/dev/null
 
 if [[ ! -s "$LL_PATH" ]]; then
   echo "error: LLVM IR file is missing or empty: $LL_PATH" >&2
   exit 2
 fi
-
-echo "[ll-smoke] generating Ricci host header ($CASE_NAME): $HOST_HEADER"
-"$DRIVER" \
-  "${TENSORIUM_PASSES[@]}" \
-  --emit-host-header "$HOST_HEADER" \
-  "$FIXTURE" >/dev/null
+if [[ ! -s "$HOST_HEADER" ]]; then
+  echo "error: generated host header is missing or empty: $HOST_HEADER" >&2
+  exit 2
+fi
 
 echo "[ll-smoke] compiling Ricci LLVM IR object ($CASE_NAME)"
 if command -v "$LLC_BIN" >/dev/null 2>&1; then

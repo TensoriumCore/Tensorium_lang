@@ -556,6 +556,10 @@ int main(int argc, char **argv) {
                                  : tensorium_mlir::OptimizationLevel::O0;
         return tensorium_mlir::makeMLIRGenOptions(level, passOptions);
       };
+      const bool emitLLVMOutput = dumpLLVMIR || !emitLLVMIRPath.empty();
+      const bool emitHostHeaderOutput = !emitHostHeaderPath.empty();
+      const bool emitCombinedLLVMAndHostHeader =
+          emitLLVMOutput && emitHostHeaderOutput;
 
       if (dumpMLIR || !emitMLIRPath.empty()) {
         if (dumpMLIR)
@@ -578,7 +582,32 @@ int main(int argc, char **argv) {
         if (dumpMLIR)
           std::cerr << "==============================\n";
       }
-      if (dumpLLVMIR || !emitLLVMIRPath.empty()) {
+      if (emitCombinedLLVMAndHostHeader) {
+        if (dumpLLVMIR)
+          std::cerr << "\n=== LLVM IR DUMP (" << path << ") ===\n";
+        auto opts = makeMLIRGenOptions();
+        std::string llvmIRText;
+        std::string headerText;
+        const bool pipelineOK = tensorium_mlir::emitLLVMIRAndHostHeader(
+            mod, opts, &llvmIRText, &headerText);
+        if (dumpLLVMIR)
+          std::cout << llvmIRText;
+        if (pipelineOK && !emitLLVMIRPath.empty())
+          writeFile(emitLLVMIRPath, llvmIRText);
+        if (pipelineOK)
+          writeFile(emitHostHeaderPath, headerText);
+        if (!pipelineOK) {
+          fileOK = false;
+          printDiagnostic(std::cerr, path, currentSource, DiagnosticLevel::Error,
+                          "LLVM IR and host header generation pipeline failed",
+                          {}, "E3102", diagPrintOpts);
+          if (failOnMLIRPipelineFailure)
+            return 1;
+        }
+        if (dumpLLVMIR)
+          std::cerr << "==============================\n";
+      }
+      if (!emitCombinedLLVMAndHostHeader && emitLLVMOutput) {
         if (dumpLLVMIR)
           std::cerr << "\n=== LLVM IR DUMP (" << path << ") ===\n";
         auto opts = makeMLIRGenOptions();
@@ -599,7 +628,7 @@ int main(int argc, char **argv) {
         if (dumpLLVMIR)
           std::cerr << "==============================\n";
       }
-      if (!emitHostHeaderPath.empty()) {
+      if (!emitCombinedLLVMAndHostHeader && emitHostHeaderOutput) {
         auto opts = makeMLIRGenOptions();
         std::string headerText;
         const bool pipelineOK =

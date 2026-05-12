@@ -397,6 +397,80 @@ void emitConvenienceWrapper(
   }
 }
 
+std::string renderHostHeader(const tensorium::backend::ModuleIR &module,
+                             mlir::ModuleOp moduleOp) {
+  std::vector<mlir::func::FuncOp> hostFns;
+  moduleOp.walk([&](mlir::func::FuncOp fn) {
+    const std::string kind =
+        getStringAttr(fn.getOperation(), tensorium_mlir::abi::kAttrABIKind);
+    if (!isHostCallableKind(kind))
+      return;
+    if (!hasOnlySupportedHostTypes(fn))
+      return;
+    hostFns.push_back(fn);
+  });
+
+  const auto componentCounts = fieldComponentCounts(module);
+  std::ostringstream os;
+  os << "#ifndef TENSORIUM_GENERATED_HOST_H\n"
+     << "#define TENSORIUM_GENERATED_HOST_H\n\n"
+     << "#include <stdint.h>\n\n"
+     << "typedef struct tensorium_memref1d_f64 {\n"
+     << "  double *allocated;\n"
+     << "  double *aligned;\n"
+     << "  int64_t offset;\n"
+     << "  int64_t size;\n"
+     << "  int64_t stride;\n"
+     << "} tensorium_memref1d_f64;\n\n"
+     << "static inline tensorium_memref1d_f64 "
+        "tensorium_make_memref1d_f64(double *data, int64_t size) {\n"
+     << "  tensorium_memref1d_f64 ref = {data, data, 0, size, 1};\n"
+     << "  return ref;\n"
+     << "}\n\n"
+     << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
+
+  for (auto fn : hostFns)
+    emitRawPrototype(os, fn);
+
+  os << "\n#ifdef __cplusplus\n}\n#endif\n\n";
+
+  for (auto fn : hostFns) {
+    emitConvenienceWrapper(os, fn, componentCounts);
+    os << "\n";
+  }
+
+  os << "#endif /* TENSORIUM_GENERATED_HOST_H */\n";
+  return os.str();
+}
+
+bool emitLoweredLLVMIR(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
+                       const MLIRGenOptions &opts,
+                       std::string *llvmIRText) {
+  if (!lowerModuleToLLVM(moduleOp, ctx, opts)) {
+    llvm::errs() << "LLVM lowering pipeline failed\n";
+    return false;
+  }
+
+  llvm::LLVMContext llvmCtx;
+  auto llvmModule = mlir::translateModuleToLLVMIR(moduleOp, llvmCtx);
+  if (!llvmModule) {
+    llvm::errs() << "LLVM IR translation failed\n";
+    return false;
+  }
+
+  std::string buffer;
+  llvm::raw_string_ostream stream(buffer);
+  llvmModule->print(stream, nullptr);
+  stream.flush();
+
+  if (llvmIRText) {
+    *llvmIRText = std::move(buffer);
+  } else {
+    llvm::outs() << buffer;
+  }
+  return true;
+}
+
 } // namespace
 
 mlir::OwningOpRef<mlir::ModuleOp>
@@ -592,29 +666,7 @@ bool emitLLVMIR(const tensorium::backend::ModuleIR &module,
   if (!pipelineOk)
     return false;
 
-  if (!lowerModuleToLLVM(*moduleOp, ctx, opts)) {
-    llvm::errs() << "LLVM lowering pipeline failed\n";
-    return false;
-  }
-
-  llvm::LLVMContext llvmCtx;
-  auto llvmModule = mlir::translateModuleToLLVMIR(*moduleOp, llvmCtx);
-  if (!llvmModule) {
-    llvm::errs() << "LLVM IR translation failed\n";
-    return false;
-  }
-
-  std::string buffer;
-  llvm::raw_string_ostream stream(buffer);
-  llvmModule->print(stream, nullptr);
-  stream.flush();
-
-  if (llvmIRText) {
-    *llvmIRText = std::move(buffer);
-  } else {
-    llvm::outs() << buffer;
-  }
-  return true;
+  return emitLoweredLLVMIR(*moduleOp, ctx, opts, llvmIRText);
 }
 
 bool emitHostHeader(const tensorium::backend::ModuleIR &module,
@@ -625,52 +677,39 @@ bool emitHostHeader(const tensorium::backend::ModuleIR &module,
   if (!pipelineOk)
     return false;
 
-  std::vector<mlir::func::FuncOp> hostFns;
-  moduleOp->walk([&](mlir::func::FuncOp fn) {
-    const std::string kind =
-        getStringAttr(fn.getOperation(), tensorium_mlir::abi::kAttrABIKind);
-    if (!isHostCallableKind(kind))
-      return;
-    if (!hasOnlySupportedHostTypes(fn))
-      return;
-    hostFns.push_back(fn);
-  });
-
-  const auto componentCounts = fieldComponentCounts(module);
-  std::ostringstream os;
-  os << "#ifndef TENSORIUM_GENERATED_HOST_H\n"
-     << "#define TENSORIUM_GENERATED_HOST_H\n\n"
-     << "#include <stdint.h>\n\n"
-     << "typedef struct tensorium_memref1d_f64 {\n"
-     << "  double *allocated;\n"
-     << "  double *aligned;\n"
-     << "  int64_t offset;\n"
-     << "  int64_t size;\n"
-     << "  int64_t stride;\n"
-     << "} tensorium_memref1d_f64;\n\n"
-     << "static inline tensorium_memref1d_f64 "
-        "tensorium_make_memref1d_f64(double *data, int64_t size) {\n"
-     << "  tensorium_memref1d_f64 ref = {data, data, 0, size, 1};\n"
-     << "  return ref;\n"
-     << "}\n\n"
-     << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
-
-  for (auto fn : hostFns)
-    emitRawPrototype(os, fn);
-
-  os << "\n#ifdef __cplusplus\n}\n#endif\n\n";
-
-  for (auto fn : hostFns) {
-    emitConvenienceWrapper(os, fn, componentCounts);
-    os << "\n";
-  }
-
-  os << "#endif /* TENSORIUM_GENERATED_HOST_H */\n";
+  std::string buffer = renderHostHeader(module, *moduleOp);
 
   if (headerText) {
-    *headerText = os.str();
+    *headerText = std::move(buffer);
   } else {
-    llvm::outs() << os.str();
+    llvm::outs() << buffer;
+  }
+  return true;
+}
+
+bool emitLLVMIRAndHostHeader(const tensorium::backend::ModuleIR &module,
+                             const MLIRGenOptions &opts,
+                             std::string *llvmIRText,
+                             std::string *headerText) {
+  mlir::MLIRContext ctx;
+  mlir::DialectRegistry registry;
+  mlir::registerAllToLLVMIRTranslations(registry);
+  ctx.appendDialectRegistry(registry);
+  ctx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+
+  bool pipelineOk = true;
+  auto moduleOp = buildMLIRModule(module, ctx, opts, &pipelineOk);
+  if (!pipelineOk)
+    return false;
+
+  std::string headerBuffer = renderHostHeader(module, *moduleOp);
+  if (!emitLoweredLLVMIR(*moduleOp, ctx, opts, llvmIRText))
+    return false;
+
+  if (headerText) {
+    *headerText = std::move(headerBuffer);
+  } else {
+    llvm::outs() << headerBuffer;
   }
   return true;
 }
