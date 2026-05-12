@@ -83,6 +83,7 @@ void applyPassOptions(MLIRGenOptions &opts,
       opts.mlirPrintOpOnDiagnostic || passOptions.mlirPrintOpOnDiagnostic;
   opts.mlirPrintIRAfterFailure =
       opts.mlirPrintIRAfterFailure || passOptions.mlirPrintIRAfterFailure;
+  opts.mlirPassTiming = opts.mlirPassTiming || passOptions.mlirPassTiming;
 }
 
 MLIRGenOptions makeMLIRGenOptions(OptimizationLevel level) {

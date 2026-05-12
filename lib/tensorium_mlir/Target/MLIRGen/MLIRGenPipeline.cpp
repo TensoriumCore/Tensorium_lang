@@ -5,6 +5,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "tensorium_mlir/Dialect/Tensorium/Transform/IndexRoleAnalysisPass.h"
 #include "tensorium_mlir/Dialect/Tensorium/Transform/Passes.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace tensorium_mlir {
 
@@ -91,6 +92,10 @@ bool lowerModuleToLLVM(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
         /*printModuleScope=*/true,
         /*printAfterOnlyOnChange=*/false,
         /*printAfterOnlyOnFailure=*/true);
+  }
+  if (opts.mlirPassTiming) {
+    llvm::errs() << "[Tensorium] pass timing: LLVM lowering pipeline\n";
+    pm.enableTiming();
   }
 
   pm.addPass(mlir::createCanonicalizerPass());

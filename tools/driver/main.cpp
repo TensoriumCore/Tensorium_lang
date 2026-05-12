@@ -53,6 +53,7 @@ static void printUsage(std::ostream &os) {
      << "  --mlir-inline                 run MLIR inliner in post-generation pipeline\n"
      << "  --mlir-no-canonicalize        disable post-generation canonicalizer\n"
      << "  --mlir-no-cse                 disable post-generation CSE\n"
+     << "  --mlir-pass-timing            report per-pass MLIR/LLVM lowering timings\n"
      << "  --mlir-best-effort            do not fail on Tensorium MLIR pipeline errors\n";
 }
 
@@ -330,6 +331,8 @@ int main(int argc, char **argv) {
       passOptions.mlirPrintOpOnDiagnostic = true;
     } else if (arg == "--mlir-print-ir-after-failure") {
       passOptions.mlirPrintIRAfterFailure = true;
+    } else if (arg == "--mlir-pass-timing") {
+      passOptions.mlirPassTiming = true;
     } else if (arg == "--mlir-inline") {
       passOptions.enableMLIRInlinePass = true;
     } else if (arg == "--mlir-no-canonicalize") {

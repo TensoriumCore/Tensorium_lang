@@ -624,6 +624,10 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
         /*printAfterOnlyOnChange=*/false,
         /*printAfterOnlyOnFailure=*/true);
   }
+  if (pipelineOpts.mlirPassTiming) {
+    llvm::errs() << "[Tensorium] pass timing: Tensorium MLIR pipeline\n";
+    pm.enableTiming();
+  }
   addEinsteinPipelineSafe(pm, pipelineOpts);
   addPostMLIRNormalizationPipeline(pm, pipelineOpts);
 

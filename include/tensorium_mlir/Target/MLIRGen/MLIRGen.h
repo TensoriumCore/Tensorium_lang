@@ -49,6 +49,7 @@ struct MLIRPassOptions {
   bool mlirDisableThreading = false;
   bool mlirPrintOpOnDiagnostic = false;
   bool mlirPrintIRAfterFailure = false;
+  bool mlirPassTiming = false;
 };
 
 struct MLIRGenOptions {
@@ -81,6 +82,7 @@ struct MLIRGenOptions {
   bool mlirDisableThreading = false;
   bool mlirPrintOpOnDiagnostic = false;
   bool mlirPrintIRAfterFailure = false;
+  bool mlirPassTiming = false;
 };
 
 void applyOptimizationLevel(MLIRGenOptions &opts, OptimizationLevel level);
