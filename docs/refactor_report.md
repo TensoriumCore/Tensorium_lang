@@ -15,9 +15,9 @@
 - Refactor should be done incrementally with small compile-safe commits; no semantic behavior change except explicitly isolated bug fixes with tests.
 - Current clean phase keeps the baseline green while moving responsibilities behind existing public APIs; next phases should continue with low-risk source splits before API renames.
 
-## 2) Etat Actuel (Architecture + Problemes)
+## 2) Current State (Architecture + Problems)
 
-### 2.1 Cibles CMake et modules reels
+### 2.1 CMake targets and real modules
 Current targets:
 - Libraries: `tensoriumAST`, `tensoriumLex`, `tensoriumParse`, `tensoriumSema`, `tensoriumRuntime`, `tensoriumCore`, `tensoriumIR`, `tensoriumLowering`, `tensoriumValidation`, `tensoriumMlirIR`, `tensoriumMlirSemantic`, `tensoriumMlirTransforms`, `tensoriumMlirCodegen`, `tensoriumCompilerAPI`
 - Compatibility aliases: `tensorium`, `tensorium_mlir_backend`
@@ -32,7 +32,7 @@ Top-level module map (logical):
 - Tooling: `tools/driver`, `tools/Tester`
 - Tests: `tests/*.tn`, `tests/mlir/*.mlir`, `run_test.sh`
 
-### 2.2 Points d'entree et flux d'execution principal
+### 2.2 Entry points and main execution flow
 Primary CLI entrypoint:
 - `tools/driver/main.cpp:100`
 
@@ -45,7 +45,7 @@ Main path from source text to outputs:
 6. Optional MLIR emission/pipeline (`tools/driver/main.cpp:297`)
 7. Optional runtime execution (`tools/driver/main.cpp:305`)
 
-### 2.3 Dependances observees (include + appel)
+### 2.3 Observed dependencies (includes + calls)
 Observed dependency direction (module-level, simplified):
 - `Lex -> Basic`
 - `Parse -> Lex + AST`
@@ -95,18 +95,18 @@ Detected cycle at architecture level (hidden today by monolithic target):
 6. Local code-quality risk
 - CLI orchestration remains concentrated in `tools/driver/main.cpp`; extracting an options/parser layer is still recommended.
 
-### 2.5 Cartographie des responsabilites (niveau, invariants, dependances)
+### 2.5 Responsibility map (level, invariants, dependencies)
 
-| Zone | Niveau | Responsabilite | Invariants essentiels | Dependances principales |
+| Zone | Level | Responsibility | Essential invariants | Main dependencies |
 |---|---|---|---|---|
-| `include/tensorium/Basic` | L0 | Tokens + signatures simples | `TokenType` stable, rank/variance coherents | STL only |
-| `include/tensorium/AST`, `lib/AST` | L1 | AST syntaxique + printer | AST immuable par ownership `unique_ptr` | Basic/STL |
-| `include/tensorium/Lex`, `lib/Lex` | L1 | Lexing DSL -> tokens | Position (line/col), keywords reconnus | Basic |
-| `include/tensorium/Parse`, `lib/Parse` | L1 | Parsing tokens -> `Program` | Syntax validity, top-level ordering | Lex + AST |
-| `include/tensorium/Sema`, `lib/Sema` | L1/L2 | Resolution symbolique + types + Einstein checks | Indices valides, variance coherente, mode exec/symbolic | AST (+ Backend for validator) |
-| `include/tensorium/Backend/DomainIR.hpp` | L2 | IR interne cible runtime/MLIR | `FieldIR` up/down coherents, `ExprIR` typage | AST type leakage |
-| `include/tensorium/Backend/BackendBuilder.hpp`, `lib/Backend` | L2 | Conversion AST+Sema -> DomainIR | Preserve semantics of equations/temps | AST + IndexedAST + Sema |
-| `include/tensorium/Runtime`, `lib/Runtime` | L3 | Eval CPU scalaire 1D | Simulation required, Euler-only, scalar-only | Backend IR |
+| `include/tensorium/Basic` | L0 | Tokens + simple signatures | Stable `TokenType`, coherent rank/variance | STL only |
+| `include/tensorium/AST`, `lib/AST` | L1 | Syntax AST + printer | AST ownership is immutable through `unique_ptr` | Basic/STL |
+| `include/tensorium/Lex`, `lib/Lex` | L1 | DSL lexing -> tokens | Position tracking (line/col), recognized keywords | Basic |
+| `include/tensorium/Parse`, `lib/Parse` | L1 | Token parsing -> `Program` | Syntax validity, top-level ordering | Lex + AST |
+| `include/tensorium/Sema`, `lib/Sema` | L1/L2 | Symbol resolution + typing + Einstein checks | Valid indices, coherent variance, exec/symbolic mode policy | AST (+ Backend for validator) |
+| `include/tensorium/Backend/DomainIR.hpp` | L2 | Internal IR targeting runtime/MLIR | Coherent `FieldIR` up/down metadata, typed `ExprIR` | AST type leakage |
+| `include/tensorium/Backend/BackendBuilder.hpp`, `lib/Backend` | L2 | AST+Sema -> DomainIR conversion | Preserve equation/temp semantics | AST + IndexedAST + Sema |
+| `include/tensorium/Runtime`, `lib/Runtime` | L3 | Scalar 1D CPU evaluation | Simulation required, Euler-only, scalar-only | Backend IR |
 | `include/tensorium_mlir/Dialect/*`, `lib/.../IR` | L3 | Dialect/ops/types Tensorium MLIR | Op verifiers, rank/type contracts | MLIR core |
 | `include/tensorium_mlir/Semantic`, `lib/.../Semantic` | L3 | Einstein index semantic helpers | role classification + validity | LLVM ADT |
 | `lib/tensorium_mlir/.../Transforms` | L3 | Passes (analyze/canonicalize/lowering) | attrs `tin.idx.*` consistency | Dialect + Semantic |
@@ -115,9 +115,9 @@ Detected cycle at architecture level (hidden today by monolithic target):
 | `tools/Tester` | L4 | Printer/test harness demo | parse/sema smoke checks | frontend libs |
 | `tests/`, `run_test.sh` | L4 | Integration regression suite | expected pass/fail matrix | `Tensorium_cc` binary |
 
-## 3) Architecture Cible (Modules + Regles)
+## 3) Target Architecture (Modules + Rules)
 
-### 3.1 Schema cible des modules et librairies CMake
+### 3.1 Target module and CMake library layout
 Proposed CMake targets (incremental extraction):
 - `tensoriumCore`
   - `include/tensorium/Core/*` (new): `SourceLocation`, diagnostics core, index utilities, string helpers/interner.
@@ -148,7 +148,7 @@ Proposed CMake targets (incremental extraction):
 - `tensoriumDriverLib` (optional but recommended)
   - CLI-independent orchestration service; `Tensorium_cc` becomes thin wrapper.
 
-### 3.2 Regles de dependances (strict layering)
+### 3.2 Dependency rules (strict layering)
 Mandatory direction:
 - `Core` <- `AST` <- (`Lex`, `Parse`) <- `Sema` <- `IR` <- (`Lowering`, `Validation`) <- (`Runtime`, `MlirCodegen`) <- `Tools`
 
@@ -160,7 +160,7 @@ Constraints:
 - `MlirTransforms` depends on `MlirIR` + `MlirSemantic`, never on frontend parser/sema.
 - `Tools` own orchestration; libraries own transformations.
 
-### 3.3 Placement cible des composants demandes
+### 3.3 Target placement for requested components
 - Fundamental types (`SourceLocation`, diagnostics, index alphabet, string interner): `tensoriumCore`.
 - AST + visitors + printers: `tensoriumAST`.
 - Sema (resolution, typing, symbol tables): `tensoriumSema`.
@@ -171,9 +171,9 @@ Constraints:
   - keep `.tn` fixtures in `tests/`,
   - add `ctest` wrappers for parser/sema/runtime/mlir smoke bins.
 
-## 4) Redondances Detectees + Actions
+## 4) Detected Redundancy + Actions
 
-| Redondance (avant) | Apres propose | Risque | Test a ajouter |
+| Redundancy before | Proposed result | Risk | Test to add |
 |---|---|---|---|
 | Index alphabet `{i..n}` duplicated in `Sema.hpp`, `CallSupport.cpp`, `ProgramValidator.cpp`, `tensor_type_checker.hpp` | Single utility in `tensoriumCore/IndexSet.h` (`isTensorIndex`, `isSpatialIndex`) | Low | Unit tests for accepted/rejected index names |
 | MLIR attr helpers duplicated (`isAllStringAttrs`/`toRefs`/`fromRefs`) in 4 pass files | Shared helper in `tensorium_mlir/Dialect/Tensorium/Transform/AttrUtils.h/.cpp` | Low | Pass-level tests validating malformed attrs diagnostics |
@@ -189,94 +189,94 @@ Specific defect to isolate in dedicated patch:
   - Risk: High correctness risk for rank-3 contravariant tensors.
   - Add integration test: compile a `con_tensor3` evolution and check resulting IR rank/type.
 
-## 5) Plan de Migration Incremente (Branch + Commits)
+## 5) Incremental Migration Plan (Branch + Commits)
 
 Planned commit sequence (one intention per commit):
 
 1. `chore(refactor): add baseline snapshot notes and audit helper`
-- But: freeze reproducible baseline before structural changes.
-- Diff attendu: `docs/refactor_baseline.md`, `tools/dev/refactor_audit_snapshot.sh`.
-- Risques: none.
+- Goal: freeze a reproducible baseline before structural changes.
+- Expected diff: `docs/refactor_baseline.md`, `tools/dev/refactor_audit_snapshot.sh`.
+- Risks: none.
 - Validation: `cmake --build build -j`, `bash run_test.sh`.
 
 2. `fix(build): align EinsteinLowering with current MLIR builder API` (already applied on this branch)
-- But: keep branch compilable on LLVM/MLIR 20 and remove deprecated usage.
-- Diff attendu: `lib/tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinLoweringPass.cpp`.
-- Risques: low, no behavior change intended.
+- Goal: keep the branch compilable on LLVM/MLIR 20 and remove deprecated usage.
+- Expected diff: `lib/tensorium_mlir/Dialect/Tensorium/Transforms/EinsteinLoweringPass.cpp`.
+- Risks: low, no behavior change intended.
 - Validation: build + full `run_test.sh`.
 
 3. `refactor(cmake): introduce granular frontend targets`
-- But: split monolith `tensorium` into `tensoriumCore`, `tensoriumAST`, `tensoriumLex`, `tensoriumParse`.
-- Diff attendu: `lib/CMakeLists.txt`, new per-folder CMake files.
-- Risques: link order/include visibility.
+- Goal: split monolith `tensorium` into `tensoriumCore`, `tensoriumAST`, `tensoriumLex`, `tensoriumParse`.
+- Expected diff: `lib/CMakeLists.txt`, new per-folder CMake files.
+- Risks: link order/include visibility.
 - Validation: build all + parser smoke.
 
 4. `refactor(sema): extract tensor typing and index policy utilities`
-- But: move index/type helpers out of header-heavy sema code.
-- Diff attendu: new `include/tensorium/Core/*`, update `Sema`.
-- Risques: subtle semantic regressions.
+- Goal: move index/type helpers out of header-heavy sema code.
+- Expected diff: new `include/tensorium/Core/*`, update `Sema`.
+- Risks: subtle semantic regressions.
 - Validation: all failing semantic tests remain failing for same reason.
 
 5. `refactor(ir): create tensoriumIR and detach from AST types`
-- But: remove `DomainIR -> AST` dependency.
-- Diff attendu: move `DomainIR.hpp` to `include/tensorium/IR/`, replace `TensorTypeDesc` usage with IR-native types.
-- Risques: conversion mismatches.
+- Goal: remove `DomainIR -> AST` dependency.
+- Expected diff: move `DomainIR.hpp` to `include/tensorium/IR/`, replace `TensorTypeDesc` usage with IR-native types.
+- Risks: conversion mismatches.
 - Validation: backend dump comparison and runtime smoke.
 
 6. `refactor(lowering): isolate AST+Sema -> IR in tensoriumLowering`
-- But: remove direct `BackendBuilder` dependence on sema internals where possible.
-- Diff attendu: `BackendBuilder` move/rename, API cleaned.
-- Risques: orchestration call sites.
+- Goal: remove direct `BackendBuilder` dependence on sema internals where possible.
+- Expected diff: `BackendBuilder` move/rename, API cleaned.
+- Risks: orchestration call sites.
 - Validation: CLI end-to-end compile.
 
 7. `refactor(validation): move ProgramValidator to tensoriumValidation`
-- But: remove Sema<->Backend layering cycle.
-- Diff attendu: move `ProgramValidator.*`, update includes/namespaces.
-- Risques: namespace/API churn.
+- Goal: remove Sema<->Backend layering cycle.
+- Expected diff: move `ProgramValidator.*`, update includes/namespaces.
+- Risks: namespace/API churn.
 - Validation: `--validate` behavior unchanged.
 
 8. `refactor(runtime): link against tensoriumIR only`
-- But: enforce runtime boundary.
-- Diff attendu: runtime includes and target links.
-- Risques: hidden dependencies.
+- Goal: enforce runtime boundary.
+- Expected diff: runtime includes and target links.
+- Risks: hidden dependencies.
 - Validation: `--run-cpu` smoke test.
 
 9. `refactor(mlir): split mlir backend into IR/Semantic/Transforms/Codegen targets`
-- But: shrink API surface and ownership by concern.
-- Diff attendu:
+- Goal: shrink API surface and ownership by concern.
+- Expected diff:
   - `tensoriumMlirIR`
   - `tensoriumMlirSemantic`
   - `tensoriumMlirTransforms`
   - `tensoriumMlirCodegen`
-- Risques: registration/link errors.
+- Risks: registration/link errors.
 - Validation: `--dump-mlir` suite from `run_test.sh`.
 
 10. `refactor(passes): deduplicate Einstein/stencil helper utilities`
-- But: remove duplicated pass logic and stabilize attrs contract.
-- Diff attendu: new shared helper files + pass simplification.
-- Risques: pass behavior drift.
+- Goal: remove duplicated pass logic and stabilize attrs contract.
+- Expected diff: new shared helper files + pass simplification.
+- Risks: pass behavior drift.
 - Validation: add pass-focused regression fixtures.
 
 11. `refactor(driver): extract orchestration library and thin CLI`
-- But: reduce `main.cpp` god object and centralize pipeline flow.
-- Diff attendu: new `tensoriumDriverLib`, smaller `tools/driver/main.cpp`.
-- Risques: CLI option behavior drift.
+- Goal: reduce `main.cpp` god object and centralize pipeline flow.
+- Expected diff: new `tensoriumDriverLib`, smaller `tools/driver/main.cpp`.
+- Risks: CLI option behavior drift.
 - Validation: CLI snapshot tests.
 
 12. `chore(test): add CTest wiring and non-regression matrix`
-- But: CI-friendly granular validation.
-- Diff attendu: `enable_testing()`, `add_test(...)`, wrapper scripts.
-- Risques: flaky env assumptions.
+- Goal: CI-friendly granular validation.
+- Expected diff: `enable_testing()`, `add_test(...)`, wrapper scripts.
+- Risks: flaky env assumptions.
 - Validation: `ctest --output-on-failure`.
 
-### Cibles CMake a creer/adapter explicitement
+### CMake targets to create or adapt explicitly
 - New: `tensoriumCore`, `tensoriumAST`, `tensoriumLex`, `tensoriumParse`, `tensoriumSema`, `tensoriumIR`, `tensoriumLowering`, `tensoriumValidation`, `tensoriumRuntime`, `tensoriumMlirIR`, `tensoriumMlirSemantic`, `tensoriumMlirTransforms`, `tensoriumMlirCodegen`, `tensoriumDriverLib`.
 - Adapt:
   - `Tensorium_cc` links `tensoriumDriverLib` (+ runtime/mlir as needed).
   - `Tensorium_tester` links `tensoriumAST + tensoriumLex + tensoriumParse + tensoriumSema`.
   - Keep legacy aggregate aliases temporarily (`tensorium`, `tensorium_mlir_backend`) during transition if needed.
 
-## 6) Risques & Mitigations
+## 6) Risks & Mitigations
 - Risk: accidental behavior changes during module split.
   - Mitigation: strict compile/test gate per commit; no mixed-intent commits.
 - Risk: include visibility/link regressions after target split.
@@ -304,7 +304,7 @@ Planned commit sequence (one intention per commit):
   - semantic error fixtures (`tests/*error*.tn`) must keep expected failures.
   - MLIR dump path (`--dump-mlir`) must preserve pass validity checks.
 
-## Assumptions Explicites
+## Explicit Assumptions
 - LLVM/MLIR 20 is the active toolchain.
 - Current official regression command is `bash run_test.sh` (no CTest yet).
 - Refactor target is behavior-preserving, except isolated bug fixes covered by tests.

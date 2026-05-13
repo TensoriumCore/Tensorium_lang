@@ -11,7 +11,15 @@ This document freezes the ABI contract used by generated functions:
 - `tensorium_rhs_grid_scf`
 - `tensorium_rhs_grid_affine`
 
-Source of truth in code: `include/tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h`.
+Source of truth for ABI constants:
+`include/tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h`.
+
+Source of truth for the host-callable kernel descriptor:
+`include/tensorium_mlir/Target/MLIRGen/MLIRGenHostABI.h`.
+
+Architectural context: `docs/language_mlir_abi_architecture.md` describes how
+this ABI fits between Tensorium MLIR/LLVM kernels, generated host glue,
+standalone execution, and optional AMReX integration.
 
 ## Versioning
 

@@ -11,6 +11,7 @@
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
+#include "tensorium_mlir/Target/MLIRGen/MLIRGenHostABI.h"
 #include "tensorium_mlir/Target/MLIRGen/RhsEvaluator.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -3118,6 +3119,110 @@ static bool testLoweredGridHostHeaderEmission() {
   return true;
 }
 
+static const tensorium_mlir::HostKernelABI *
+findHostKernelABI(const tensorium_mlir::HostModuleABI &abi,
+                  const std::string &symbolName) {
+  for (const auto &kernel : abi.kernels) {
+    if (kernel.symbolName == symbolName)
+      return &kernel;
+  }
+  return nullptr;
+}
+
+static bool testLoweredGridHostABIDescriptor() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+
+  backend::ModuleIR mod =
+      buildModuleFromFile("tests/fixtures/gr/schwarzschild_ricci_3d.tn",
+                          CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  auto verify = validation::verifyIR(mod);
+  if (!verify.ok()) {
+    std::cerr << "FAIL: IR verification failed before host ABI test\n";
+    return false;
+  }
+
+  ::mlir::MLIRContext ctx;
+  bool pipelineOk = true;
+  auto module = tensorium_mlir::buildMLIRModule(mod, ctx, opts, &pipelineOk);
+  if (!pipelineOk) {
+    std::cerr << "FAIL: MLIR pipeline failed before host ABI test\n";
+    return false;
+  }
+
+  const auto abi = tensorium_mlir::buildHostModuleABI(mod, *module);
+  if (abi.dimension != 3) {
+    std::cerr << "FAIL: host ABI descriptor dimension mismatch\n";
+    return false;
+  }
+
+  auto componentCount = [&](const std::string &name) -> std::int64_t {
+    auto it = abi.componentCounts.find(name);
+    return it == abi.componentCounts.end() ? -1 : it->second;
+  };
+  if (componentCount("alpha") != 1 || componentCount("gamma") != 9 ||
+      componentCount("Ricci") != 9) {
+    std::cerr << "FAIL: host ABI descriptor component counts mismatch\n";
+    return false;
+  }
+
+  const auto *initGrid =
+      findHostKernelABI(abi, tensorium_mlir::abi::kSymbolInitGridAffine);
+  const auto *rhsGrid =
+      findHostKernelABI(abi, tensorium_mlir::abi::kSymbolRhsGridAffine);
+  if (!initGrid || !rhsGrid) {
+    std::cerr << "FAIL: host ABI descriptor missing lowered grid kernels\n";
+    return false;
+  }
+
+  if (initGrid->wrapperName != "tensorium_call_init_grid_affine" ||
+      rhsGrid->wrapperName != "tensorium_call_rhs_grid_affine") {
+    std::cerr << "FAIL: host ABI descriptor wrapper names mismatch\n";
+    return false;
+  }
+  if (initGrid->outputs !=
+      std::vector<std::string>({"alpha", "gamma", "gammaU"})) {
+    std::cerr << "FAIL: init-grid host ABI outputs mismatch\n";
+    return false;
+  }
+  if (rhsGrid->fields !=
+      std::vector<std::string>({"gamma", "gammaU", "Ricci"})) {
+    std::cerr << "FAIL: rhs-grid host ABI fields mismatch\n";
+    return false;
+  }
+
+  if (rhsGrid->rawArgs.size() != 9 ||
+      rhsGrid->rawArgs[0].kind != tensorium_mlir::HostArgKind::Index ||
+      rhsGrid->rawArgs[3].kind != tensorium_mlir::HostArgKind::F64 ||
+      rhsGrid->rawArgs[6].kind != tensorium_mlir::HostArgKind::Memref1DF64) {
+    std::cerr << "FAIL: rhs-grid host ABI raw argument kinds mismatch\n";
+    return false;
+  }
+
+  if (abi.printFields !=
+      std::vector<std::string>({"alpha", "gamma", "Ricci"}) ||
+      abi.prints.size() != 3 || abi.prints[0].label != "alpha" ||
+      abi.prints[0].rank != 0 || abi.prints[1].label != "gamma[i,j]" ||
+      abi.prints[1].rank != 2 || abi.prints[2].label != "Ricci[i,j]" ||
+      abi.prints[2].rank != 2) {
+    std::cerr << "FAIL: host ABI print descriptor mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testCompilerApiCompileFileToLLVMIR() {
   tensorium::api::CompileOptions compileOpts;
   compileOpts.mode = CompilationMode::Executable;
@@ -4536,6 +4641,8 @@ int main() {
        &testLoweredGridModuleLLVMIREmission},
       {"testLoweredGridHostHeaderEmission",
        &testLoweredGridHostHeaderEmission},
+      {"testLoweredGridHostABIDescriptor",
+       &testLoweredGridHostABIDescriptor},
       {"testCompilerApiCompileFileToLLVMIR",
        &testCompilerApiCompileFileToLLVMIR},
       {"testCompilerApiSymbolicWarningPropagation",

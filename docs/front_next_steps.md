@@ -9,6 +9,8 @@
   - explicit `@tensorium_init_point` lowering for the metric/init path,
   - executable-mode `initial_data` builtin alignment on `sin` and `sqrt`,
   - generated host wrappers for LLVM smoke tests.
+- The language/MLIR/ABI/runtime boundary is documented in
+  `docs/language_mlir_abi_architecture.md`.
 
 ## Current State
 The front pipeline is no longer blocked on init-only semantics. The useful
@@ -41,6 +43,8 @@ Why first:
   - shape/stride ownership conventions,
   - explicit treatment of runtime buffers outside the generated host wrappers,
   - consistent metadata expectations for init and RHS paths.
+- Host C/C++ generation should remain ABI glue only; optimized computation
+  stays in MLIR/LLVM kernels, with AMReX as an optional host/runtime target.
 
 This should be handled before widening the backend/JIT surface too far.
 
@@ -54,8 +58,9 @@ This should be handled before widening the backend/JIT surface too far.
 ## Recommended Next Sequence
 1. Establish pass-timing baselines from the updated bench workflow.
 2. Profile the real GR/BSSN fixtures and record the largest offenders.
-3. Implement extern lowering with tests.
-4. Revisit runtime ABI generalization only after the next lowering gap is
+3. Extract a reusable ABI descriptor from current host-header generation.
+4. Implement extern lowering with tests.
+5. Revisit runtime ABI generalization only after the next lowering gap is
    closed and measured.
 
 ## Completed Since The Earlier Roadmap

@@ -255,6 +255,7 @@ add_library(tensoriumMlirCodegen
   tensorium_mlir/Target/MLIRGen/InitEvaluator.cpp
   tensorium_mlir/Target/MLIRGen/RhsEvaluator.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenShared.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenHostABI.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenInitialData.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenExpr.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp

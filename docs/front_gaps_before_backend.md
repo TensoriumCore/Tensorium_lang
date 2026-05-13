@@ -4,6 +4,8 @@
 - This document supersedes the earlier "init-only milestone" gap audit.
 - The Schwarzschild init-only contract is now implemented and documented in
   `docs/front_abi_init_only.md`.
+- The broader language/MLIR/ABI/runtime boundary is documented in
+  `docs/language_mlir_abi_architecture.md`.
 - The remaining questions are about scaling the front/lowering stack toward
   broader executable programs, not about making basic init evaluation exist.
 
@@ -71,6 +73,8 @@ The init-only ABI is concrete, but the general executable contract is wider:
 - field layout expectations across init and RHS,
 - stable shape/stride metadata conventions,
 - how generated host wrappers map onto runtime-owned buffers.
+- keeping generated C/C++ as ABI glue while computation remains in MLIR/LLVM
+  kernels.
 
 This should be clarified before broadening backend/JIT work beyond the current
 smoke runners.
@@ -89,8 +93,9 @@ Impact:
 ## Suggested Order Of Work
 1. Profile Ricci, Christoffel, and BSSN fixtures to establish a real codegen
    baseline.
-2. Implement extern lowering for language/runtime breadth.
-3. Consolidate shared LL smoke mechanics once the pipeline surface settles.
+2. Extract a reusable ABI descriptor behind the generated host-header path.
+3. Implement extern lowering for language/runtime breadth.
+4. Consolidate shared LL smoke mechanics once the pipeline surface settles.
 
 ## Kept As Explicit Non-Gaps
 These were blocking items in the older audit but are no longer open:
