@@ -248,6 +248,20 @@ LogicalResult tensorium::mlir::PromoteOp::verify() {
   return success();
 }
 
+LogicalResult tensorium::mlir::ExternCallOp::verify() {
+  FieldType resultTy;
+  if (failed(requireScalarFieldType(getResult(), *this, "result", resultTy)))
+    return failure();
+  if (getCallee().empty())
+    return emitOpError("callee must not be empty");
+  for (Value arg : getArgs()) {
+    FieldType argTy;
+    if (failed(requireScalarFieldType(arg, *this, "argument", argTy)))
+      return failure();
+  }
+  return success();
+}
+
 LogicalResult tensorium::mlir::DtAssignOp::verify() {
   FieldType fieldTy, rhsTy;
   if (failed(requireFieldType(getField(), *this, "field", fieldTy)) ||

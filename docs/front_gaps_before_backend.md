@@ -58,15 +58,19 @@ Needed next:
 ### B. External function lowering
 Current state:
 - extern calls are typed and diagnosed,
-- MLIR lowering still emits:
-  - `"extern function '<name>' lowering is not implemented yet"`.
+- scalar extern calls now lower through `tensorium.extern_call`,
+- RHS grid lowering scalarizes those calls to direct `func.call @name(f64...)`
+  calls that can link against ordinary C/C++ objects,
+- tensor, buffer, grid, and runtime-aware extern forms remain intentionally
+  unsupported.
 
 Impact:
-- the language can describe externally-backed computations that cannot yet
-  cross into the executable MLIR/LLVM path.
+- scalar externally-backed computations can cross into the executable MLIR/LLVM
+  path without changing Tensorium source semantics.
 
 Primary file:
-- `lib/tensorium_mlir/Target/MLIRGen/MLIRGenShared.cpp`
+- `lib/tensorium_mlir/Target/MLIRGen/MLIRGenExpr.cpp`
+- `lib/tensorium_mlir/Dialect/Tensorium/Transforms/RhsGridScfPass.cpp`
 
 ### C. Runtime buffer contract beyond init-only
 The init-only ABI is concrete, but the general executable contract is wider:
@@ -93,9 +97,9 @@ Impact:
 ## Suggested Order Of Work
 1. Profile Ricci, Christoffel, and BSSN fixtures to establish a real codegen
    baseline.
-2. Extract a reusable ABI descriptor behind the generated host-header path.
-3. Implement extern lowering for language/runtime breadth.
-4. Consolidate shared LL smoke mechanics once the pipeline surface settles.
+2. Expand or consolidate the reusable ABI descriptor behind host wrappers.
+3. Consolidate shared LL smoke mechanics once the pipeline surface settles.
+4. Decide the next ABI shape for point/tile kernels before AMReX wrappers.
 
 ## Kept As Explicit Non-Gaps
 These were blocking items in the older audit but are no longer open:

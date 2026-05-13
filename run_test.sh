@@ -278,23 +278,14 @@ echo " RUN EXTERN DECL TESTS"
 echo "=============================="
 
 for f in "${EXTERN_TESTS[@]}"; do
-  echo "[OK EXPECTED - NO MLIR] $f"
+  echo "[OK EXPECTED] $f"
   "$BIN" "$f" > /dev/null
-  echo "[FAIL EXPECTED - MLIR EXTERN LOWERING] $f"
-  TMP_ERR=$(mktemp)
-  if "$BIN" "${PIPELINE_BASE[@]}" "$f" > "$TMP_ERR" 2>&1; then
-    echo "ERROR: $f was expected to fail during MLIR emission"
-    cat "$TMP_ERR"
-    rm -f "$TMP_ERR"
+  EXTERN_MLIR="$OUT/$(basename "$f").extern.mlir"
+  "$BIN" "${PIPELINE_BASE[@]}" "$f" > "$EXTERN_MLIR"
+  if ! grep -q "tensorium.extern_call" "$EXTERN_MLIR"; then
+    echo "ERROR: expected tensorium.extern_call in extern MLIR lowering"
     exit 1
   fi
-  if ! grep -q "extern function" "$TMP_ERR"; then
-    echo "ERROR: expected extern lowering error message"
-    cat "$TMP_ERR"
-    rm -f "$TMP_ERR"
-    exit 1
-  fi
-  rm -f "$TMP_ERR"
 done
 
 echo
@@ -674,6 +665,7 @@ bash tools/dev/test_minkowski_ricci_ll.sh
 bash tools/dev/test_schwarzschild_ricci_ll.sh
 bash tools/dev/test_covariant_rank1_ll.sh
 bash tools/dev/test_contravariant_all_cases_ll.sh
+bash tools/dev/test_extern_scalar_ll.sh
 
 echo
 echo "=============================="

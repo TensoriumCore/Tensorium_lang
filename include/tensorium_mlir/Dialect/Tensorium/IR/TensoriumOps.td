@@ -134,6 +134,17 @@ def Tensorium_PromoteOp : Tensorium_Op<"promote"> {
   let assemblyFormat = "$in attr-dict `:` type($in) `to` type($out)";
 }
 
+def Tensorium_ExternCallOp : Tensorium_Op<"extern_call"> {
+  let summary = "Pure scalar external function call";
+  let traits = [Pure];
+
+  let arguments = (ins StrAttr:$callee, Variadic<Tensorium_FieldType>:$args);
+  let results = (outs Tensorium_FieldType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat =
+    "$callee `(` $args `)` attr-dict `:` functional-type($args, results)";
+}
+
 def Tensorium_DtAssignOp : Tensorium_Op<"dt_assign"> {
 
   let arguments = (ins Tensorium_FieldType:$field, Tensorium_FieldType:$rhs,

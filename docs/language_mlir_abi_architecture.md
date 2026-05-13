@@ -93,7 +93,7 @@ callbacks inside the cell loop should be avoided.
 
 ## External C/C++ Functions
 Extern declarations in `.tn` are linkable symbols, not source imports. The
-front-end owns type checking; MLIR owns symbol declaration and call lowering.
+front-end owns type checking; MLIR owns call representation and scalar lowering.
 
 For a source declaration such as:
 
@@ -101,8 +101,15 @@ For a source declaration such as:
 extern scalar eos_pressure(scalar rho, scalar eps)
 ```
 
-the executable lowering should produce an MLIR declaration and call equivalent
-to:
+the high-level MLIR keeps the expression as a Tensorium dialect operation:
+
+```mlir
+%p = tensorium.extern_call "eos_pressure"(%rho, %eps)
+  : (!tensorium.field<f64,0,0>, !tensorium.field<f64,0,0>)
+    -> !tensorium.field<f64,0,0>
+```
+
+RHS grid lowering scalarizes that operation into a normal MLIR function call:
 
 ```mlir
 func.func private @eos_pressure(f64, f64) -> f64
@@ -111,12 +118,14 @@ func.func private @eos_pressure(f64, f64) -> f64
 
 The C/C++ implementation is compiled and linked as a normal object file. The
 compiler driver may provide convenience options for link orchestration, but the
-language semantics remain MLIR symbol semantics.
+language semantics remain MLIR symbol semantics. The `private` marker is MLIR
+symbol visibility for the declaration; LLVM emission produces a normal external
+declaration such as `declare double @eos_pressure(double, double)`.
 
-The first supported extern class should be scalar pure functions. Tensor,
-buffer, grid, or runtime-aware externs should wait until the kernel ABI
-descriptor is explicit enough to avoid accidental performance and portability
-constraints.
+The supported extern class is intentionally narrow: scalar pure functions with
+scalar arguments. Tensor, buffer, grid, or runtime-aware externs should wait
+until the kernel ABI descriptor is explicit enough to avoid accidental
+performance and portability constraints.
 
 ## ABI Descriptor Direction
 Host header generation should evolve from ad hoc string emission toward an
@@ -153,12 +162,11 @@ same compiled kernels.
 ## Near-Term Work Order
 1. Keep documenting the language/MLIR/ABI/runtime boundary in this file and
    `docs/generated_kernel_abi.md`.
-2. Extract a reusable ABI descriptor from the current host-header generation.
-3. Regenerate the existing C wrappers and print helpers from that descriptor.
-4. Implement scalar extern lowering as MLIR symbol declarations and
-   `func.call`.
-5. Add a link smoke test with a small C helper object.
-6. Design point or tile kernel ABI variants before adding AMReX wrappers.
+2. Regenerate the existing C wrappers and print helpers from the extracted ABI
+   descriptor.
+3. Keep scalar extern lowering covered by MLIR and link-level smoke tests.
+4. Design point or tile kernel ABI variants before adding AMReX wrappers.
+5. Consolidate repeated standalone smoke-runner mechanics.
 
 The guiding rule is: users write mathematical Tensorium; Tensorium emits
 optimized MLIR/LLVM kernels; generated C/C++ only makes the ABI safe and

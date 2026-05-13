@@ -89,6 +89,10 @@ static std::string pickDummyIndex(llvm::ArrayRef<std::string> used) {
   return "l";
 }
 
+static bool isScalarTensorType(const tensorium::ir::TensorType &type) {
+  return type.rank() == 0;
+}
+
 mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
                      const tensorium::backend::ExprIR *e,
                      const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg,
@@ -232,8 +236,32 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
       lap->setAttr("sum_indices", makeIndexArrayAttr(b, {"i"}));
       return lap.getResult();
     }
-    if (c->isExtern)
-      emitExternLoweringError(loc, c->callee);
+    if (c->isExtern) {
+      if (!isScalarTensorType(c->returnType) || desiredType.getRank() != 0)
+        emitExternLoweringError(loc, c->callee);
+      if (c->paramTypes.size() != c->args.size()) {
+        emitUnsupportedExprError(
+            loc, "extern function '" + c->callee +
+                     "' arity metadata mismatch during MLIR emission");
+      }
+
+      llvm::SmallVector<mlir::Value, 4> args;
+      args.reserve(c->args.size());
+      for (std::size_t i = 0; i < c->args.size(); ++i) {
+        if (!isScalarTensorType(c->paramTypes[i]))
+          emitExternLoweringError(loc, c->callee);
+        auto arg = emitExpr(b, loc, c->args[i].get(), fieldArg, localTemps);
+        auto argTy = mlir::dyn_cast<tensorium::mlir::FieldType>(arg.getType());
+        if (!argTy || argTy.getRank() != 0)
+          emitExternLoweringError(loc, c->callee);
+        args.push_back(arg);
+      }
+
+      return b
+          .create<tensorium::mlir::ExternCallOp>(
+              loc, desiredType, b.getStringAttr(c->callee), args)
+          .getResult();
+    }
 
     emitUnsupportedExprError(
         loc, "call to '" + c->callee +

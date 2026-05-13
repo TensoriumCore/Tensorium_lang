@@ -190,6 +190,12 @@ static unsigned requiredStencilRadiusForValue(Value v) {
     return std::max(requiredStencilRadiusForValue(div.getLhs()),
                     requiredStencilRadiusForValue(div.getRhs()));
   }
+  if (auto call = dyn_cast<ExternCallOp>(def)) {
+    unsigned radius = 0;
+    for (Value arg : call.getArgs())
+      radius = std::max(radius, requiredStencilRadiusForValue(arg));
+    return radius;
+  }
   if (auto contract = dyn_cast<ContractOp>(def))
     return requiredStencilRadiusForValue(contract.getIn());
   if (auto einsum = dyn_cast<EinsumOp>(def)) {
@@ -696,6 +702,34 @@ private:
       return out;
     }
 
+    if (auto call = dyn_cast_or_null<ExternCallOp>(v.getDefiningOp())) {
+      TensorScalars out;
+      out.indices.clear();
+
+      SmallVector<Value> scalarArgs;
+      scalarArgs.reserve(call.getArgs().size());
+      for (Value arg : call.getArgs()) {
+        auto argValue = evalValue(arg, shift);
+        if (failed(argValue))
+          return failure();
+        if (!argValue->indices.empty() || argValue->comps.size() != 1) {
+          call.emitError("rhs-grid-scf: extern scalar call argument must "
+                         "scalarize to one component");
+          return failure();
+        }
+        scalarArgs.push_back(argValue->comps[0]);
+      }
+
+      auto callee = ensureExternScalarFunc(call, scalarArgs.size());
+      if (failed(callee))
+        return failure();
+      auto lowered = b.create<func::CallOp>(loc, *callee,
+                                            TypeRange{b.getF64Type()},
+                                            scalarArgs);
+      out.comps.push_back(lowered.getResult(0));
+      return out;
+    }
+
     if (auto contract = dyn_cast_or_null<ContractOp>(v.getDefiningOp())) {
       auto in = evalValue(contract.getIn(), shift);
       if (failed(in))
@@ -780,6 +814,35 @@ private:
           << op->getName().getStringRef();
     }
     return failure();
+  }
+
+  FailureOr<StringRef> ensureExternScalarFunc(ExternCallOp call,
+                                              unsigned arity) {
+    ModuleOp module = srcRhs->getParentOfType<ModuleOp>();
+    if (!module) {
+      call.emitError("rhs-grid-scf: cannot find parent module for extern call");
+      return failure();
+    }
+
+    StringRef callee = call.getCallee();
+    Type f64 = b.getF64Type();
+    SmallVector<Type> inputs(arity, f64);
+    FunctionType expectedType = b.getFunctionType(inputs, f64);
+
+    if (auto existing = module.lookupSymbol<func::FuncOp>(callee)) {
+      if (existing.getFunctionType() != expectedType) {
+        call.emitError("rhs-grid-scf: extern scalar function '")
+            << callee << "' conflicts with existing MLIR symbol type";
+        return failure();
+      }
+      return callee;
+    }
+
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPointToStart(module.getBody());
+    auto fn = b.create<func::FuncOp>(call.getLoc(), callee, expectedType);
+    fn.setPrivate();
+    return callee;
   }
 
   FailureOr<TensorScalars> evalAddSub(const TensorScalars &lhs,

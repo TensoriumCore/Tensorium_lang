@@ -33,7 +33,10 @@ Why first:
 - Without pass timings, follow-up performance work is guesswork.
 
 ### 2. Remaining high-value lowering gap
-- Implement external function lowering in `MLIRGenShared.cpp`.
+- Keep scalar external function lowering covered in both high-level MLIR and
+  LLVM link smokes.
+- Defer tensor, buffer, grid, and runtime-aware extern forms until the ABI
+  descriptor can model them explicitly.
 - Keep `nabla^` coverage in the LLVM smoke suite so inverse-metric raising does
   not regress while extern work proceeds.
 
@@ -58,10 +61,11 @@ This should be handled before widening the backend/JIT surface too far.
 ## Recommended Next Sequence
 1. Establish pass-timing baselines from the updated bench workflow.
 2. Profile the real GR/BSSN fixtures and record the largest offenders.
-3. Extract a reusable ABI descriptor from current host-header generation.
-4. Implement extern lowering with tests.
-5. Revisit runtime ABI generalization only after the next lowering gap is
-   closed and measured.
+3. Expand host wrapper generation from the reusable ABI descriptor where it
+   reduces duplicated glue.
+4. Revisit runtime ABI generalization only after the current lowering surface is
+   measured.
+5. Design point or tile kernel ABI variants before adding AMReX wrappers.
 
 ## Completed Since The Earlier Roadmap
 - Official init-only ABI documentation.
@@ -73,3 +77,5 @@ This should be handled before widening the backend/JIT surface too far.
 - Opt-in `--mlir-pass-timing` reporting, wired into the Schwarzschild bench.
 - Contravariant covariant derivative notation (`nabla^`) covered by a dedicated
   LLVM smoke over covector, vector, and mixed-tensor cases.
+- Scalar extern calls lower through Tensorium MLIR to linkable `f64` C ABI
+  calls in RHS grid kernels.
