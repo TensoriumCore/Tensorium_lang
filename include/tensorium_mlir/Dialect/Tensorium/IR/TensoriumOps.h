@@ -6,13 +6,12 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/IR/Attributes.h" 
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "mlir/Interfaces/InferTypeOpInterface.h"
+#include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 
 namespace tensorium::mlir {
-  using Attribute = ::mlir::Attribute; 
+using Attribute = ::mlir::Attribute;
 }
 namespace tensorium {
 namespace mlir {

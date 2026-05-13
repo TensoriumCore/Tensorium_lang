@@ -114,8 +114,40 @@ mlir_tablegen(TensoriumPasses.h.inc
 
 add_public_tablegen_target(TensoriumPassesIncGen)
 
-set(LLVM_TARGET_DEFINITIONS
+set(TENSORIUM_DIALECT_TD
+  ${PROJECT_SOURCE_DIR}/include/tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.td
+)
+set(TENSORIUM_TYPES_TD
+  ${PROJECT_SOURCE_DIR}/include/tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.td
+)
+set(TENSORIUM_OPS_TD
   ${PROJECT_SOURCE_DIR}/include/tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.td
+)
+
+set(LLVM_TARGET_DEFINITIONS
+  ${TENSORIUM_TYPES_TD}
+)
+
+mlir_tablegen(TensoriumTypes.h.inc
+  -gen-typedef-decls
+  -I ${PROJECT_SOURCE_DIR}/include
+  -I ${MLIR_INCLUDE_DIRS}
+  -I ${LLVM_INCLUDE_DIRS}
+  DEPENDS ${TENSORIUM_DIALECT_TD}
+)
+
+mlir_tablegen(TensoriumTypes.cpp.inc
+  -gen-typedef-defs
+  -I ${PROJECT_SOURCE_DIR}/include
+  -I ${MLIR_INCLUDE_DIRS}
+  -I ${LLVM_INCLUDE_DIRS}
+  DEPENDS ${TENSORIUM_DIALECT_TD}
+)
+
+add_public_tablegen_target(TensoriumTypesIncGen)
+
+set(LLVM_TARGET_DEFINITIONS
+  ${TENSORIUM_OPS_TD}
 )
 
 mlir_tablegen(TensoriumOps.h.inc
@@ -123,6 +155,7 @@ mlir_tablegen(TensoriumOps.h.inc
   -I ${PROJECT_SOURCE_DIR}/include
   -I ${MLIR_INCLUDE_DIRS}
   -I ${LLVM_INCLUDE_DIRS}
+  DEPENDS ${TENSORIUM_DIALECT_TD} ${TENSORIUM_TYPES_TD}
 )
 
 mlir_tablegen(TensoriumOps.cpp.inc
@@ -130,6 +163,7 @@ mlir_tablegen(TensoriumOps.cpp.inc
   -I ${PROJECT_SOURCE_DIR}/include
   -I ${MLIR_INCLUDE_DIRS}
   -I ${LLVM_INCLUDE_DIRS}
+  DEPENDS ${TENSORIUM_DIALECT_TD} ${TENSORIUM_TYPES_TD}
 )
 
 add_public_tablegen_target(TensoriumOpsIncGen)
@@ -209,6 +243,7 @@ add_library(tensoriumMlirIR
   tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.cpp
 )
 add_dependencies(tensoriumMlirIR
+  TensoriumTypesIncGen
   TensoriumOpsIncGen
 )
 tensorium_configure_mlir_target(tensoriumMlirIR)
@@ -242,6 +277,7 @@ add_library(tensoriumMlirTransforms
 )
 add_dependencies(tensoriumMlirTransforms
   TensoriumPassesIncGen
+  TensoriumTypesIncGen
   TensoriumOpsIncGen
 )
 tensorium_configure_mlir_target(tensoriumMlirTransforms)
@@ -267,6 +303,7 @@ add_library(tensoriumMlirCodegen
 )
 add_dependencies(tensoriumMlirCodegen
   TensoriumPassesIncGen
+  TensoriumTypesIncGen
   TensoriumOpsIncGen
 )
 tensorium_configure_mlir_target(tensoriumMlirCodegen)
