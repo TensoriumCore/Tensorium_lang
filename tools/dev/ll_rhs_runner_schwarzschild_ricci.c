@@ -97,9 +97,8 @@ int main(void) {
   printf("[ll-smoke] Schwarzschild spatial Ricci center point M=%.17g r=%.17g theta=%.17g\n",
          M, r, theta);
   printf("  note: this is the 3D Ricci(gamma_ij), not the 4D vacuum Ricci_mu_nu\n");
-  print_matrix3("gamma_ij", gamma_cov);
+  tensorium_print_requested_fields_at(cidx, n, alpha, gamma, ricci);
   print_matrix3("gammaU^ij", gamma_con);
-  print_matrix3("spatial Ricci_ij", ricci_cov);
   printf("spatial Ricci_rr expected=%.17g got=%.17g\n", exp_rr,
          ricci_cov[0][0]);
   printf("spatial Ricci_thetatheta expected=%.17g got=%.17g\n", exp_tt,

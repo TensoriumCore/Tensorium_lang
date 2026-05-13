@@ -39,6 +39,7 @@ enum class TokenType {
   KwInverseMetric,
   KwEvolution,
   KwDt,
+  KwPrint,
   KwSimulation,
   KwInitialData,
   KwMetric4,
@@ -127,6 +128,8 @@ inline const char *tokenTypeName(TokenType type) {
     return "'evolution'";
   case TokenType::KwDt:
     return "'dt'";
+  case TokenType::KwPrint:
+    return "'print'";
   case TokenType::KwSimulation:
     return "'simulation'";
   case TokenType::KwInitialData:

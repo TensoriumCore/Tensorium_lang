@@ -51,5 +51,6 @@ public:
   const std::vector<std::string> &getWarnings() const { return warnings; }
   IndexedMetric analyzeMetric(const MetricDecl &decl);
   IndexedEvolution analyzeEvolution(const EvolutionDecl &evo);
+  IndexedPrint analyzePrint(const PrintDecl &decl);
 };
 } // namespace tensorium

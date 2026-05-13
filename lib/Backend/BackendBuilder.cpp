@@ -3,6 +3,7 @@
 #include "tensorium/Core/IndexSet.h"
 
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -463,6 +464,33 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
   return std::make_unique<CallIR>("<unknown>");
 }
 
+static std::string renderPrintLabel(const tensorium::IndexedVar &var) {
+  std::string label = var.name;
+  if (!var.tensorIndexNames.empty()) {
+    label += "[";
+    for (size_t i = 0; i < var.tensorIndexNames.size(); ++i) {
+      label += var.tensorIndexNames[i];
+      if (i + 1 < var.tensorIndexNames.size())
+        label += ",";
+    }
+    label += "]";
+  }
+  return label;
+}
+
+static PrintIR lowerPrint(const tensorium::IndexedPrint &print) {
+  const auto *var = dynamic_cast<const tensorium::IndexedVar *>(print.expr.get());
+  if (!var || var->kind != tensorium::IndexedVarKind::Field)
+    throw std::runtime_error("print() lowering expects a field reference");
+
+  PrintIR out;
+  out.label = renderPrintLabel(*var);
+  out.fieldName = var->name;
+  out.indices = var->tensorIndexNames;
+  out.tensorType = lowerTensorType(print.expr->inferredType);
+  return out;
+}
+
 FieldKind BackendBuilder::lowerFieldKind(TensorKind k) {
   switch (k) {
   case TensorKind::Scalar:
@@ -653,6 +681,12 @@ ModuleIR BackendBuilder::build(const Program &prog,
     }
 
     mod.evolutions.push_back(std::move(out));
+  }
+
+  mod.prints.reserve(prog.prints.size());
+  for (const auto &print : prog.prints) {
+    auto indexed = sem.analyzePrint(print);
+    mod.prints.push_back(lowerPrint(indexed));
   }
 
   return mod;

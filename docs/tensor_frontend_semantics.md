@@ -27,6 +27,8 @@ Top-level constructs:
 * `Assignment` – used for temporaries and metric entries; LHS is a `TensorAccess`.
 * `ExternDecl` – declares external scalar/tensor functions with explicit tensor
   type signatures.
+* `PrintDecl` – records a top-level `print(expr);` request for runtime
+  inspection of declared fields.
 * `SimulationConfig` – dimension, resolution, and scheme metadata required to
   establish coordinate indices and derivative availability.
 
@@ -68,6 +70,24 @@ these rules:
    spatial shifts.
 4. **Temporaries** – Temporaries declared via assignments are scalar unless
    explicitly indexed; they follow the same index rules when they appear on RHS.
+
+## Print Requests
+
+Top-level `print(expr);` requests are accepted in executable programs. The first
+runtime-backed form is intentionally scoped to declared fields:
+
+```tn
+print(alpha);
+print(gamma[i,j]);
+print(Ricci[i,j]);
+```
+
+The semantic analyzer resolves the field and infers its tensor type. Tensor
+fields must be printed with explicit indices so the label and component order
+are unambiguous. The backend stores these requests in `ModuleIR`; generated host
+headers emit `tensorium_print_requested_fields_at(point_index, n_points, ...)`,
+formatting scalars as single values, vectors as lists, rank-2 tensors as
+matrices, and higher ranks as indexed component lists.
 
 ## Einstein Summation Rules
 

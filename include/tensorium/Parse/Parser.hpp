@@ -25,6 +25,7 @@ class Parser {
   ExternDecl parseExternDecl();
   FieldDecl parseFieldDecl();
   MetricDecl parseMetric();
+  PrintDecl parsePrint();
   InitialDataDecl parseInitialData();
   EvolutionEq parseEvolutionEq();
   EvolutionDecl parseEvolution();

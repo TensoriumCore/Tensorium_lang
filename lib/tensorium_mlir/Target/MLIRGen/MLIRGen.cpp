@@ -24,6 +24,7 @@
 #include <cctype>
 #include <numeric>
 #include <sstream>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -76,6 +77,31 @@ std::string cIdentifier(llvm::StringRef input, llvm::StringRef fallback) {
     out = fallback.str();
   if (std::isdigit(static_cast<unsigned char>(out.front())))
     out.insert(out.begin(), '_');
+  return out;
+}
+
+std::string cStringLiteral(const std::string &input) {
+  std::string out = "\"";
+  for (char ch : input) {
+    switch (ch) {
+    case '\\':
+      out += "\\\\";
+      break;
+    case '"':
+      out += "\\\"";
+      break;
+    case '\n':
+      out += "\\n";
+      break;
+    case '\t':
+      out += "\\t";
+      break;
+    default:
+      out.push_back(ch);
+      break;
+    }
+  }
+  out += "\"";
   return out;
 }
 
@@ -397,6 +423,121 @@ void emitConvenienceWrapper(
   }
 }
 
+void emitPrinterFlatHelper(std::ostringstream &os) {
+  os << "static inline void tensorium_print_tensor_flat(\n"
+     << "    const char *name, const double *data, int64_t point_index,\n"
+     << "    int64_t n_points, int64_t rank, int64_t dim) {\n"
+     << "  int64_t components = 1;\n"
+     << "  for (int64_t axis = 0; axis < rank; ++axis)\n"
+     << "    components *= dim;\n"
+     << "  printf(\"%s = {\\n\", name);\n"
+     << "  for (int64_t component = 0; component < components; ++component) {\n"
+     << "    int64_t rem = component;\n"
+     << "    int64_t divisor = components / dim;\n"
+     << "    printf(\"  [\");\n"
+     << "    for (int64_t axis = 0; axis < rank; ++axis) {\n"
+     << "      const int64_t idx = rem / divisor;\n"
+     << "      rem %= divisor;\n"
+     << "      divisor = divisor > 1 ? divisor / dim : 1;\n"
+     << "      if (axis != 0)\n"
+     << "        printf(\",\");\n"
+     << "      printf(\"%lld\", (long long)idx);\n"
+     << "    }\n"
+     << "    printf(\"] = %.17g\\n\", data[component * n_points + point_index]);\n"
+     << "  }\n"
+     << "  printf(\"}\\n\");\n"
+     << "}\n\n";
+}
+
+void emitPrintRequest(
+    std::ostringstream &os, const tensorium::backend::PrintIR &print) {
+  const int rank = print.tensorType.rank();
+  const std::string label = cStringLiteral(print.label);
+  const std::string field = cIdentifier(print.fieldName, "field");
+
+  if (rank == 0) {
+    os << "  printf(\"%s = %.17g\\n\", " << label << ", " << field
+       << "[point_index]);\n";
+    return;
+  }
+
+  if (rank == 1) {
+    os << "  printf(\"%s = [\", " << label << ");\n"
+       << "  for (int64_t tensorium_print_i = 0; tensorium_print_i < "
+          "tensorium_dim; ++tensorium_print_i) {\n"
+       << "    if (tensorium_print_i != 0)\n"
+       << "      printf(\", \");\n"
+       << "    printf(\"%.17g\", "
+       << field << "[tensorium_print_i * n_points + point_index]);\n"
+       << "  }\n"
+       << "  printf(\"]\\n\");\n";
+    return;
+  }
+
+  if (rank == 2) {
+    os << "  printf(\"%s = [\\n\", " << label << ");\n"
+       << "  for (int64_t tensorium_print_i = 0; tensorium_print_i < "
+          "tensorium_dim; ++tensorium_print_i) {\n"
+       << "    printf(\"  [\");\n"
+       << "    for (int64_t tensorium_print_j = 0; tensorium_print_j < "
+          "tensorium_dim; ++tensorium_print_j) {\n"
+       << "      if (tensorium_print_j != 0)\n"
+       << "        printf(\", \");\n"
+       << "      const int64_t tensorium_component = "
+          "tensorium_print_i * tensorium_dim + tensorium_print_j;\n"
+       << "      printf(\"%.17g\", "
+       << field << "[tensorium_component * n_points + point_index]);\n"
+       << "    }\n"
+       << "    printf(tensorium_print_i + 1 == tensorium_dim ? \"]\\n\" : "
+          "\"],\\n\");\n"
+       << "  }\n"
+       << "  printf(\"]\\n\");\n";
+    return;
+  }
+
+  os << "  tensorium_print_tensor_flat(" << label << ", " << field
+     << ", point_index, n_points, " << rank << ", tensorium_dim);\n";
+}
+
+void emitPrintRequestHelper(std::ostringstream &os,
+                            const tensorium::backend::ModuleIR &module) {
+  if (module.prints.empty())
+    return;
+
+  int dim = 3;
+  if (module.simulation && module.simulation->dimension > 0)
+    dim = module.simulation->dimension;
+
+  std::vector<std::string> fields;
+  for (const auto &print : module.prints) {
+    bool seen = false;
+    for (const auto &field : fields) {
+      if (field == print.fieldName) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen)
+      fields.push_back(print.fieldName);
+  }
+
+  emitPrinterFlatHelper(os);
+
+  os << "static inline void tensorium_print_requested_fields_at(\n"
+     << "    int64_t point_index, int64_t n_points";
+  for (const auto &field : fields)
+    os << ", const double *" << cIdentifier(field, "field");
+  os << ") {\n"
+     << "  const int64_t tensorium_dim = " << dim << ";\n"
+     << "  if (point_index < 0 || point_index >= n_points) {\n"
+     << "    fprintf(stderr, \"tensorium print point_index out of range\\n\");\n"
+     << "    return;\n"
+     << "  }\n";
+  for (const auto &print : module.prints)
+    emitPrintRequest(os, print);
+  os << "}\n";
+}
+
 std::string renderHostHeader(const tensorium::backend::ModuleIR &module,
                              mlir::ModuleOp moduleOp) {
   std::vector<mlir::func::FuncOp> hostFns;
@@ -414,7 +555,8 @@ std::string renderHostHeader(const tensorium::backend::ModuleIR &module,
   std::ostringstream os;
   os << "#ifndef TENSORIUM_GENERATED_HOST_H\n"
      << "#define TENSORIUM_GENERATED_HOST_H\n\n"
-     << "#include <stdint.h>\n\n"
+     << "#include <stdint.h>\n"
+     << "#include <stdio.h>\n\n"
      << "typedef struct tensorium_memref1d_f64 {\n"
      << "  double *allocated;\n"
      << "  double *aligned;\n"
@@ -438,6 +580,10 @@ std::string renderHostHeader(const tensorium::backend::ModuleIR &module,
     emitConvenienceWrapper(os, fn, componentCounts);
     os << "\n";
   }
+
+  emitPrintRequestHelper(os, module);
+  if (!module.prints.empty())
+    os << "\n";
 
   os << "#endif /* TENSORIUM_GENERATED_HOST_H */\n";
   return os.str();

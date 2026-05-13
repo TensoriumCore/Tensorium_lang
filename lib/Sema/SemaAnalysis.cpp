@@ -185,4 +185,52 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
   return out;
 }
 
+IndexedPrint SemanticAnalyzer::analyzePrint(const PrintDecl &decl) {
+  LocalScopeGuard localsScope(
+      locals, std::unordered_map<std::string, TensorTypeDesc>{});
+  coordIndex.clear();
+  locals.clear();
+
+  auto isEvolutionTemporary = [this](const std::string &name) {
+    for (const auto &evo : prog.evolutions)
+      for (const auto &tmp : evo.tempAssignments)
+        if (tmp.lhs.base == name)
+          return true;
+    return false;
+  };
+
+  auto rejectLocalTemporary = [&](const std::string &name) {
+    if (isEvolutionTemporary(name)) {
+      throw std::runtime_error(
+          "print() cannot print evolution temporary '" + name +
+          "' from top level; print a declared field or materialize the "
+          "temporary as a field");
+    }
+  };
+
+  if (const auto *var = dynamic_cast<const VarExpr *>(decl.expr.get()))
+    rejectLocalTemporary(var->name);
+  if (const auto *indexed =
+          dynamic_cast<const IndexedVarExpr *>(decl.expr.get()))
+    rejectLocalTemporary(indexed->base);
+
+  TensorTypeChecker checker(hasConnectionTensor);
+  IndexedPrint out;
+  out.expr = transformExpr(decl.expr.get());
+  TensorType type = checker.infer(out.expr.get());
+
+  const auto *field = dynamic_cast<const IndexedVar *>(out.expr.get());
+  if (!field || field->kind != IndexedVarKind::Field) {
+    throw std::runtime_error("print() currently expects a declared field");
+  }
+
+  if (type.rank() > 0 &&
+      field->tensorIndexNames.size() != static_cast<size_t>(type.rank())) {
+    throw std::runtime_error("print() of tensor field '" + field->name +
+                             "' requires explicit indices");
+  }
+
+  return out;
+}
+
 } // namespace tensorium

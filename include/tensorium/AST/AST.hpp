@@ -140,6 +140,10 @@ struct EvolutionDecl {
   std::vector<Assignment> tempAssignments;
 };
 
+struct PrintDecl {
+  std::unique_ptr<Expr> expr;
+};
+
 enum class CoordinateSystem { Cartesian, Spherical, Cylindrical };
 
 enum class TimeIntegrator { Euler, RK3, RK4 };
@@ -207,6 +211,7 @@ struct Program {
   std::vector<FieldDecl> fields;
   std::vector<MetricDecl> metrics;
   std::vector<EvolutionDecl> evolutions;
+  std::vector<PrintDecl> prints;
   std::unique_ptr<SimulationConfig> simulation;
   std::unique_ptr<InitialDataDecl> initialData;
 };

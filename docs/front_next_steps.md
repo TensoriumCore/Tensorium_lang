@@ -30,15 +30,10 @@ Why first:
 - Recent Ricci smoke work showed a single no-op pass could dominate runtime.
 - Without pass timings, follow-up performance work is guesswork.
 
-### 2. High-value lowering gaps
-- Implement or deliberately scope:
-  - contravariant covariant derivative lowering (`nabla^`) in
-    `MLIRGenExpr.cpp`,
-  - external function lowering in `MLIRGenShared.cpp`.
-
-Suggested order:
-- prioritize `nabla^` if the immediate target is richer GR/BSSN coverage;
-- prioritize `extern` if the language/runtime integration surface matters more.
+### 2. Remaining high-value lowering gap
+- Implement external function lowering in `MLIRGenShared.cpp`.
+- Keep `nabla^` coverage in the LLVM smoke suite so inverse-metric raising does
+  not regress while extern work proceeds.
 
 ### 3. Runtime/lowering contract beyond init-only
 - The init-only ABI is stable enough for its milestone, but the general field
@@ -59,7 +54,7 @@ This should be handled before widening the backend/JIT surface too far.
 ## Recommended Next Sequence
 1. Establish pass-timing baselines from the updated bench workflow.
 2. Profile the real GR/BSSN fixtures and record the largest offenders.
-3. Pick one lowering gap (`nabla^` or `extern`) with tests.
+3. Implement extern lowering with tests.
 4. Revisit runtime ABI generalization only after the next lowering gap is
    closed and measured.
 
@@ -71,3 +66,5 @@ This should be handled before widening the backend/JIT surface too far.
 - Executable-mode builtin consistency for `initial_data`.
 - Generated host-wrapper path for LLVM smoke runners.
 - Opt-in `--mlir-pass-timing` reporting, wired into the Schwarzschild bench.
+- Contravariant covariant derivative notation (`nabla^`) covered by a dedicated
+  LLVM smoke over covector, vector, and mixed-tensor cases.

@@ -133,6 +133,13 @@ struct EvolutionIR {
   std::vector<TempAssignIR> temporaries;
 };
 
+struct PrintIR {
+  std::string label;
+  std::string fieldName;
+  std::vector<std::string> indices;
+  tensorium::ir::TensorType tensorType;
+};
+
 struct InitExprIR {
   enum class Kind { Number, Symbol, Binary, Call };
   Kind kind;
@@ -208,6 +215,7 @@ struct ModuleIR {
   std::optional<InitialDataIR> initialData;
   std::vector<FieldIR> fields;
   std::vector<EvolutionIR> evolutions;
+  std::vector<PrintIR> prints;
 };
 
 } // namespace tensorium::backend

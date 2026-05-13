@@ -673,6 +673,7 @@ bash tools/dev/test_kerr_like_christoffel_ll.sh
 bash tools/dev/test_minkowski_ricci_ll.sh
 bash tools/dev/test_schwarzschild_ricci_ll.sh
 bash tools/dev/test_covariant_rank1_ll.sh
+bash tools/dev/test_contravariant_all_cases_ll.sh
 
 echo
 echo "=============================="

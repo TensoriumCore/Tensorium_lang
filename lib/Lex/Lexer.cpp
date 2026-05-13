@@ -108,6 +108,8 @@ Token Lexer::next() {
       return {TokenType::KwEvolution, t, tokLine, tokCol};
     if (t == "dt")
       return {TokenType::KwDt, t, tokLine, tokCol};
+    if (t == "print")
+      return {TokenType::KwPrint, t, tokLine, tokCol};
     if (t == "field")
       return {TokenType::KwField, t, tokLine, tokCol};
     if (t == "extern")

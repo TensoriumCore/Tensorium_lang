@@ -49,3 +49,7 @@ evolution SchwarzschildRicci {
     + contract(Christoffel[k,i,j] * Christoffel[l,k,l])
     - contract(Christoffel[k,i,l] * Christoffel[l,j,k])
 }
+
+print (alpha);
+print(gamma[i,j]);
+print(Ricci[i,j]);

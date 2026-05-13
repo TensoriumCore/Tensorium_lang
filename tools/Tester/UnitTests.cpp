@@ -3101,6 +3101,13 @@ static bool testLoweredGridHostHeaderEmission() {
                  "or component sizes\n";
     return false;
   }
+  if (header.find("tensorium_print_requested_fields_at") == std::string::npos ||
+      header.find("\"alpha\"") == std::string::npos ||
+      header.find("\"gamma[i,j]\"") == std::string::npos ||
+      header.find("\"Ricci[i,j]\"") == std::string::npos) {
+    std::cerr << "FAIL: generated host header missing .tn print helpers\n";
+    return false;
+  }
   if (header.find("double *Christoffel") != std::string::npos ||
       header.find("27 * n_points") != std::string::npos) {
     std::cerr << "FAIL: Ricci host header should not expose local Christoffel "

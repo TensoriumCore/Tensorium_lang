@@ -53,19 +53,7 @@ Needed next:
 - run the timing mode on representative Ricci, Christoffel, and BSSN fixtures,
 - keep a comparable baseline of the largest pass-level offenders.
 
-### B. Contravariant covariant derivative lowering
-Current state:
-- covariant derivative lowering exists for the supported covariant path,
-- contravariant form (`nabla^`) still reports unsupported lowering.
-
-Impact:
-- richer GR/BSSN source programs can be representable in the front end but fail
-  during MLIR emission.
-
-Primary file:
-- `lib/tensorium_mlir/Target/MLIRGen/MLIRGenExpr.cpp`
-
-### C. External function lowering
+### B. External function lowering
 Current state:
 - extern calls are typed and diagnosed,
 - MLIR lowering still emits:
@@ -78,7 +66,7 @@ Impact:
 Primary file:
 - `lib/tensorium_mlir/Target/MLIRGen/MLIRGenShared.cpp`
 
-### D. Runtime buffer contract beyond init-only
+### C. Runtime buffer contract beyond init-only
 The init-only ABI is concrete, but the general executable contract is wider:
 - field layout expectations across init and RHS,
 - stable shape/stride metadata conventions,
@@ -87,7 +75,7 @@ The init-only ABI is concrete, but the general executable contract is wider:
 This should be clarified before broadening backend/JIT work beyond the current
 smoke runners.
 
-### E. Smoke/bench script drift
+### D. Smoke/bench script drift
 Current state:
 - multiple `tools/dev/test_*_ll.sh` scripts duplicate generation and compile
   flow,
@@ -101,9 +89,7 @@ Impact:
 ## Suggested Order Of Work
 1. Profile Ricci, Christoffel, and BSSN fixtures to establish a real codegen
    baseline.
-2. Implement one lowering gap with tests:
-   - `nabla^` for GR/BSSN depth,
-   - or extern lowering for language/runtime breadth.
+2. Implement extern lowering for language/runtime breadth.
 3. Consolidate shared LL smoke mechanics once the pipeline surface settles.
 
 ## Kept As Explicit Non-Gaps
@@ -114,3 +100,6 @@ These were blocking items in the older audit but are no longer open:
 - horizon/axis edge-case policy,
 - `initial_data` builtin mismatch,
 - init decomposition scope for off-diagonal and shift-aware metrics.
+- contravariant covariant derivative notation (`nabla^`), which is expanded via
+  inverse-metric raising and covered by
+  `tools/dev/test_contravariant_all_cases_ll.sh`.

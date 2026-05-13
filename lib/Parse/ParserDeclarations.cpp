@@ -331,6 +331,16 @@ EvolutionDecl Parser::parseEvolution() {
   return evo;
 }
 
+PrintDecl Parser::parsePrint() {
+  expect(TokenType::KwPrint);
+  expect(TokenType::LParen);
+  PrintDecl out;
+  out.expr = parseExpr();
+  expect(TokenType::RParen);
+  expect(TokenType::Semicolon);
+  return out;
+}
+
 Program Parser::parseProgram() {
   Program p;
   while (cur.type != TokenType::End) {
@@ -353,6 +363,10 @@ Program Parser::parseProgram() {
     }
     if (cur.type == TokenType::KwEvolution) {
       p.evolutions.push_back(parseEvolution());
+      continue;
+    }
+    if (cur.type == TokenType::KwPrint) {
+      p.prints.push_back(parsePrint());
       continue;
     }
     if (cur.type == TokenType::KwSimulation) {

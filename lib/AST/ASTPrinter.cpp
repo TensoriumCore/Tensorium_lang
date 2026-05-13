@@ -264,6 +264,15 @@ void printProgram(const Program &prog) {
     }
   }
 
+  if (!prog.prints.empty()) {
+    std::cout << "\nPrints:\n";
+    for (const auto &print : prog.prints) {
+      std::cout << "  print(";
+      printExpr(print.expr.get());
+      std::cout << ");\n";
+    }
+  }
+
   for (const auto &evo : prog.evolutions) {
     std::cout << "Evolution " << evo.name << " {\n";
     for (const auto &eq : evo.equations) {

@@ -276,6 +276,14 @@ inline void printModuleIR(const ModuleIR &m) {
               << ",down=" << f.tensorType.down << ")\n";
   }
 
+  if (!m.prints.empty()) {
+    std::cout << "  Prints:\n";
+    for (const auto &p : m.prints) {
+      std::cout << "    print " << p.label << " (up=" << p.tensorType.up
+                << ",down=" << p.tensorType.down << ")\n";
+    }
+  }
+
   std::cout << "  Evolutions:\n";
   for (const auto &evo : m.evolutions) {
     std::cout << "    Evolution " << evo.name << " {\n";

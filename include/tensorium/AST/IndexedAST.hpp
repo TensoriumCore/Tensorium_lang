@@ -80,4 +80,8 @@ struct IndexedEvolution {
   std::vector<IndexedAssignment> temp;
 };
 
+struct IndexedPrint {
+  std::unique_ptr<IndexedExpr> expr;
+};
+
 } // namespace tensorium

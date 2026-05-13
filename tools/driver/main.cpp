@@ -540,6 +540,14 @@ int main(int argc, char **argv) {
                     << ")\n";
         }
 
+        if (!mod.prints.empty()) {
+          std::cout << "Prints:\n";
+          for (const auto &p : mod.prints) {
+            std::cout << "  " << p.label << " (up=" << p.tensorType.up
+                      << ",down=" << p.tensorType.down << ")\n";
+          }
+        }
+
         std::cout << "Evolutions:\n";
         for (const auto &evo : mod.evolutions) {
           std::cout << "  Evolution " << evo.name << " ("
