@@ -35,16 +35,24 @@ int main(int argc, char **argv) {
   const char *csv_path =
       (argc > 1) ? argv[1] : "/tmp/bh_cartesian_slice64.csv";
 
-  const int64_t nx = 64;
-  const int64_t ny = 64;
-  const int64_t nz = 64;
+  const int64_t grid_n = (argc > 2) ? atoll(argv[2]) : 64;
+  const double half_width = (argc > 3) ? atof(argv[3]) : 8.0;
+  if (grid_n < 8 || half_width <= 0.0) {
+    fprintf(stderr, "usage: %s [csv_path] [grid_n>=8] [half_width>0]\n",
+            argv[0]);
+    return 2;
+  }
+
+  const int64_t nx = grid_n;
+  const int64_t ny = grid_n;
+  const int64_t nz = grid_n;
   const int64_t n = nx * ny * nz;
   const int64_t ck = nz / 2;
 
   const double M = 1.0;
-  const double dx = 0.25;
-  const double dy = 0.25;
-  const double dz = 0.25;
+  const double dx = (2.0 * half_width) / (double)grid_n;
+  const double dy = dx;
+  const double dz = dx;
 
   double *x = (double *)malloc((size_t)n * sizeof(double));
   double *y = (double *)malloc((size_t)n * sizeof(double));
@@ -142,6 +150,7 @@ int main(int argc, char **argv) {
     return 4;
   }
 
-  printf("CSV exported: %s\n", csv_path);
+  printf("CSV exported: %s (%lldx%lld slice, dx=%.17g)\n", csv_path,
+         (long long)nx, (long long)ny, dx);
   return 0;
 }

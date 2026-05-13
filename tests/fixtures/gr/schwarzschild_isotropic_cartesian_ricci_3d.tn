@@ -78,5 +78,9 @@ initial_data {
 
 evolution SchwarzschildIsotropicRicci {
   dt Christoffel[i,j,k] = christoffel(gamma, gammaU)
-  dt Ricci[i,j] = ricci(gamma, gammaU)
+  dt Ricci[i,j] =
+      contract(d_k(Christoffel[k,i,j]))
+    - contract(d_j(Christoffel[k,i,k]))
+    + contract(Christoffel[k,i,j] * Christoffel[l,k,l])
+    - contract(Christoffel[k,i,l] * Christoffel[l,j,k])
 }

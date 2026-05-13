@@ -1,0 +1,67 @@
+# Schwarzschild 3D spatial Hamiltonian-constraint fixture.
+# For the standard t = const Schwarzschild slice, K_ij = 0 and the vacuum
+# Hamiltonian constraint reduces to the 3D Ricci scalar R(gamma) = 0.
+# The spatial Ricci tensor itself is non-zero in spherical coordinates, so this
+# exercises both non-trivial tensor components and their final contraction.
+field metric g[mu,nu]
+field inverse_metric gU[mu,nu]
+field scalar alpha
+field cov_tensor2 gamma[i,j]
+field con_tensor2 gammaU[i,j]
+field cov_tensor2 Ricci[i,j]
+field scalar Hamiltonian
+
+params { M }
+
+simulation {
+  coordinates = spherical
+  dimension = 3
+  resolution = [24,24,24]
+
+  time {
+    dt = 0.001
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+initial_data {
+  enforce_symmetry = true
+  metric4 g[mu,nu] = [
+    [-(1 - 2*M/r), 0, 0, 0],
+    [0, 1/(1 - 2*M/r), 0, 0],
+    [0, 0, r*r, 0],
+    [0, 0, 0, r*r*sin(theta)*sin(theta)]
+  ]
+  split_3p1 {
+    alpha -> alpha;
+    gamma -> gamma[i,j];
+    gammaU -> gammaU[i,j];
+  }
+}
+
+evolution SchwarzschildHamiltonian {
+  Christoffel[i,j,k] = christoffel(gamma, gammaU)
+  SpatialRicci[i,j] =
+      contract(d_k(Christoffel[k,i,j]))
+    - contract(d_j(Christoffel[k,i,k]))
+    + contract(Christoffel[k,i,j] * Christoffel[l,k,l])
+    - contract(Christoffel[k,i,l] * Christoffel[l,j,k])
+
+  dt Ricci[i,j] =
+      contract(d_k(Christoffel[k,i,j]))
+    - contract(d_j(Christoffel[k,i,k]))
+    + contract(Christoffel[k,i,j] * Christoffel[l,k,l])
+    - contract(Christoffel[k,i,l] * Christoffel[l,j,k])
+  dt Hamiltonian = contract(gammaU[i,j] * SpatialRicci[i,j])
+}
+
+print(alpha);
+print(gamma[i,j]);
+print(Ricci[i,j]);
+print(Hamiltonian);

@@ -166,6 +166,7 @@ GR_FIXTURES=(
   tests/fixtures/gr/schwarzschild_3d.tn
   tests/fixtures/gr/schwarzschild_christoffel_3d.tn
   tests/fixtures/gr/schwarzschild_ricci_3d.tn
+  tests/fixtures/gr/schwarzschild_hamiltonian_3d.tn
   tests/fixtures/gr/minkowski_ricci_3d.tn
   tests/fixtures/gr/reissner_nordstrom_3d.tn
   tests/fixtures/gr/reissner_nordstrom_christoffel_3d.tn
@@ -654,6 +655,13 @@ bash tools/dev/test_bssn_minimal_ll.sh
 
 echo
 echo "=============================="
+echo " RUN Z4C KASNER LLVM SMOKE"
+echo "=============================="
+
+bash tools/dev/test_z4c_kasner_ll.sh
+
+echo
+echo "=============================="
 echo " RUN LLVM IR COMPILE+RUN SMOKE"
 echo "=============================="
 
@@ -663,6 +671,7 @@ bash tools/dev/test_reissner_christoffel_ll.sh
 bash tools/dev/test_kerr_like_christoffel_ll.sh
 bash tools/dev/test_minkowski_ricci_ll.sh
 bash tools/dev/test_schwarzschild_ricci_ll.sh
+bash tools/dev/test_schwarzschild_hamiltonian_ll.sh
 bash tools/dev/test_covariant_rank1_ll.sh
 bash tools/dev/test_contravariant_all_cases_ll.sh
 bash tools/dev/test_extern_scalar_ll.sh
