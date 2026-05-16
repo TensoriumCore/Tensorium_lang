@@ -655,6 +655,13 @@ bash tools/dev/test_bssn_minimal_ll.sh
 
 echo
 echo "=============================="
+echo " RUN COMPLETE BSSN KASNER ANALYTIC LLVM SMOKE"
+echo "=============================="
+
+bash tools/dev/test_bssn_kasner_full_ll.sh
+
+echo
+echo "=============================="
 echo " RUN Z4C KASNER LLVM SMOKE"
 echo "=============================="
 
@@ -665,6 +672,7 @@ echo "=============================="
 echo " RUN LLVM IR COMPILE+RUN SMOKE"
 echo "=============================="
 
+bash tools/dev/test_standard_metrics_init_analytic_ll.sh
 bash tools/dev/test_schwarzschild_ll.sh
 bash tools/dev/test_schwarzschild_christoffel_ll.sh
 bash tools/dev/test_reissner_christoffel_ll.sh
@@ -672,6 +680,7 @@ bash tools/dev/test_kerr_like_christoffel_ll.sh
 bash tools/dev/test_minkowski_ricci_ll.sh
 bash tools/dev/test_schwarzschild_ricci_ll.sh
 bash tools/dev/test_schwarzschild_hamiltonian_ll.sh
+bash tools/dev/test_schwarzschild_bssn_constraints_ll.sh
 bash tools/dev/test_covariant_rank1_ll.sh
 bash tools/dev/test_contravariant_all_cases_ll.sh
 bash tools/dev/test_extern_scalar_ll.sh

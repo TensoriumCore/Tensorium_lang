@@ -21,6 +21,14 @@ struct HostArgABI {
   std::string cName;
 };
 
+struct HostFieldABI {
+  std::string name;
+  int up = 0;
+  int down = 0;
+  int rank = 0;
+  std::int64_t componentCount = 1;
+};
+
 struct HostKernelABI {
   std::string symbolName;
   std::string wrapperName;
@@ -30,6 +38,9 @@ struct HostKernelABI {
   std::vector<std::string> coords;
   std::vector<std::string> fields;
   std::vector<std::string> outputs;
+  std::vector<std::int64_t> readArgIndices;
+  std::vector<std::int64_t> writeArgIndices;
+  std::int64_t stencilRadius = 0;
 };
 
 struct HostPrintABI {
@@ -40,7 +51,13 @@ struct HostPrintABI {
 
 struct HostModuleABI {
   int dimension = 3;
+  std::string coordSystem;
+  std::vector<int> resolution;
+  int spatialOrder = 0;
+  std::string spatialScheme;
+  std::string derivativeScheme;
   std::unordered_map<std::string, std::int64_t> componentCounts;
+  std::vector<HostFieldABI> fields;
   std::vector<HostKernelABI> kernels;
   std::vector<HostPrintABI> prints;
   std::vector<std::string> printFields;

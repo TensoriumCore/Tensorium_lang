@@ -3129,6 +3129,16 @@ findHostKernelABI(const tensorium_mlir::HostModuleABI &abi,
   return nullptr;
 }
 
+static const tensorium_mlir::HostFieldABI *
+findHostFieldABI(const tensorium_mlir::HostModuleABI &abi,
+                 const std::string &fieldName) {
+  for (const auto &field : abi.fields) {
+    if (field.name == fieldName)
+      return &field;
+  }
+  return nullptr;
+}
+
 static bool testLoweredGridHostABIDescriptor() {
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableMetricLoweringPass = true;
@@ -3166,6 +3176,13 @@ static bool testLoweredGridHostABIDescriptor() {
     std::cerr << "FAIL: host ABI descriptor dimension mismatch\n";
     return false;
   }
+  if (abi.coordSystem != "spherical" ||
+      abi.resolution != std::vector<int>({24, 24, 24}) ||
+      abi.spatialOrder != 4 || abi.spatialScheme != "fd" ||
+      abi.derivativeScheme != "centered") {
+    std::cerr << "FAIL: host ABI descriptor simulation metadata mismatch\n";
+    return false;
+  }
 
   auto componentCount = [&](const std::string &name) -> std::int64_t {
     auto it = abi.componentCounts.find(name);
@@ -3174,6 +3191,17 @@ static bool testLoweredGridHostABIDescriptor() {
   if (componentCount("alpha") != 1 || componentCount("gamma") != 9 ||
       componentCount("Ricci") != 9) {
     std::cerr << "FAIL: host ABI descriptor component counts mismatch\n";
+    return false;
+  }
+  const auto *gammaField = findHostFieldABI(abi, "gamma");
+  const auto *gammaUField = findHostFieldABI(abi, "gammaU");
+  const auto *ricciField = findHostFieldABI(abi, "Ricci");
+  if (!gammaField || !gammaUField || !ricciField ||
+      gammaField->up != 0 || gammaField->down != 2 ||
+      gammaField->rank != 2 || gammaField->componentCount != 9 ||
+      gammaUField->up != 2 || gammaUField->down != 0 ||
+      ricciField->up != 0 || ricciField->down != 2) {
+    std::cerr << "FAIL: host ABI field descriptors mismatch\n";
     return false;
   }
 
@@ -3199,6 +3227,12 @@ static bool testLoweredGridHostABIDescriptor() {
   if (rhsGrid->fields !=
       std::vector<std::string>({"gamma", "gammaU", "Ricci"})) {
     std::cerr << "FAIL: rhs-grid host ABI fields mismatch\n";
+    return false;
+  }
+  if (rhsGrid->readArgIndices != std::vector<std::int64_t>({6, 7}) ||
+      rhsGrid->writeArgIndices != std::vector<std::int64_t>({8}) ||
+      rhsGrid->stencilRadius != 2) {
+    std::cerr << "FAIL: rhs-grid host ABI runtime metadata mismatch\n";
     return false;
   }
 

@@ -8,6 +8,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <cctype>
+#include <utility>
 
 namespace tensorium_mlir {
 namespace {
@@ -30,6 +31,27 @@ std::string getStringAttr(mlir::Operation *op, llvm::StringRef name) {
   if (auto str = op->getAttrOfType<mlir::StringAttr>(name))
     return str.getValue().str();
   return {};
+}
+
+std::int64_t getI64Attr(mlir::Operation *op, llvm::StringRef name,
+                        std::int64_t fallback = 0) {
+  if (auto value = op->getAttrOfType<mlir::IntegerAttr>(name))
+    return value.getInt();
+  return fallback;
+}
+
+std::vector<std::int64_t> getI64ArrayAttr(mlir::Operation *op,
+                                          llvm::StringRef name) {
+  std::vector<std::int64_t> out;
+  auto arr = op->getAttrOfType<mlir::ArrayAttr>(name);
+  if (!arr)
+    return out;
+  out.reserve(arr.size());
+  for (mlir::Attribute attr : arr) {
+    if (auto value = llvm::dyn_cast<mlir::IntegerAttr>(attr))
+      out.push_back(value.getInt());
+  }
+  return out;
 }
 
 bool isSupportedHostScalarType(mlir::Type type) {
@@ -120,6 +142,59 @@ fieldComponentCounts(const tensorium::backend::ModuleIR &module) {
   return out;
 }
 
+std::vector<HostFieldABI>
+hostFields(const tensorium::backend::ModuleIR &module,
+           const std::unordered_map<std::string, std::int64_t> &components) {
+  std::vector<HostFieldABI> out;
+  out.reserve(module.fields.size());
+  for (const auto &field : module.fields) {
+    HostFieldABI abi;
+    abi.name = field.name;
+    abi.up = field.tensorType.up;
+    abi.down = field.tensorType.down;
+    abi.rank = field.tensorType.rank();
+    auto it = components.find(field.name);
+    abi.componentCount = it == components.end() ? 1 : it->second;
+    out.push_back(std::move(abi));
+  }
+  return out;
+}
+
+std::string coordSystemName(tensorium::backend::CoordSystem coords) {
+  using tensorium::backend::CoordSystem;
+  switch (coords) {
+  case CoordSystem::Cartesian:
+    return "cartesian";
+  case CoordSystem::Spherical:
+    return "spherical";
+  case CoordSystem::Cylindrical:
+    return "cylindrical";
+  }
+  return "cartesian";
+}
+
+std::string spatialSchemeName(tensorium::backend::SpatialScheme scheme) {
+  using tensorium::backend::SpatialScheme;
+  switch (scheme) {
+  case SpatialScheme::FD:
+    return "fd";
+  case SpatialScheme::Spectral:
+    return "spectral";
+  }
+  return "fd";
+}
+
+std::string derivativeSchemeName(tensorium::backend::DerivativeScheme scheme) {
+  using tensorium::backend::DerivativeScheme;
+  switch (scheme) {
+  case DerivativeScheme::Centered:
+    return "centered";
+  case DerivativeScheme::Upwind:
+    return "upwind";
+  }
+  return "centered";
+}
+
 std::string hostWrapperName(mlir::func::FuncOp fn) {
   llvm::StringRef symbol = fn.getSymName();
   symbol.consume_front("tensorium_");
@@ -151,6 +226,12 @@ bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
       getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrFieldNames);
   kernel.outputs =
       getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrOutputNames);
+  kernel.readArgIndices = getI64ArrayAttr(
+      fn.getOperation(), tensorium_mlir::abi::kAttrReadArgIndices);
+  kernel.writeArgIndices = getI64ArrayAttr(
+      fn.getOperation(), tensorium_mlir::abi::kAttrWriteArgIndices);
+  kernel.stencilRadius = getI64Attr(
+      fn.getOperation(), tensorium_mlir::abi::kAttrStencilRadius);
 
   const auto names = logicalArgNames(fn);
   kernel.rawArgs.reserve(fn.getNumArguments());
@@ -187,9 +268,17 @@ std::string makeHostCIdentifier(std::string_view input,
 HostModuleABI buildHostModuleABI(const tensorium::backend::ModuleIR &module,
                                  mlir::ModuleOp moduleOp) {
   HostModuleABI abi;
-  if (module.simulation && module.simulation->dimension > 0)
+  if (module.simulation && module.simulation->dimension > 0) {
     abi.dimension = module.simulation->dimension;
+    abi.coordSystem = coordSystemName(module.simulation->coords);
+    abi.resolution = module.simulation->resolution;
+    abi.spatialOrder = module.simulation->spatial.order;
+    abi.spatialScheme = spatialSchemeName(module.simulation->spatial.scheme);
+    abi.derivativeScheme =
+        derivativeSchemeName(module.simulation->spatial.derivative);
+  }
   abi.componentCounts = fieldComponentCounts(module);
+  abi.fields = hostFields(module, abi.componentCounts);
 
   moduleOp.walk([&](mlir::func::FuncOp fn) { appendHostKernelABI(abi, fn); });
 

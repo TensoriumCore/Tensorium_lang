@@ -1,0 +1,83 @@
+# Complete analytic BSSN/Kasner reduction at t = 1 in Cartesian coordinates.
+#
+# This fixture keeps the full BSSN variable set used by a runtime:
+#   chi, alpha, beta^i, B^i, K, gammatilde_ij, gammatilde^ij,
+#   Atilde_ij, Gammahat^i
+# and writes every corresponding RHS output field.
+#
+# The analytic state is spatially homogeneous with zero shift, flat conformal
+# metric, and vacuum Kasner extrinsic curvature:
+#   chi = 1
+#   alpha = 1
+#   beta^i = 0
+#   B^i = 0
+#   K = -1
+#   gammatilde_ij = delta_ij
+#   gammatilde^ij = delta^ij
+#   Atilde_ij = diag(-1/3, -1/3, 2/3)
+#   Gammahat^i = 0
+#
+# On this state all advective, Ricci, connection, and spatial-derivative terms
+# vanish exactly. The full BSSN system reduces to a closed non-trivial ODE
+# oracle that is exact up to floating-point representation.
+field scalar chi
+field scalar alpha
+field vector beta[i]
+field vector B[i]
+field scalar K
+field cov_tensor2 gammatilde[i,j]
+field con_tensor2 gammatildeU[i,j]
+field cov_tensor2 Atilde[i,j]
+field vector Gammahat[i]
+
+field scalar dchi
+field scalar dalpha
+field vector dbeta[i]
+field vector dB[i]
+field scalar dK
+field cov_tensor2 dgammatilde[i,j]
+field cov_tensor2 dAtilde[i,j]
+field vector dGammahat[i]
+
+params { eta }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [3,3,3]
+
+  time {
+    dt = 0.01
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+evolution BSSNKasnerFull {
+  BetaZero = contract(beta[i] * Gammahat[i])
+  GammaDriver[i] = Gammahat[i] - Gammahat[i]
+  MetricZero[i,j] = gammatilde[i,j] - gammatilde[i,j]
+
+  dt dchi = (2.0/3.0) * alpha * chi * K + BetaZero
+  dt dalpha = -2.0 * alpha * K
+  dt dbeta[i] = B[i]
+  dt dB[i] = (3.0/4.0) * GammaDriver[i] - eta * B[i]
+
+  dt dgammatilde[i,j] = -2.0 * alpha * Atilde[i,j] + MetricZero[i,j]
+  dt dK =
+      alpha * (
+        (1.0/3.0) * K * K
+        + contract(
+            Atilde[i,j] * gammatildeU[i,k] * gammatildeU[j,l] * Atilde[k,l]
+          )
+      )
+  dt dAtilde[i,j] =
+      alpha * K * Atilde[i,j]
+    - 2.0 * alpha * contract(Atilde[i,k] * gammatildeU[k,l] * Atilde[l,j])
+  dt dGammahat[i] = GammaDriver[i]
+}

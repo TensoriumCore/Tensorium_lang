@@ -1155,10 +1155,18 @@ struct RhsGridScfPass
       if (fieldIdx >= 0 && static_cast<std::size_t>(fieldIdx) < fieldNames.size())
         writeFieldNames.push_back(fieldNames[static_cast<std::size_t>(fieldIdx)]);
     }
+    std::vector<int64_t> readArgIndices;
+    readArgIndices.reserve(readFieldArgIndices.size());
+    for (int64_t fieldIdx : readFieldArgIndices)
+      readArgIndices.push_back(static_cast<int64_t>(fieldBase) + fieldIdx);
+    outFn->setAttr(tensorium_mlir::abi::kAttrReadArgIndices,
+                   makeI64ArrayAttr(b, readArgIndices));
     outFn->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
                    makeI64ArrayAttr(b, writeArgIndices));
     outFn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
                    makeStringArrayAttr(b, writeFieldNames));
+    outFn->setAttr(tensorium_mlir::abi::kAttrStencilRadius,
+                   b.getI64IntegerAttr(static_cast<int64_t>(stencilRadius)));
 
     llvm::StringMap<Value> paramScalars;
     for (unsigned i = 0; i < paramNames.size(); ++i)
@@ -1344,10 +1352,18 @@ struct RhsGridAffinePass
       if (fieldIdx >= 0 && static_cast<std::size_t>(fieldIdx) < fieldNames.size())
         writeFieldNames.push_back(fieldNames[static_cast<std::size_t>(fieldIdx)]);
     }
+    std::vector<int64_t> readArgIndices;
+    readArgIndices.reserve(readFieldArgIndices.size());
+    for (int64_t fieldIdx : readFieldArgIndices)
+      readArgIndices.push_back(static_cast<int64_t>(fieldBase) + fieldIdx);
+    outFn->setAttr(tensorium_mlir::abi::kAttrReadArgIndices,
+                   makeI64ArrayAttr(b, readArgIndices));
     outFn->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
                    makeI64ArrayAttr(b, writeArgIndices));
     outFn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
                    makeStringArrayAttr(b, writeFieldNames));
+    outFn->setAttr(tensorium_mlir::abi::kAttrStencilRadius,
+                   b.getI64IntegerAttr(static_cast<int64_t>(stencilRadius)));
 
     llvm::StringMap<Value> paramScalars;
     for (unsigned i = 0; i < paramNames.size(); ++i)

@@ -39,8 +39,11 @@ Generated functions expose argument-order metadata:
 - `tensorium.abi.coord_names`: coordinate buffer order (`x,y,z` or `r,theta,phi`)
 - `tensorium.abi.field_names`: field buffer order (matching function args)
 - `tensorium.abi.output_names`: written output field names
+- `tensorium.abi.read_arg_indices`: absolute argument indices read by the kernel
 - `tensorium.abi.write_arg_indices`: absolute argument indices (in function
   signature) written by the kernel
+- `tensorium.abi.stencil_radius`: required interior ghost/radius width for RHS
+  grid kernels, derived from lowered stencil reads
 
 ## C/C++ low-level memref contract
 
@@ -79,6 +82,12 @@ Convenience wrappers accept plain `double *` buffers and compute descriptor
 sizes from ABI metadata and field tensor ranks. For example, a rank-2 spatial
 field uses `9 * n_points` in 3D, and a rank-3 spatial field uses
 `27 * n_points`.
+
+The internal host module descriptor also exposes simulation metadata
+(`dimension`, coordinate system, resolution, spatial scheme/order), field
+descriptors (`name`, variance, rank, component count), and per-kernel
+read/write/stencil metadata. This descriptor is the intended source for future
+C++ runtime and AMReX wrappers.
 
 ## Signature contracts
 

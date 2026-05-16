@@ -15,8 +15,12 @@ inline constexpr const char kAttrParamNames[] = "tensorium.abi.param_names";
 inline constexpr const char kAttrCoordNames[] = "tensorium.abi.coord_names";
 inline constexpr const char kAttrFieldNames[] = "tensorium.abi.field_names";
 inline constexpr const char kAttrOutputNames[] = "tensorium.abi.output_names";
+inline constexpr const char kAttrReadArgIndices[] =
+    "tensorium.abi.read_arg_indices";
 inline constexpr const char kAttrWriteArgIndices[] =
     "tensorium.abi.write_arg_indices";
+inline constexpr const char kAttrStencilRadius[] =
+    "tensorium.abi.stencil_radius";
 inline constexpr const char kAttrMemoryLayout[] = "tensorium.abi.memory_layout";
 inline constexpr const char kAttrMemrefABI[] = "tensorium.abi.memref_abi";
 
@@ -63,4 +67,3 @@ inline StridedMemRef1DF64 makeContiguousMemRef(double *data,
 }
 
 } // namespace tensorium_mlir::abi
-
