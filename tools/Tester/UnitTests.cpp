@@ -8,6 +8,7 @@
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
+#include "tensorium_mlir/Runtime/GeneratedHostStorage.h"
 #include "tensorium_mlir/Runtime/HostBuffers.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
@@ -32,6 +33,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -3178,6 +3180,21 @@ static bool testLoweredGridHostHeaderEmission() {
                  "descriptor tables\n";
     return false;
   }
+  if (header.find("TENSORIUM_HOST_KERNEL_ADAPTER_COUNT") ==
+          std::string::npos ||
+      header.find("tensorium_host_kernel_adapters") == std::string::npos ||
+      header.find("tensorium_invoke_tensorium_rhs_grid_affine") ==
+          std::string::npos) {
+    std::cerr << "FAIL: generated host header missing runtime kernel "
+                 "adapters\n";
+    return false;
+  }
+  if (header.find("TENSORIUM_GENERATED_HOST_DESCRIPTOR_TYPES_H") ==
+      std::string::npos) {
+    std::cerr << "FAIL: generated host header missing shared descriptor "
+                 "type guard\n";
+    return false;
+  }
   if (header.find("double *Christoffel") != std::string::npos ||
       header.find("27 * n_points") != std::string::npos) {
     std::cerr << "FAIL: Ricci host header should not expose local Christoffel "
@@ -3490,6 +3507,250 @@ static bool testHostFieldStoragePlanDeduplicatesBuffers() {
       std::cerr << "FAIL: RHS storage binding memref descriptor mismatch\n";
       return false;
     }
+  }
+
+  return true;
+}
+
+static int testGeneratedHostInvokeAdapter(
+    const double *params, std::int64_t paramCount,
+    const tensorium_memref1d_f64 *buffers, std::int64_t bufferCount,
+    const tensorium_host_grid_desc *grid) {
+  if (!params || !buffers || !grid)
+    return -1;
+  if (paramCount != 2 || bufferCount != 3)
+    return -2;
+  if (grid->nx != 5 || grid->ny != 5 || grid->nz != 5 ||
+      grid->n_points != 125)
+    return -3;
+  if (buffers[0].size != 9 * grid->n_points ||
+      buffers[2].size != 9 * grid->n_points)
+    return -4;
+  buffers[2].aligned[0] = params[0] + params[1] + grid->dx;
+  return 0;
+}
+
+static int testGeneratedHostOneIterationAdapter(
+    const double *params, std::int64_t paramCount,
+    const tensorium_memref1d_f64 *buffers, std::int64_t bufferCount,
+    const tensorium_host_grid_desc *grid) {
+  if (!params || !buffers || !grid)
+    return -1;
+  if (paramCount != 1 || bufferCount != 2)
+    return -2;
+  if (grid->nx != 3 || grid->ny != 1 || grid->nz != 1 ||
+      grid->n_points != 3)
+    return -3;
+  if (buffers[0].size != grid->n_points ||
+      buffers[1].size != grid->n_points)
+    return -4;
+  for (std::int64_t p = 0; p < grid->n_points; ++p)
+    buffers[1].aligned[p] = params[0] + buffers[0].aligned[p];
+  return 0;
+}
+
+static bool testGeneratedHostStorageConsumesDescriptorTables() {
+  const tensorium_host_kernel_desc kernels[] = {
+      {"tensorium_init_grid_affine", "tensorium_call_init_grid_affine",
+       "init_grid_affine", 0, 4, 0},
+      {"tensorium_rhs_grid_affine", "tensorium_call_rhs_grid_affine",
+       "rhs_grid_affine", 4, 3, 1},
+  };
+  const tensorium_host_buffer_desc buffers[] = {
+      {"tensorium_init_grid_affine", "r", "r", 0, 1,
+       TENSORIUM_HOST_BUFFER_ROLE_COORDINATE, TENSORIUM_HOST_ARG_ACCESS_READ, 0,
+       0, 0, 1},
+      {"tensorium_init_grid_affine", "theta", "theta", 0, 2,
+       TENSORIUM_HOST_BUFFER_ROLE_COORDINATE, TENSORIUM_HOST_ARG_ACCESS_READ, 0,
+       0, 0, 1},
+      {"tensorium_init_grid_affine", "alpha", "alpha", 0, 3,
+       TENSORIUM_HOST_BUFFER_ROLE_OUTPUT, TENSORIUM_HOST_ARG_ACCESS_WRITE, 0,
+       0, 0, 1},
+      {"tensorium_init_grid_affine", "gamma", "gamma", 0, 4,
+       TENSORIUM_HOST_BUFFER_ROLE_OUTPUT, TENSORIUM_HOST_ARG_ACCESS_WRITE, 0,
+       2, 2, 9},
+      {"tensorium_rhs_grid_affine", "gamma", "gamma", 1, 6,
+       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_READ, 0, 2,
+       2, 9},
+      {"tensorium_rhs_grid_affine", "alpha", "alpha", 1, 7,
+       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_READ, 0, 0,
+       0, 1},
+      {"tensorium_rhs_grid_affine", "Ricci", "Ricci", 1, 8,
+       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_WRITE, 0, 2,
+       2, 9},
+  };
+
+  tensorium_mlir::runtime::GeneratedHostStorage storage(
+      std::span<const tensorium_host_kernel_desc>(kernels, 2),
+      std::span<const tensorium_host_buffer_desc>(buffers, 7), {5, 5, 5});
+
+  if (storage.nPoints() != 125 || storage.dataAllocationCount() != 1 ||
+      storage.bufferCount() != 5 || storage.totalScalars() != 21 * 125) {
+    std::cerr << "FAIL: generated host storage allocation plan mismatch\n";
+    return false;
+  }
+
+  const auto *alpha = storage.findBuffer("field:alpha");
+  const auto *gamma = storage.findBuffer("field:gamma");
+  const auto *ricci = storage.findBuffer("field:Ricci");
+  if (!alpha || !gamma || !ricci ||
+      alpha->access != TENSORIUM_HOST_ARG_ACCESS_READWRITE ||
+      gamma->access != TENSORIUM_HOST_ARG_ACCESS_READWRITE ||
+      ricci->access != TENSORIUM_HOST_ARG_ACCESS_WRITE ||
+      gamma->componentCount != 9 || ricci->scalarCount != 9 * 125) {
+    std::cerr << "FAIL: generated host storage buffer metadata mismatch\n";
+    return false;
+  }
+
+  const auto *rhsPlan = storage.findKernelPlan("tensorium_rhs_grid_affine");
+  if (!rhsPlan || rhsPlan->stencilRadius != 1 ||
+      rhsPlan->buffers.size() != 3 || rhsPlan->buffers[0].argIndex != 6) {
+    std::cerr << "FAIL: generated host storage RHS binding plan mismatch\n";
+    return false;
+  }
+
+  auto ref = storage.memref(rhsPlan->buffers[0]);
+  if (ref.allocated != storage.data(rhsPlan->buffers[0].storageIndex) ||
+      ref.aligned != storage.data(rhsPlan->buffers[0].storageIndex) ||
+      ref.offset != 0 || ref.size != 9 * storage.nPoints() ||
+      ref.stride != 1) {
+    std::cerr << "FAIL: generated host storage memref binding mismatch\n";
+    return false;
+  }
+
+  const tensorium_host_kernel_adapter_desc adapter = {
+      "tensorium_rhs_grid_affine", &testGeneratedHostInvokeAdapter};
+  const double params[] = {1.0, 2.0};
+  storage.invoke(adapter, std::span<const double>(params, 2),
+                 {0.25, 0.15, 0.2});
+  if (storage.data("field:Ricci")[0] != 3.25) {
+    std::cerr << "FAIL: generated host storage generic invoke mismatch\n";
+    return false;
+  }
+
+  storage.data("field:gamma")[0] = 42.0;
+  if (storage.scalars()[gamma->scalarOffset] != 42.0) {
+    std::cerr << "FAIL: generated host storage keyed data view mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testGeneratedHostStorageRunsOneEulerIteration() {
+  const tensorium_host_kernel_desc kernels[] = {
+      {"tensorium_rhs_grid_affine", "tensorium_call_rhs_grid_affine",
+       "rhs_grid_affine", 0, 2, 0},
+  };
+  const tensorium_host_buffer_desc buffers[] = {
+      {"tensorium_rhs_grid_affine", "phi", "phi", 0, 6,
+       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_READ, 0, 0,
+       0, 1},
+      {"tensorium_rhs_grid_affine", "dphi", "dphi", 0, 7,
+       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_WRITE, 0, 0,
+       0, 1},
+  };
+
+  tensorium_mlir::runtime::GeneratedHostStorage storage(
+      std::span<const tensorium_host_kernel_desc>(kernels, 1),
+      std::span<const tensorium_host_buffer_desc>(buffers, 2), {3, 1, 1});
+
+  double *phi = storage.data("field:phi");
+  phi[0] = 1.0;
+  phi[1] = 2.0;
+  phi[2] = 4.0;
+
+  const auto updates = storage.eulerUpdatePairsFromDerivativePrefix();
+  if (updates.size() != 1 || updates.front().stateKey != "field:phi" ||
+      updates.front().derivativeKey != "field:dphi" ||
+      updates.front().scalarCount != 3) {
+    std::cerr << "FAIL: generated host one-step Euler plan mismatch\n";
+    return false;
+  }
+
+  const tensorium_host_kernel_adapter_desc adapter = {
+      "tensorium_rhs_grid_affine", &testGeneratedHostOneIterationAdapter};
+  const double params[] = {2.0};
+  storage.invoke(adapter, std::span<const double>(params, 1),
+                 {1.0, 1.0, 1.0});
+  storage.applyEulerUpdate(updates, 0.25);
+
+  const double *dphi = storage.data("field:dphi");
+  if (dphi[0] != 3.0 || dphi[1] != 4.0 || dphi[2] != 6.0 ||
+      phi[0] != 1.75 || phi[1] != 3.0 || phi[2] != 5.5) {
+    std::cerr << "FAIL: generated host one-step Euler result mismatch\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testGeneratedHostStorageEulerUpdatePairs() {
+  const tensorium_host_buffer_desc buffers[] = {
+      {"runtime_step", "phi", "phi", 0, 0, TENSORIUM_HOST_BUFFER_ROLE_FIELD,
+       TENSORIUM_HOST_ARG_ACCESS_READWRITE, 0, 0, 0, 1},
+      {"runtime_step", "dphi", "dphi", 0, 1, TENSORIUM_HOST_BUFFER_ROLE_FIELD,
+       TENSORIUM_HOST_ARG_ACCESS_WRITE, 0, 0, 0, 1},
+      {"runtime_step", "V", "V", 0, 2, TENSORIUM_HOST_BUFFER_ROLE_FIELD,
+       TENSORIUM_HOST_ARG_ACCESS_READWRITE, 1, 0, 1, 3},
+      {"runtime_step", "dV", "dV", 0, 3, TENSORIUM_HOST_BUFFER_ROLE_FIELD,
+       TENSORIUM_HOST_ARG_ACCESS_WRITE, 1, 0, 1, 3},
+      {"runtime_step", "Atilde", "Atilde", 0, 4,
+       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_READWRITE,
+       0, 2, 2, 9},
+      {"runtime_step", "DAtilde", "DAtilde", 0, 5,
+       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_WRITE, 1, 2,
+       3, 27},
+  };
+
+  tensorium_mlir::runtime::GeneratedHostStorage storage(
+      std::span<const tensorium_host_kernel_desc>{},
+      std::span<const tensorium_host_buffer_desc>(buffers, 6), {2, 1, 1});
+
+  double *phi = storage.data("field:phi");
+  double *dphi = storage.data("field:dphi");
+  phi[0] = 1.0;
+  phi[1] = 2.0;
+  dphi[0] = 0.25;
+  dphi[1] = -0.5;
+
+  double *v = storage.data("field:V");
+  double *dv = storage.data("field:dV");
+  for (int i = 0; i < 6; ++i) {
+    v[i] = 10.0 + static_cast<double>(i);
+    dv[i] = 1.0 + static_cast<double>(i);
+  }
+
+  double *atilde = storage.data("field:Atilde");
+  double *dAtilde = storage.data("field:DAtilde");
+  atilde[0] = 7.0;
+  dAtilde[0] = 100.0;
+
+  const auto updates = storage.eulerUpdatePairsFromDerivativePrefix();
+  if (updates.size() != 2) {
+    std::cerr << "FAIL: generated host Euler update pair count mismatch\n";
+    return false;
+  }
+
+  bool sawPhi = false;
+  bool sawV = false;
+  for (const auto &update : updates) {
+    sawPhi |= update.stateKey == "field:phi" &&
+              update.derivativeKey == "field:dphi" &&
+              update.scalarCount == 2;
+    sawV |= update.stateKey == "field:V" &&
+            update.derivativeKey == "field:dV" && update.scalarCount == 6;
+  }
+  if (!sawPhi || !sawV) {
+    std::cerr << "FAIL: generated host Euler update pair metadata mismatch\n";
+    return false;
+  }
+
+  storage.applyEulerUpdate(updates, 0.5);
+  if (phi[0] != 1.125 || phi[1] != 1.75 || v[0] != 10.5 ||
+      v[5] != 18.0 || atilde[0] != 7.0) {
+    std::cerr << "FAIL: generated host Euler update value mismatch\n";
+    return false;
   }
 
   return true;
@@ -4919,6 +5180,12 @@ int main() {
        &testLoweredGridHostABIDescriptor},
       {"testHostFieldStoragePlanDeduplicatesBuffers",
        &testHostFieldStoragePlanDeduplicatesBuffers},
+      {"testGeneratedHostStorageConsumesDescriptorTables",
+       &testGeneratedHostStorageConsumesDescriptorTables},
+      {"testGeneratedHostStorageRunsOneEulerIteration",
+       &testGeneratedHostStorageRunsOneEulerIteration},
+      {"testGeneratedHostStorageEulerUpdatePairs",
+       &testGeneratedHostStorageEulerUpdatePairs},
       {"testCompilerApiCompileFileToLLVMIR",
        &testCompilerApiCompileFileToLLVMIR},
       {"testCompilerApiSymbolicWarningPropagation",

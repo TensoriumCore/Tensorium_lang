@@ -307,7 +307,9 @@ std::size_t hostBufferDescriptorCount(const HostModuleABI &abi) {
 }
 
 void emitRuntimeDescriptorTypes(std::ostringstream &os) {
-  os << "typedef enum tensorium_host_buffer_role {\n"
+  os << "#ifndef TENSORIUM_GENERATED_HOST_DESCRIPTOR_TYPES_H\n"
+     << "#define TENSORIUM_GENERATED_HOST_DESCRIPTOR_TYPES_H\n\n"
+     << "typedef enum tensorium_host_buffer_role {\n"
      << "  TENSORIUM_HOST_BUFFER_ROLE_COORDINATE = 1,\n"
      << "  TENSORIUM_HOST_BUFFER_ROLE_FIELD = 2,\n"
      << "  TENSORIUM_HOST_BUFFER_ROLE_OUTPUT = 3\n"
@@ -338,7 +340,31 @@ void emitRuntimeDescriptorTypes(std::ostringstream &os) {
      << "  int64_t down;\n"
      << "  int64_t rank;\n"
      << "  int64_t component_count;\n"
-     << "} tensorium_host_buffer_desc;\n\n";
+     << "} tensorium_host_buffer_desc;\n\n"
+     << "#endif /* TENSORIUM_GENERATED_HOST_DESCRIPTOR_TYPES_H */\n\n";
+}
+
+void emitRuntimeInvokeTypes(std::ostringstream &os) {
+  os << "#ifndef TENSORIUM_GENERATED_HOST_INVOKE_TYPES_H\n"
+     << "#define TENSORIUM_GENERATED_HOST_INVOKE_TYPES_H\n\n"
+     << "typedef struct tensorium_host_grid_desc {\n"
+     << "  int64_t nx;\n"
+     << "  int64_t ny;\n"
+     << "  int64_t nz;\n"
+     << "  double dx;\n"
+     << "  double dy;\n"
+     << "  double dz;\n"
+     << "  int64_t n_points;\n"
+     << "} tensorium_host_grid_desc;\n\n"
+     << "typedef int (*tensorium_host_kernel_invoke_fn)(\n"
+     << "    const double *params, int64_t param_count,\n"
+     << "    const tensorium_memref1d_f64 *buffers, int64_t buffer_count,\n"
+     << "    const tensorium_host_grid_desc *grid);\n\n"
+     << "typedef struct tensorium_host_kernel_adapter_desc {\n"
+     << "  const char *symbol_name;\n"
+     << "  tensorium_host_kernel_invoke_fn invoke;\n"
+     << "} tensorium_host_kernel_adapter_desc;\n\n"
+     << "#endif /* TENSORIUM_GENERATED_HOST_INVOKE_TYPES_H */\n\n";
 }
 
 void emitRuntimeDescriptors(std::ostringstream &os, const HostModuleABI &abi) {
@@ -392,6 +418,103 @@ void emitRuntimeDescriptors(std::ostringstream &os, const HostModuleABI &abi) {
       }
     }
     os << "\n";
+  }
+  os << "};\n\n";
+}
+
+bool isRuntimeInvokableGridKernel(const HostKernelABI &kernel) {
+  return kernel.kind == tensorium_mlir::abi::kKindInitGridScf ||
+         kernel.kind == tensorium_mlir::abi::kKindInitGridAffine ||
+         kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
+         kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine;
+}
+
+std::string adapterNameFor(const HostKernelABI &kernel) {
+  return "tensorium_invoke_" +
+         makeHostCIdentifier(kernel.symbolName, "kernel");
+}
+
+void emitMemrefRawArgs(std::ostringstream &os, llvm::StringRef arrayName,
+                       std::int64_t index, bool &first) {
+  for (llvm::StringRef member : {"allocated", "aligned", "offset", "size",
+                                 "stride"}) {
+    appendComma(os, first);
+    os << arrayName.str() << "[" << index << "]." << member.str();
+  }
+}
+
+void emitRuntimeInvokeAdapter(std::ostringstream &os,
+                              const HostKernelABI &kernel) {
+  if (!isRuntimeInvokableGridKernel(kernel))
+    return;
+
+  os << "static inline int " << adapterNameFor(kernel) << "(\n"
+     << "    const double *params, int64_t param_count,\n"
+     << "    const tensorium_memref1d_f64 *buffers, int64_t buffer_count,\n"
+     << "    const tensorium_host_grid_desc *grid) {\n"
+     << "  if (param_count != "
+     << static_cast<std::int64_t>(kernel.params.size())
+     << " || buffer_count != "
+     << static_cast<std::int64_t>(kernel.buffers.size()) << ")\n"
+     << "    return -1;\n"
+     << "  if (!grid)\n"
+     << "    return -2;\n";
+  if (!kernel.params.empty())
+    os << "  if (!params)\n"
+       << "    return -3;\n";
+  if (!kernel.buffers.empty())
+    os << "  if (!buffers)\n"
+       << "    return -4;\n";
+  if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
+      kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine) {
+    os << "  if (grid->nx <= 0 || grid->ny <= 0 || grid->nz <= 0 || "
+          "grid->n_points <= 0)\n"
+       << "    return -5;\n";
+  }
+
+  os << "  " << kernel.symbolName << "(";
+  bool first = true;
+  if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
+      kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine) {
+    for (llvm::StringRef expr : {"grid->nx", "grid->ny", "grid->nz",
+                                 "grid->dx", "grid->dy", "grid->dz"}) {
+      appendComma(os, first);
+      os << expr.str();
+    }
+  }
+  for (std::size_t i = 0; i < kernel.params.size(); ++i) {
+    appendComma(os, first);
+    os << "params[" << i << "]";
+  }
+  for (std::size_t i = 0; i < kernel.buffers.size(); ++i)
+    emitMemrefRawArgs(os, "buffers", static_cast<std::int64_t>(i), first);
+  os << ");\n"
+     << "  return 0;\n"
+     << "}\n\n";
+}
+
+void emitRuntimeInvokeAdapters(std::ostringstream &os,
+                               const HostModuleABI &abi) {
+  os << "#define TENSORIUM_HOST_KERNEL_ADAPTER_COUNT " << abi.kernels.size()
+     << "\n\n";
+  for (const auto &kernel : abi.kernels)
+    emitRuntimeInvokeAdapter(os, kernel);
+
+  os << "static const tensorium_host_kernel_adapter_desc "
+        "tensorium_host_kernel_adapters["
+     << (abi.kernels.empty() ? 1 : abi.kernels.size()) << "] = {\n";
+  if (abi.kernels.empty()) {
+    os << "  {0, 0}\n";
+  } else {
+    for (std::size_t i = 0; i < abi.kernels.size(); ++i) {
+      const auto &kernel = abi.kernels[i];
+      os << "  {" << cStringLiteral(kernel.symbolName) << ", ";
+      if (isRuntimeInvokableGridKernel(kernel))
+        os << "&" << adapterNameFor(kernel);
+      else
+        os << "0";
+      os << "}" << (i + 1 == abi.kernels.size() ? "\n" : ",\n");
+    }
   }
   os << "};\n\n";
 }
@@ -499,6 +622,8 @@ std::string renderHostHeader(const HostModuleABI &abi) {
      << "#define TENSORIUM_GENERATED_HOST_H\n\n"
      << "#include <stdint.h>\n"
      << "#include <stdio.h>\n\n"
+     << "#ifndef TENSORIUM_GENERATED_HOST_MEMREF_TYPES_H\n"
+     << "#define TENSORIUM_GENERATED_HOST_MEMREF_TYPES_H\n\n"
      << "typedef struct tensorium_memref1d_f64 {\n"
      << "  double *allocated;\n"
      << "  double *aligned;\n"
@@ -510,9 +635,11 @@ std::string renderHostHeader(const HostModuleABI &abi) {
         "tensorium_make_memref1d_f64(double *data, int64_t size) {\n"
      << "  tensorium_memref1d_f64 ref = {data, data, 0, size, 1};\n"
      << "  return ref;\n"
-     << "}\n\n";
+     << "}\n\n"
+     << "#endif /* TENSORIUM_GENERATED_HOST_MEMREF_TYPES_H */\n\n";
 
   emitRuntimeDescriptorTypes(os);
+  emitRuntimeInvokeTypes(os);
   emitRuntimeDescriptors(os, abi);
 
   os
@@ -527,6 +654,8 @@ std::string renderHostHeader(const HostModuleABI &abi) {
     emitConvenienceWrapper(os, kernel, abi.componentCounts);
     os << "\n";
   }
+
+  emitRuntimeInvokeAdapters(os, abi);
 
   emitPrintRequestHelper(os, abi);
   if (!abi.prints.empty())

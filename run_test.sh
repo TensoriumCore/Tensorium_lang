@@ -683,6 +683,7 @@ bash tools/dev/test_schwarzschild_ricci_ll.sh
 bash tools/dev/test_schwarzschild_hamiltonian_ll.sh
 bash tools/dev/test_schwarzschild_bssn_constraints_ll.sh
 bash tools/dev/test_runtime_uniform_schwarzschild_bssn.sh
+bash tools/dev/test_runtime_bssn_kasner_euler_iteration.sh
 bash tools/dev/test_covariant_rank1_ll.sh
 bash tools/dev/test_contravariant_all_cases_ll.sh
 bash tools/dev/test_extern_scalar_ll.sh

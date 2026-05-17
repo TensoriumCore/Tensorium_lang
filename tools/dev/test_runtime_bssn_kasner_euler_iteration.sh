@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DRIVER="$ROOT_DIR/build/tools/driver/Tensorium_cc"
-RUNNER_SRC="$ROOT_DIR/tools/dev/runtime_uniform_schwarzschild_bssn.cpp"
-FIXTURE="$ROOT_DIR/tests/fixtures/gr/schwarzschild_bssn_constraints_analytic_3d.tn"
+RUNNER_SRC="$ROOT_DIR/tools/dev/runtime_bssn_kasner_euler_iteration.cpp"
+FIXTURE="$ROOT_DIR/tests/fixtures/gr/bssn_kasner_full_3d.tn"
 
 if [[ -n "${CLANG:-}" ]]; then
   CLANG_BIN="$CLANG"
@@ -22,10 +22,10 @@ else
 fi
 CXX_BIN="${CXX:-c++}"
 
-LL_PATH="/tmp/tensorium_runtime_uniform_schwarzschild_bssn.ll"
-OBJ_PATH="/tmp/tensorium_runtime_uniform_schwarzschild_bssn.o"
-EXE_PATH="/tmp/tensorium_runtime_uniform_schwarzschild_bssn_runner"
-HOST_HEADER="/tmp/tensorium_runtime_uniform_schwarzschild_bssn_host.h"
+LL_PATH="/tmp/tensorium_runtime_bssn_kasner_euler_iteration.ll"
+OBJ_PATH="/tmp/tensorium_runtime_bssn_kasner_euler_iteration.o"
+EXE_PATH="/tmp/tensorium_runtime_bssn_kasner_euler_iteration_runner"
+HOST_HEADER="/tmp/tensorium_runtime_bssn_kasner_euler_iteration_host.h"
 
 if [[ ! -x "$DRIVER" ]]; then
   echo "error: missing driver binary: $DRIVER" >&2
@@ -40,13 +40,9 @@ if [[ ! -f "$RUNNER_SRC" ]]; then
   exit 2
 fi
 
-echo "[runtime-uniform] generating LLVM IR and host header: $LL_PATH"
+echo "[runtime-kasner-euler] generating LLVM IR and host header: $LL_PATH"
 "$DRIVER" \
-  --tensorium-metric-lower \
-  --tensorium-init-std-lower \
-  --tensorium-init-grid-affine-lower \
   --tensorium-rhs-grid-affine-lower \
-  --tensorium-stencil-lower \
   --tensorium-strip-source-funcs \
   --emit-llvm "$LL_PATH" \
   --emit-host-header "$HOST_HEADER" \
@@ -61,16 +57,16 @@ if [[ ! -s "$HOST_HEADER" ]]; then
   exit 2
 fi
 
-echo "[runtime-uniform] compiling LLVM object"
+echo "[runtime-kasner-euler] compiling LLVM object"
 if command -v "$LLC_BIN" >/dev/null 2>&1; then
   "$LLC_BIN" -filetype=obj "$LL_PATH" -o "$OBJ_PATH"
 else
   "$CLANG_BIN" -c "$LL_PATH" -o "$OBJ_PATH"
 fi
 
-echo "[runtime-uniform] compiling uniform runtime runner"
+echo "[runtime-kasner-euler] compiling runtime Euler iteration runner"
 "$CXX_BIN" -O0 -std=c++20 -I "$ROOT_DIR/include" -include "$HOST_HEADER" \
   "$RUNNER_SRC" "$OBJ_PATH" -lm -o "$EXE_PATH"
 
-echo "[runtime-uniform] running uniform runtime executable"
+echo "[runtime-kasner-euler] running runtime Euler iteration executable"
 "$EXE_PATH"

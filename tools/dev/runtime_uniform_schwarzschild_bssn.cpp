@@ -1,13 +1,13 @@
+#include "tensorium_mlir/Runtime/GeneratedHostStorage.h"
+
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <span>
 #include <stdexcept>
-#include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
 
 #ifndef TENSORIUM_GENERATED_HOST_H
 #error "compile this runner with -include <generated Tensorium host header>"
@@ -15,72 +15,7 @@
 
 namespace {
 
-struct StorageBuffer {
-  std::string key;
-  std::int64_t componentCount = 1;
-  std::int64_t scalarCount = 0;
-  std::int64_t scalarOffset = 0;
-};
-
-class GeneratedUniformStorage {
-public:
-  explicit GeneratedUniformStorage(std::int64_t nPoints) : nPoints_(nPoints) {
-    if (nPoints_ <= 0)
-      throw std::invalid_argument("nPoints must be positive");
-
-    std::int64_t total = 0;
-    for (std::int64_t i = 0; i < TENSORIUM_HOST_BUFFER_COUNT; ++i) {
-      const tensorium_host_buffer_desc &desc = tensorium_host_buffers[i];
-      const std::string key = storageKey(desc);
-      auto found = indexByKey_.find(key);
-      if (found != indexByKey_.end()) {
-        StorageBuffer &existing = buffers_[found->second];
-        if (existing.componentCount != desc.component_count)
-          throw std::runtime_error("component count mismatch for " + key);
-        continue;
-      }
-
-      StorageBuffer buffer;
-      buffer.key = key;
-      buffer.componentCount = desc.component_count;
-      buffer.scalarCount = desc.component_count * nPoints_;
-      buffer.scalarOffset = total;
-      total += buffer.scalarCount;
-
-      const std::size_t index = buffers_.size();
-      indexByKey_.emplace(buffer.key, index);
-      buffers_.push_back(std::move(buffer));
-    }
-
-    arena_.assign(static_cast<std::size_t>(total), 0.0);
-  }
-
-  std::size_t dataAllocationCount() const { return arena_.empty() ? 0u : 1u; }
-  std::size_t bufferCount() const { return buffers_.size(); }
-  std::int64_t totalScalars() const {
-    return static_cast<std::int64_t>(arena_.size());
-  }
-
-  double *data(const char *key) {
-    auto found = indexByKey_.find(key);
-    if (found == indexByKey_.end())
-      throw std::runtime_error(std::string("missing runtime buffer: ") + key);
-    const StorageBuffer &buffer = buffers_[found->second];
-    return arena_.data() + buffer.scalarOffset;
-  }
-
-private:
-  static std::string storageKey(const tensorium_host_buffer_desc &desc) {
-    const char *prefix =
-        desc.role == TENSORIUM_HOST_BUFFER_ROLE_COORDINATE ? "coord:" : "field:";
-    return std::string(prefix) + desc.name;
-  }
-
-  std::int64_t nPoints_ = 0;
-  std::vector<double> arena_;
-  std::vector<StorageBuffer> buffers_;
-  std::unordered_map<std::string, std::size_t> indexByKey_;
-};
+using GeneratedHostStorage = tensorium_mlir::runtime::GeneratedHostStorage;
 
 struct RuntimeViews {
   double *r = nullptr;
@@ -116,7 +51,7 @@ struct RuntimeViews {
   double *Momentum = nullptr;
 };
 
-RuntimeViews bindViews(GeneratedUniformStorage &storage) {
+RuntimeViews bindViews(GeneratedHostStorage &storage) {
   RuntimeViews v;
   v.r = storage.data("coord:r");
   v.theta = storage.data("coord:theta");
@@ -309,14 +244,25 @@ int main() {
   const double dphi = 0.2;
 
   try {
-    GeneratedUniformStorage storage(n);
+    GeneratedHostStorage storage(
+        std::span<const tensorium_host_kernel_desc>(
+            tensorium_host_kernels, TENSORIUM_HOST_KERNEL_COUNT),
+        std::span<const tensorium_host_buffer_desc>(
+            tensorium_host_buffers, TENSORIUM_HOST_BUFFER_COUNT),
+        {nx, ny, nz});
     RuntimeViews v = bindViews(storage);
+    const auto eulerUpdates = storage.eulerUpdatePairsFromDerivativePrefix();
 
     if (storage.dataAllocationCount() != 1 || storage.bufferCount() != 31) {
       std::fprintf(stderr,
                    "runtime storage layout mismatch: allocations=%zu "
                    "unique_buffers=%zu\n",
                    storage.dataAllocationCount(), storage.bufferCount());
+      return 2;
+    }
+    if (eulerUpdates.size() != 8) {
+      std::fprintf(stderr, "runtime Euler update plan mismatch: updates=%zu\n",
+                   eulerUpdates.size());
       return 2;
     }
 
@@ -334,8 +280,12 @@ int main() {
       }
     }
 
-    tensorium_call_init_grid_affine(m, v.r, v.theta, v.phi, v.alpha, v.gamma,
-                                    v.gammaU, n);
+    const std::span<const tensorium_host_kernel_adapter_desc> adapters(
+        tensorium_host_kernel_adapters, TENSORIUM_HOST_KERNEL_ADAPTER_COUNT);
+    const double initParams[] = {m};
+    storage.invoke(adapters, "tensorium_init_grid_affine",
+                   std::span<const double>(initParams, 1),
+                   {dr, dtheta, dphi});
     for (std::int64_t p = 0; p < n; ++p) {
       for (int c = 0; c < 9; ++c) {
         const std::int64_t idx = (std::int64_t)c * n + p;
@@ -346,19 +296,17 @@ int main() {
       }
     }
 
-    tensorium_call_rhs_grid_affine(
-        nx, ny, nz, dr, dtheta, dphi, m, eta, v.g, v.gU, v.alpha, v.gamma,
-        v.gammaU, v.chi, v.beta, v.B, v.K, v.gammatilde, v.gammatildeU,
-        v.Atilde, v.Gammahat, v.Rcoord, v.radialBasis, v.dchi, v.dalpha,
-        v.dbeta, v.dB, v.dK, v.dgammatilde, v.dAtilde, v.dGammahat,
-        v.RicciAnalytic, v.HessianAlpha, v.DAtilde, v.Hamiltonian,
-        v.Momentum);
+    const double rhsParams[] = {m, eta};
+    storage.invoke(adapters, "tensorium_rhs_grid_affine",
+                   std::span<const double>(rhsParams, 2), {dr, dtheta, dphi});
+    storage.applyEulerUpdate(eulerUpdates, 0.001);
 
     std::printf("[runtime-uniform] generated descriptor buffers=%lld "
-                "unique_buffers=%zu total_scalars=%lld arena_allocations=%zu\n",
+                "unique_buffers=%zu total_scalars=%lld arena_allocations=%zu "
+                "euler_updates=%zu\n",
                 (long long)TENSORIUM_HOST_BUFFER_COUNT, storage.bufferCount(),
                 (long long)storage.totalScalars(),
-                storage.dataAllocationCount());
+                storage.dataAllocationCount(), eulerUpdates.size());
     std::printf("[runtime-uniform] center r=%.17g theta=%.17g "
                 "Hamiltonian=%.17g Momentum=[%.17g, %.17g, %.17g]\n",
                 v.r[center], v.theta[center], v.Hamiltonian[center],

@@ -108,12 +108,28 @@ consume directly:
   plan from the ABI and a uniform grid shape. It allocates one contiguous scalar
   arena for all logical buffers, then exposes stable per-kernel binding plans and
   rank-1 memref descriptors into that arena.
+- `tensorium_mlir::runtime::GeneratedHostStorage` provides the same uniform-grid
+  storage plan from generated C descriptor tables, so standalone runners can
+  consume `tensorium_host_kernels` / `tensorium_host_buffers` without linking
+  the compiler-side MLIR ABI builder.
+- Generated host headers also emit `tensorium_host_kernel_adapters`, a uniform
+  invocation table for grid kernels. `GeneratedHostStorage::invoke(...)` uses
+  those adapters to bind runtime-owned buffers by descriptor order instead of
+  requiring callers to spell every lowered field argument manually.
+- `GeneratedHostStorage` also exposes a descriptor-level Euler helper for
+  standalone runtime experiments: `eulerUpdatePairsFromDerivativePrefix()`
+  discovers writable derivative fields named `dX` and maps them to state field
+  `X`, then `applyEulerUpdate(...)` performs `X += dt * dX` over the runtime
+  arena. This is intentionally minimal and should be replaced by the target
+  runtime's integrator once AMReX owns the storage.
 
 Generated host headers also expose the same runtime contract in C-compatible
 tables:
 
 - `TENSORIUM_HOST_KERNEL_COUNT` / `tensorium_host_kernels`;
 - `TENSORIUM_HOST_BUFFER_COUNT` / `tensorium_host_buffers`;
+- `TENSORIUM_HOST_KERNEL_ADAPTER_COUNT` /
+  `tensorium_host_kernel_adapters`;
 - `tensorium_host_buffer_desc::component_count`, `role`, `access`, and
   `arg_index` are enough for a lightweight runtime to deduplicate buffers and
   bind generated wrappers without reconstructing tensor sizes by hand.
