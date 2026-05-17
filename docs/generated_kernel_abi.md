@@ -89,6 +89,48 @@ descriptors (`name`, variance, rank, component count), and per-kernel
 read/write/stencil metadata. This descriptor is the intended source for future
 C++ runtime and AMReX wrappers.
 
+## Runtime buffer contract
+
+`HostModuleABI` now materializes the buffer-level contract that a runtime should
+consume directly:
+
+- each `HostFieldABI` records field name, variance (`up/down`), rank, and
+  component count per grid point;
+- each `HostKernelABI` records raw scalar/memref arguments and a `buffers`
+  table;
+- each `HostBufferABI` records logical buffer name, C-safe name, absolute
+  function argument index, role (`Coordinate`, `Field`, `Output`), access
+  (`Read`, `Write`, `ReadWrite`, `None`), variance/rank, and component count;
+- `requiredBufferScalars(buffer, nPoints)` returns the exact scalar allocation
+  size required by SoA component-major layout;
+- `validateHostModuleABI(abi)` checks the descriptor before a runtime trusts it.
+- `tensorium_mlir::runtime::HostFieldStorage` builds a deduplicated storage
+  plan from the ABI and a uniform grid shape. It allocates one contiguous scalar
+  arena for all logical buffers, then exposes stable per-kernel binding plans and
+  rank-1 memref descriptors into that arena.
+
+Runtime code should use this contract instead of reconstructing argument order
+from names. For AMReX this means:
+
+- allocate one `MultiFab` component group per logical field or map component
+  ranges according to `componentCount`;
+- allocate at least `stencilRadius` ghost cells for RHS kernels;
+- bind read/write buffers according to `HostBufferABI::access`;
+- reject descriptors with non-empty `validateHostModuleABI` diagnostics.
+
+Generated grid loops should not perform per-point heap allocation. Scratch
+buffers used by fallback init-grid lowering are hoisted outside the generated
+loop and reused for every point. RHS old-state snapshots, when required by
+read/write overlap, are full-grid temporaries allocated once before the loop and
+released after it.
+
+The development probe can print this contract for a fixture:
+
+```bash
+build/tools/runtime/Tensorium_abi_probe \
+  tests/fixtures/gr/schwarzschild_bssn_constraints_analytic_3d.tn
+```
+
 ## Signature contracts
 
 ### `tensorium_init_point`

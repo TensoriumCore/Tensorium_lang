@@ -16,6 +16,10 @@ namespace tensorium_mlir {
 
 enum class HostArgKind { F64, Index, Memref1DF64 };
 
+enum class HostBufferRole { Coordinate, Field, Output };
+
+enum class HostArgAccess { None, Read, Write, ReadWrite };
+
 struct HostArgABI {
   HostArgKind kind = HostArgKind::F64;
   std::string cName;
@@ -29,11 +33,24 @@ struct HostFieldABI {
   std::int64_t componentCount = 1;
 };
 
+struct HostBufferABI {
+  std::string name;
+  std::string cName;
+  std::int64_t argIndex = -1;
+  HostBufferRole role = HostBufferRole::Field;
+  HostArgAccess access = HostArgAccess::None;
+  int up = 0;
+  int down = 0;
+  int rank = 0;
+  std::int64_t componentCount = 1;
+};
+
 struct HostKernelABI {
   std::string symbolName;
   std::string wrapperName;
   std::string kind;
   std::vector<HostArgABI> rawArgs;
+  std::vector<HostBufferABI> buffers;
   std::vector<std::string> params;
   std::vector<std::string> coords;
   std::vector<std::string> fields;
@@ -65,6 +82,11 @@ struct HostModuleABI {
 
 std::string makeHostCIdentifier(std::string_view input,
                                 std::string_view fallback);
+
+std::int64_t requiredBufferScalars(const HostBufferABI &buffer,
+                                   std::int64_t nPoints);
+
+std::vector<std::string> validateHostModuleABI(const HostModuleABI &abi);
 
 HostModuleABI buildHostModuleABI(const tensorium::backend::ModuleIR &module,
                                  mlir::ModuleOp moduleOp);

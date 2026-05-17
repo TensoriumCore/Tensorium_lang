@@ -354,6 +354,21 @@ struct InitGridAffinePass
     const unsigned initPointFirstOutputArg = gridArgIdx - 3;
     auto constantStores =
         collectConstantInitPointStores(initPoint, initPointFirstOutputArg);
+    const bool canInlineInitPoint =
+        !constantStores &&
+        canInlineInitPointBody(initPoint, initPointFirstOutputArg);
+    const bool needsScratchBuffers = !constantStores && !canInlineInitPoint;
+
+    Value tmpAlpha;
+    Value tmpGamma;
+    Value tmpGammaU;
+    if (needsScratchBuffers) {
+      auto mem1Ty = MemRefType::get({1}, f64);
+      auto mem9Ty = MemRefType::get({9}, f64);
+      tmpAlpha = b.create<memref::AllocOp>(loc, mem1Ty);
+      tmpGamma = b.create<memref::AllocOp>(loc, mem9Ty);
+      tmpGammaU = b.create<memref::AllocOp>(loc, mem9Ty);
+    }
 
     AffineMap lbMap = AffineMap::getConstantMap(0, &getContext());
     AffineExpr s0 = b.getAffineSymbolExpr(0);
@@ -391,20 +406,20 @@ struct InitGridAffinePass
             gammaUArg, ValueRange{flat});
       }
       emittedDirect = true;
-    } else {
+    } else if (canInlineInitPoint) {
       emittedDirect =
           tryInlineInitPointBody(ib, loc, initPoint, initPointFirstOutputArg,
                                  paramArgs, coordMemrefs, i, n, alphaArg,
                                  gammaArg, gammaUArg);
     }
 
-    if (!emittedDirect) {
-      auto mem1Ty = MemRefType::get({1}, f64);
-      auto mem9Ty = MemRefType::get({9}, f64);
-      Value tmpAlpha = ib.create<memref::AllocOp>(loc, mem1Ty);
-      Value tmpGamma = ib.create<memref::AllocOp>(loc, mem9Ty);
-      Value tmpGammaU = ib.create<memref::AllocOp>(loc, mem9Ty);
+    if (!emittedDirect && !needsScratchBuffers) {
+      initPoint.emitError("init-grid-affine: failed to inline init_point body");
+      signalPassFailure();
+      return;
+    }
 
+    if (!emittedDirect) {
       SmallVector<Value> callArgs;
       callArgs.reserve(paramArgs.size() + coordMemrefs.size() + 3);
       callArgs.append(paramArgs.begin(), paramArgs.end());
@@ -432,13 +447,14 @@ struct InitGridAffinePass
         Value gU = ib.create<memref::LoadOp>(loc, tmpGammaU, ValueRange{cComp});
         ib.create<memref::StoreOp>(loc, gU, gammaUArg, ValueRange{flat});
       }
-
-      ib.create<memref::DeallocOp>(loc, tmpAlpha);
-      ib.create<memref::DeallocOp>(loc, tmpGamma);
-      ib.create<memref::DeallocOp>(loc, tmpGammaU);
     }
 
     b.setInsertionPointAfter(loop);
+    if (needsScratchBuffers) {
+      b.create<memref::DeallocOp>(loc, tmpAlpha);
+      b.create<memref::DeallocOp>(loc, tmpGamma);
+      b.create<memref::DeallocOp>(loc, tmpGammaU);
+    }
     b.create<func::ReturnOp>(loc);
 
     module.push_back(gridFn);

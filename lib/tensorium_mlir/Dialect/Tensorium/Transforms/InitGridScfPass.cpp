@@ -143,15 +143,15 @@ struct InitGridScfPass
                                    : b.create<memref::DimOp>(loc,
                                                            coordMemrefs.front(), c0);
 
-    auto forOp = b.create<scf::ForOp>(loc, c0, n, c1);
-    b.setInsertionPointToStart(forOp.getBody());
-    Value i = forOp.getInductionVar();
-
     auto mem1Ty = MemRefType::get({1}, f64);
     auto mem9Ty = MemRefType::get({9}, f64);
     Value tmpAlpha = b.create<memref::AllocOp>(loc, mem1Ty);
     Value tmpGamma = b.create<memref::AllocOp>(loc, mem9Ty);
     Value tmpGammaU = b.create<memref::AllocOp>(loc, mem9Ty);
+
+    auto forOp = b.create<scf::ForOp>(loc, c0, n, c1);
+    b.setInsertionPointToStart(forOp.getBody());
+    Value i = forOp.getInductionVar();
 
     SmallVector<Value> callArgs;
     callArgs.reserve(paramArgs.size() + coordMemrefs.size() + 3);
@@ -179,11 +179,10 @@ struct InitGridScfPass
       b.create<memref::StoreOp>(loc, gU, gammaUArg, ValueRange{flat});
     }
 
+    b.setInsertionPointAfter(forOp);
     b.create<memref::DeallocOp>(loc, tmpAlpha);
     b.create<memref::DeallocOp>(loc, tmpGamma);
     b.create<memref::DeallocOp>(loc, tmpGammaU);
-
-    b.setInsertionPointAfter(forOp);
     b.create<func::ReturnOp>(loc);
 
     module.push_back(gridFn);

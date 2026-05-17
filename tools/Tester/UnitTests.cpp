@@ -8,6 +8,7 @@
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
+#include "tensorium_mlir/Runtime/HostBuffers.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
@@ -2791,6 +2792,66 @@ static bool testSpatialOffdiagInitGridAffineNoLoopAlloc() {
   return true;
 }
 
+static bool isNestedInLoop(::mlir::Operation *op) {
+  for (::mlir::Operation *parent = op->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (llvm::isa<::mlir::scf::ForOp, ::mlir::affine::AffineForOp>(parent))
+      return true;
+  }
+  return false;
+}
+
+static bool testInitGridScfScratchAllocOutsideLoop() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridScfPass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable,
+      ctx, opts);
+  auto initGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolInitGridScf);
+  if (!initGrid) {
+    std::cerr << "FAIL: missing schwarzschild init_grid_scf\n";
+    return false;
+  }
+
+  bool hasScfFor = false;
+  int allocCount = 0;
+  int deallocCount = 0;
+  bool hasLoopAlloc = false;
+  bool hasLoopDealloc = false;
+  initGrid.walk([&](::mlir::Operation *op) {
+    hasScfFor |= llvm::isa<::mlir::scf::ForOp>(op);
+    if (llvm::isa<::mlir::memref::AllocOp>(op)) {
+      ++allocCount;
+      hasLoopAlloc |= isNestedInLoop(op);
+    }
+    if (llvm::isa<::mlir::memref::DeallocOp>(op)) {
+      ++deallocCount;
+      hasLoopDealloc |= isNestedInLoop(op);
+    }
+  });
+
+  if (!hasScfFor) {
+    std::cerr << "FAIL: schwarzschild init_grid_scf must contain scf.for\n";
+    return false;
+  }
+  if (allocCount != 3 || deallocCount != 3) {
+    std::cerr << "FAIL: init_grid_scf scratch allocation count changed\n";
+    return false;
+  }
+  if (hasLoopAlloc || hasLoopDealloc) {
+    std::cerr << "FAIL: init_grid_scf scratch buffers must be allocated "
+                 "outside the generated loop\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSpatialOffdiagRhsCompactHessianAffineLowering() {
   ::mlir::MLIRContext ctx;
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
@@ -3139,6 +3200,17 @@ findHostFieldABI(const tensorium_mlir::HostModuleABI &abi,
   return nullptr;
 }
 
+static const tensorium_mlir::HostBufferABI *
+findHostBufferABI(const tensorium_mlir::HostKernelABI &kernel,
+                  const std::string &bufferName,
+                  tensorium_mlir::HostBufferRole role) {
+  for (const auto &buffer : kernel.buffers) {
+    if (buffer.name == bufferName && buffer.role == role)
+      return &buffer;
+  }
+  return nullptr;
+}
+
 static bool testLoweredGridHostABIDescriptor() {
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableMetricLoweringPass = true;
@@ -3172,6 +3244,13 @@ static bool testLoweredGridHostABIDescriptor() {
   }
 
   const auto abi = tensorium_mlir::buildHostModuleABI(mod, *module);
+  const auto abiErrors = tensorium_mlir::validateHostModuleABI(abi);
+  if (!abiErrors.empty()) {
+    std::cerr << "FAIL: host ABI descriptor validation failed\n";
+    for (const auto &error : abiErrors)
+      std::cerr << "  - " << error << "\n";
+    return false;
+  }
   if (abi.dimension != 3) {
     std::cerr << "FAIL: host ABI descriptor dimension mismatch\n";
     return false;
@@ -3244,6 +3323,46 @@ static bool testLoweredGridHostABIDescriptor() {
     return false;
   }
 
+  const auto *rCoord = findHostBufferABI(
+      *initGrid, "r", tensorium_mlir::HostBufferRole::Coordinate);
+  const auto *initGamma = findHostBufferABI(
+      *initGrid, "gamma", tensorium_mlir::HostBufferRole::Output);
+  const auto *rhsGamma = findHostBufferABI(
+      *rhsGrid, "gamma", tensorium_mlir::HostBufferRole::Field);
+  const auto *rhsGammaU = findHostBufferABI(
+      *rhsGrid, "gammaU", tensorium_mlir::HostBufferRole::Field);
+  const auto *rhsRicci = findHostBufferABI(
+      *rhsGrid, "Ricci", tensorium_mlir::HostBufferRole::Field);
+  if (!rCoord || !initGamma || !rhsGamma || !rhsGammaU || !rhsRicci) {
+    std::cerr << "FAIL: host ABI buffer contract missing expected buffers\n";
+    return false;
+  }
+  if (rCoord->argIndex != 1 ||
+      rCoord->access != tensorium_mlir::HostArgAccess::Read ||
+      rCoord->componentCount != 1 ||
+      initGamma->argIndex != 5 ||
+      initGamma->access != tensorium_mlir::HostArgAccess::Write ||
+      initGamma->componentCount != 9) {
+    std::cerr << "FAIL: init-grid host ABI buffer contract mismatch\n";
+    return false;
+  }
+  if (rhsGamma->argIndex != 6 ||
+      rhsGamma->access != tensorium_mlir::HostArgAccess::Read ||
+      rhsGammaU->argIndex != 7 ||
+      rhsGammaU->access != tensorium_mlir::HostArgAccess::Read ||
+      rhsRicci->argIndex != 8 ||
+      rhsRicci->access != tensorium_mlir::HostArgAccess::Write ||
+      rhsRicci->componentCount != 9) {
+    std::cerr << "FAIL: rhs-grid host ABI buffer contract mismatch\n";
+    return false;
+  }
+  const std::int64_t nPoints = 24 * 24 * 24;
+  if (tensorium_mlir::requiredBufferScalars(*rhsRicci, nPoints) !=
+      9 * nPoints) {
+    std::cerr << "FAIL: host ABI required buffer scalar count mismatch\n";
+    return false;
+  }
+
   if (abi.printFields !=
       std::vector<std::string>({"alpha", "gamma", "Ricci"}) ||
       abi.prints.size() != 3 || abi.prints[0].label != "alpha" ||
@@ -3252,6 +3371,117 @@ static bool testLoweredGridHostABIDescriptor() {
       abi.prints[2].rank != 2) {
     std::cerr << "FAIL: host ABI print descriptor mismatch\n";
     return false;
+  }
+
+  return true;
+}
+
+static bool testHostFieldStoragePlanDeduplicatesBuffers() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/fixtures/gr/schwarzschild_bssn_constraints_analytic_3d.tn",
+      CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  auto verify = validation::verifyIR(mod);
+  if (!verify.ok()) {
+    std::cerr << "FAIL: IR verification failed before host storage test\n";
+    return false;
+  }
+
+  ::mlir::MLIRContext ctx;
+  bool pipelineOk = true;
+  auto module = tensorium_mlir::buildMLIRModule(mod, ctx, opts, &pipelineOk);
+  if (!pipelineOk) {
+    std::cerr << "FAIL: MLIR pipeline failed before host storage test\n";
+    return false;
+  }
+
+  const auto abi = tensorium_mlir::buildHostModuleABI(mod, *module);
+  const tensorium_mlir::runtime::HostGridShape shape{5, 5, 5};
+  tensorium_mlir::runtime::HostFieldStorage storage(abi, shape);
+
+  if (storage.nPoints() != 125 || storage.dataAllocationCount() != 1) {
+    std::cerr << "FAIL: host storage grid shape or arena allocation mismatch\n";
+    return false;
+  }
+
+  std::unordered_set<std::string> uniqueKeys;
+  std::int64_t expectedScalars = 0;
+  for (const auto &kernel : abi.kernels) {
+    for (const auto &buffer : kernel.buffers) {
+      if (uniqueKeys.insert(
+              tensorium_mlir::runtime::HostFieldStorage::storageKey(buffer))
+              .second)
+        expectedScalars +=
+            tensorium_mlir::requiredBufferScalars(buffer, storage.nPoints());
+    }
+  }
+
+  if (storage.buffers().size() != uniqueKeys.size() ||
+      storage.totalScalars() != expectedScalars) {
+    std::cerr << "FAIL: host storage did not deduplicate ABI buffers exactly\n";
+    return false;
+  }
+
+  const auto *alpha = storage.findBuffer("field:alpha");
+  const auto *gammatilde = storage.findBuffer("field:gammatilde");
+  const auto *atil = storage.findBuffer("field:Atilde");
+  const auto *dAtilde = storage.findBuffer("field:dAtilde");
+  const auto *DAtilde = storage.findBuffer("field:DAtilde");
+  const auto *hamiltonian = storage.findBuffer("field:Hamiltonian");
+  const auto *momentum = storage.findBuffer("field:Momentum");
+  if (!alpha || !gammatilde || !atil || !dAtilde || !DAtilde ||
+      !hamiltonian || !momentum) {
+    std::cerr << "FAIL: host storage missing expected complete BSSN buffers\n";
+    return false;
+  }
+  if (alpha->access != tensorium_mlir::HostArgAccess::ReadWrite ||
+      gammatilde->componentCount != 9 || atil->componentCount != 9 ||
+      dAtilde->componentCount != 9 || DAtilde->componentCount != 27 ||
+      DAtilde->scalarCount != 27 * storage.nPoints() ||
+      hamiltonian->componentCount != 1 || momentum->rank != 1 ||
+      momentum->up != 0 || momentum->down != 1 ||
+      momentum->scalarCount != 3 * storage.nPoints()) {
+    std::cerr << "FAIL: host storage BSSN buffer metadata mismatch\n";
+    return false;
+  }
+
+  const auto *rhsPlan =
+      storage.findKernelPlan(tensorium_mlir::abi::kSymbolRhsGridAffine);
+  const auto *rhsKernel =
+      findHostKernelABI(abi, tensorium_mlir::abi::kSymbolRhsGridAffine);
+  if (!rhsPlan || !rhsKernel ||
+      rhsPlan->buffers.size() != rhsKernel->buffers.size()) {
+    std::cerr << "FAIL: host storage missing RHS kernel binding plan\n";
+    return false;
+  }
+
+  for (const auto &binding : rhsPlan->buffers) {
+    if (binding.storageIndex >= storage.buffers().size()) {
+      std::cerr << "FAIL: RHS storage binding index out of range\n";
+      return false;
+    }
+    auto ref = storage.memref(binding);
+    const auto &buffer = storage.buffers()[binding.storageIndex];
+    if (ref.aligned != storage.data(binding.storageIndex) ||
+        ref.allocated != storage.data(binding.storageIndex) ||
+        ref.offset != 0 || ref.size != buffer.scalarCount ||
+        ref.stride != 1) {
+      std::cerr << "FAIL: RHS storage binding memref descriptor mismatch\n";
+      return false;
+    }
   }
 
   return true;
@@ -4665,6 +4895,8 @@ int main() {
        &testSpatialOffdiagGeneratedSplit3p1Constants},
       {"testSpatialOffdiagInitGridAffineNoLoopAlloc",
        &testSpatialOffdiagInitGridAffineNoLoopAlloc},
+      {"testInitGridScfScratchAllocOutsideLoop",
+       &testInitGridScfScratchAllocOutsideLoop},
       {"testSpatialOffdiagRhsCompactHessianAffineLowering",
        &testSpatialOffdiagRhsCompactHessianAffineLowering},
       {"testLoweredGridLLVMABISignature", &testLoweredGridLLVMABISignature},
@@ -4677,6 +4909,8 @@ int main() {
        &testLoweredGridHostHeaderEmission},
       {"testLoweredGridHostABIDescriptor",
        &testLoweredGridHostABIDescriptor},
+      {"testHostFieldStoragePlanDeduplicatesBuffers",
+       &testHostFieldStoragePlanDeduplicatesBuffers},
       {"testCompilerApiCompileFileToLLVMIR",
        &testCompilerApiCompileFileToLLVMIR},
       {"testCompilerApiSymbolicWarningPropagation",

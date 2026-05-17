@@ -8,6 +8,8 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <cctype>
+#include <sstream>
+#include <unordered_set>
 #include <utility>
 
 namespace tensorium_mlir {
@@ -209,6 +211,109 @@ HostArgKind hostArgKindFor(mlir::Type type) {
   return HostArgKind::F64;
 }
 
+const HostFieldABI *
+findHostField(const std::vector<HostFieldABI> &fields, llvm::StringRef name) {
+  for (const auto &field : fields) {
+    if (field.name == name)
+      return &field;
+  }
+  return nullptr;
+}
+
+HostArgAccess combineAccess(bool reads, bool writes) {
+  if (reads && writes)
+    return HostArgAccess::ReadWrite;
+  if (reads)
+    return HostArgAccess::Read;
+  if (writes)
+    return HostArgAccess::Write;
+  return HostArgAccess::None;
+}
+
+HostBufferABI makeHostBufferABI(const HostModuleABI &abi,
+                                llvm::StringRef logicalName,
+                                std::int64_t argIndex,
+                                HostBufferRole role, HostArgAccess access) {
+  HostBufferABI buffer;
+  buffer.name = logicalName.str();
+  buffer.cName = makeHostCIdentifier(logicalName.str(), "buffer");
+  buffer.argIndex = argIndex;
+  buffer.role = role;
+  buffer.access = access;
+
+  if (role != HostBufferRole::Coordinate) {
+    if (const auto *field = findHostField(abi.fields, logicalName)) {
+      buffer.up = field->up;
+      buffer.down = field->down;
+      buffer.rank = field->rank;
+      buffer.componentCount = field->componentCount;
+    }
+  }
+  return buffer;
+}
+
+std::vector<HostBufferABI> hostKernelBuffers(const HostModuleABI &abi,
+                                             const HostKernelABI &kernel) {
+  std::vector<HostBufferABI> buffers;
+  std::unordered_set<std::int64_t> reads(kernel.readArgIndices.begin(),
+                                         kernel.readArgIndices.end());
+  std::unordered_set<std::int64_t> writes(kernel.writeArgIndices.begin(),
+                                          kernel.writeArgIndices.end());
+  auto accessFor = [&](std::int64_t argIndex, HostArgAccess fallback) {
+    const HostArgAccess access =
+        combineAccess(reads.count(argIndex) != 0, writes.count(argIndex) != 0);
+    return access == HostArgAccess::None ? fallback : access;
+  };
+
+  if (kernel.kind == tensorium_mlir::abi::kKindInitPoint) {
+    const std::int64_t outputBase = static_cast<std::int64_t>(
+        kernel.params.size() + kernel.coords.size());
+    for (std::size_t i = 0; i < kernel.outputs.size(); ++i) {
+      const std::int64_t argIndex = outputBase + static_cast<std::int64_t>(i);
+      buffers.push_back(makeHostBufferABI(
+          abi, kernel.outputs[i], argIndex, HostBufferRole::Output,
+          accessFor(argIndex, HostArgAccess::Write)));
+    }
+    return buffers;
+  }
+
+  if (kernel.kind == tensorium_mlir::abi::kKindInitGridScf ||
+      kernel.kind == tensorium_mlir::abi::kKindInitGridAffine) {
+    const std::int64_t coordBase =
+        static_cast<std::int64_t>(kernel.params.size());
+    for (std::size_t i = 0; i < kernel.coords.size(); ++i) {
+      const std::int64_t argIndex = coordBase + static_cast<std::int64_t>(i);
+      buffers.push_back(makeHostBufferABI(
+          abi, kernel.coords[i], argIndex, HostBufferRole::Coordinate,
+          accessFor(argIndex, HostArgAccess::Read)));
+    }
+
+    const std::int64_t outputBase =
+        coordBase + static_cast<std::int64_t>(kernel.coords.size());
+    for (std::size_t i = 0; i < kernel.outputs.size(); ++i) {
+      const std::int64_t argIndex = outputBase + static_cast<std::int64_t>(i);
+      buffers.push_back(makeHostBufferABI(
+          abi, kernel.outputs[i], argIndex, HostBufferRole::Output,
+          accessFor(argIndex, HostArgAccess::Write)));
+    }
+    return buffers;
+  }
+
+  if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
+      kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine) {
+    const std::int64_t fieldBase =
+        6 + static_cast<std::int64_t>(kernel.params.size());
+    for (std::size_t i = 0; i < kernel.fields.size(); ++i) {
+      const std::int64_t argIndex = fieldBase + static_cast<std::int64_t>(i);
+      buffers.push_back(makeHostBufferABI(
+          abi, kernel.fields[i], argIndex, HostBufferRole::Field,
+          accessFor(argIndex, HostArgAccess::None)));
+    }
+  }
+
+  return buffers;
+}
+
 bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
   HostKernelABI kernel;
   kernel.symbolName = fn.getSymName().str();
@@ -241,6 +346,7 @@ bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
     arg.cName = makeHostCIdentifier(names[i], "arg");
     kernel.rawArgs.push_back(std::move(arg));
   }
+  kernel.buffers = hostKernelBuffers(abi, kernel);
 
   abi.kernels.push_back(std::move(kernel));
   return true;
@@ -263,6 +369,122 @@ std::string makeHostCIdentifier(std::string_view input,
   if (std::isdigit(static_cast<unsigned char>(out.front())))
     out.insert(out.begin(), '_');
   return out;
+}
+
+std::int64_t requiredBufferScalars(const HostBufferABI &buffer,
+                                   std::int64_t nPoints) {
+  if (nPoints <= 0 || buffer.componentCount <= 0)
+    return 0;
+  return buffer.componentCount * nPoints;
+}
+
+std::vector<std::string> validateHostModuleABI(const HostModuleABI &abi) {
+  std::vector<std::string> errors;
+  auto add = [&](std::string message) { errors.push_back(std::move(message)); };
+
+  if (abi.dimension <= 0)
+    add("dimension must be positive");
+  if (abi.coordSystem.empty())
+    add("coordinate system must be set");
+  if (abi.spatialOrder < 0)
+    add("spatial order must not be negative");
+
+  std::unordered_set<std::string> fieldNames;
+  for (const auto &field : abi.fields) {
+    if (field.name.empty())
+      add("field name must not be empty");
+    if (!fieldNames.insert(field.name).second)
+      add("duplicate field descriptor: " + field.name);
+    if (field.rank != field.up + field.down)
+      add("field rank/variance mismatch: " + field.name);
+    if (field.componentCount <= 0)
+      add("field component count must be positive: " + field.name);
+    auto it = abi.componentCounts.find(field.name);
+    if (it == abi.componentCounts.end())
+      add("missing component count entry: " + field.name);
+    else if (it->second != field.componentCount)
+      add("component count map mismatch: " + field.name);
+  }
+
+  for (const auto &kernel : abi.kernels) {
+    if (kernel.symbolName.empty())
+      add("kernel symbol name must not be empty");
+    if (kernel.wrapperName.empty())
+      add("kernel wrapper name must not be empty: " + kernel.symbolName);
+    if (kernel.kind.empty())
+      add("kernel kind must not be empty: " + kernel.symbolName);
+    if (kernel.stencilRadius < 0)
+      add("kernel stencil radius must not be negative: " + kernel.symbolName);
+
+    auto validateArgIndex = [&](std::int64_t idx, const char *attrName) {
+      if (idx < 0 ||
+          static_cast<std::size_t>(idx) >= kernel.rawArgs.size()) {
+        std::ostringstream oss;
+        oss << "kernel " << kernel.symbolName << " has out-of-range "
+            << attrName << " index " << idx;
+        add(oss.str());
+        return;
+      }
+      if (kernel.rawArgs[static_cast<std::size_t>(idx)].kind !=
+          HostArgKind::Memref1DF64) {
+        std::ostringstream oss;
+        oss << "kernel " << kernel.symbolName << " has non-buffer "
+            << attrName << " index " << idx;
+        add(oss.str());
+      }
+    };
+    for (std::int64_t idx : kernel.readArgIndices)
+      validateArgIndex(idx, "read_arg_indices");
+    for (std::int64_t idx : kernel.writeArgIndices)
+      validateArgIndex(idx, "write_arg_indices");
+
+    for (const auto &buffer : kernel.buffers) {
+      if (buffer.name.empty())
+        add("kernel buffer name must not be empty: " + kernel.symbolName);
+      if (buffer.argIndex < 0 ||
+          static_cast<std::size_t>(buffer.argIndex) >= kernel.rawArgs.size()) {
+        std::ostringstream oss;
+        oss << "kernel " << kernel.symbolName
+            << " has buffer with out-of-range arg index " << buffer.argIndex;
+        add(oss.str());
+        continue;
+      }
+      if (kernel.rawArgs[static_cast<std::size_t>(buffer.argIndex)].kind !=
+          HostArgKind::Memref1DF64)
+        add("kernel buffer does not map to a memref arg: " +
+            kernel.symbolName + "." + buffer.name);
+      if (buffer.componentCount <= 0)
+        add("kernel buffer component count must be positive: " +
+            kernel.symbolName + "." + buffer.name);
+      if (buffer.role != HostBufferRole::Coordinate &&
+          !fieldNames.count(buffer.name))
+        add("kernel buffer references unknown field: " + kernel.symbolName +
+            "." + buffer.name);
+    }
+
+    const bool isRhs = kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
+                       kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine;
+    if (isRhs) {
+      if (kernel.rawArgs.size() < 6) {
+        add("rhs kernel must expose grid prefix args: " + kernel.symbolName);
+      } else if (kernel.rawArgs[0].kind != HostArgKind::Index ||
+                 kernel.rawArgs[1].kind != HostArgKind::Index ||
+                 kernel.rawArgs[2].kind != HostArgKind::Index ||
+                 kernel.rawArgs[3].kind != HostArgKind::F64 ||
+                 kernel.rawArgs[4].kind != HostArgKind::F64 ||
+                 kernel.rawArgs[5].kind != HostArgKind::F64) {
+        add("rhs kernel grid prefix arg kinds mismatch: " +
+            kernel.symbolName);
+      }
+      for (const auto &field : kernel.fields) {
+        if (!fieldNames.count(field))
+          add("rhs kernel references unknown field: " + kernel.symbolName +
+              "." + field);
+      }
+    }
+  }
+
+  return errors;
 }
 
 HostModuleABI buildHostModuleABI(const tensorium::backend::ModuleIR &module,

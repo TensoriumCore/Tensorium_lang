@@ -313,8 +313,17 @@ target_link_libraries(tensoriumMlirCodegen PUBLIC
   ${TENSORIUM_MLIR_COMMON_LINK_LIBS}
 )
 
+add_library(tensoriumMlirRuntime
+  tensorium_mlir/Runtime/HostBuffers.cpp
+)
+tensorium_configure_mlir_target(tensoriumMlirRuntime)
+target_link_libraries(tensoriumMlirRuntime PUBLIC
+  tensoriumMlirCodegen
+)
+
 add_library(tensorium_mlir_backend INTERFACE)
 target_link_libraries(tensorium_mlir_backend INTERFACE
+  tensoriumMlirRuntime
   tensoriumMlirCodegen
   tensoriumMlirTransforms
   tensoriumMlirIR
