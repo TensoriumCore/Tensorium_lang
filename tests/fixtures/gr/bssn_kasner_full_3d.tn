@@ -44,7 +44,7 @@ params { eta }
 simulation {
   coordinates = cartesian
   dimension = 3
-  resolution = [3,3,3]
+  resolution = [32,32,32]
 
   time {
     dt = 0.01
@@ -54,7 +54,7 @@ simulation {
   spatial {
     scheme = fd
     derivative = centered
-    order = 2
+    order = 4
   }
 }
 
