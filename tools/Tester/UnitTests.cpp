@@ -3170,6 +3170,14 @@ static bool testLoweredGridHostHeaderEmission() {
     std::cerr << "FAIL: generated host header missing .tn print helpers\n";
     return false;
   }
+  if (header.find("TENSORIUM_HOST_BUFFER_COUNT") == std::string::npos ||
+      header.find("tensorium_host_buffers") == std::string::npos ||
+      header.find("TENSORIUM_HOST_BUFFER_ROLE_OUTPUT") == std::string::npos ||
+      header.find("\"Ricci\"") == std::string::npos) {
+    std::cerr << "FAIL: generated host header missing runtime ABI "
+                 "descriptor tables\n";
+    return false;
+  }
   if (header.find("double *Christoffel") != std::string::npos ||
       header.find("27 * n_points") != std::string::npos) {
     std::cerr << "FAIL: Ricci host header should not expose local Christoffel "

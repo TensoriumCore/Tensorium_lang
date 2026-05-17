@@ -109,6 +109,15 @@ consume directly:
   arena for all logical buffers, then exposes stable per-kernel binding plans and
   rank-1 memref descriptors into that arena.
 
+Generated host headers also expose the same runtime contract in C-compatible
+tables:
+
+- `TENSORIUM_HOST_KERNEL_COUNT` / `tensorium_host_kernels`;
+- `TENSORIUM_HOST_BUFFER_COUNT` / `tensorium_host_buffers`;
+- `tensorium_host_buffer_desc::component_count`, `role`, `access`, and
+  `arg_index` are enough for a lightweight runtime to deduplicate buffers and
+  bind generated wrappers without reconstructing tensor sizes by hand.
+
 Runtime code should use this contract instead of reconstructing argument order
 from names. For AMReX this means:
 

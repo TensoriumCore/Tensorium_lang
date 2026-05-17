@@ -273,6 +273,129 @@ void emitConvenienceWrapper(
   }
 }
 
+const char *hostHeaderRoleEnum(HostBufferRole role) {
+  switch (role) {
+  case HostBufferRole::Coordinate:
+    return "TENSORIUM_HOST_BUFFER_ROLE_COORDINATE";
+  case HostBufferRole::Field:
+    return "TENSORIUM_HOST_BUFFER_ROLE_FIELD";
+  case HostBufferRole::Output:
+    return "TENSORIUM_HOST_BUFFER_ROLE_OUTPUT";
+  }
+  return "TENSORIUM_HOST_BUFFER_ROLE_FIELD";
+}
+
+const char *hostHeaderAccessEnum(HostArgAccess access) {
+  switch (access) {
+  case HostArgAccess::None:
+    return "TENSORIUM_HOST_ARG_ACCESS_NONE";
+  case HostArgAccess::Read:
+    return "TENSORIUM_HOST_ARG_ACCESS_READ";
+  case HostArgAccess::Write:
+    return "TENSORIUM_HOST_ARG_ACCESS_WRITE";
+  case HostArgAccess::ReadWrite:
+    return "TENSORIUM_HOST_ARG_ACCESS_READWRITE";
+  }
+  return "TENSORIUM_HOST_ARG_ACCESS_NONE";
+}
+
+std::size_t hostBufferDescriptorCount(const HostModuleABI &abi) {
+  std::size_t count = 0;
+  for (const auto &kernel : abi.kernels)
+    count += kernel.buffers.size();
+  return count;
+}
+
+void emitRuntimeDescriptorTypes(std::ostringstream &os) {
+  os << "typedef enum tensorium_host_buffer_role {\n"
+     << "  TENSORIUM_HOST_BUFFER_ROLE_COORDINATE = 1,\n"
+     << "  TENSORIUM_HOST_BUFFER_ROLE_FIELD = 2,\n"
+     << "  TENSORIUM_HOST_BUFFER_ROLE_OUTPUT = 3\n"
+     << "} tensorium_host_buffer_role;\n\n"
+     << "typedef enum tensorium_host_arg_access {\n"
+     << "  TENSORIUM_HOST_ARG_ACCESS_NONE = 0,\n"
+     << "  TENSORIUM_HOST_ARG_ACCESS_READ = 1,\n"
+     << "  TENSORIUM_HOST_ARG_ACCESS_WRITE = 2,\n"
+     << "  TENSORIUM_HOST_ARG_ACCESS_READWRITE = 3\n"
+     << "} tensorium_host_arg_access;\n\n"
+     << "typedef struct tensorium_host_kernel_desc {\n"
+     << "  const char *symbol_name;\n"
+     << "  const char *wrapper_name;\n"
+     << "  const char *kind;\n"
+     << "  int64_t buffer_begin;\n"
+     << "  int64_t buffer_count;\n"
+     << "  int64_t stencil_radius;\n"
+     << "} tensorium_host_kernel_desc;\n\n"
+     << "typedef struct tensorium_host_buffer_desc {\n"
+     << "  const char *kernel_symbol;\n"
+     << "  const char *name;\n"
+     << "  const char *c_name;\n"
+     << "  int64_t kernel_index;\n"
+     << "  int64_t arg_index;\n"
+     << "  int64_t role;\n"
+     << "  int64_t access;\n"
+     << "  int64_t up;\n"
+     << "  int64_t down;\n"
+     << "  int64_t rank;\n"
+     << "  int64_t component_count;\n"
+     << "} tensorium_host_buffer_desc;\n\n";
+}
+
+void emitRuntimeDescriptors(std::ostringstream &os, const HostModuleABI &abi) {
+  const std::size_t kernelCount = abi.kernels.size();
+  const std::size_t bufferCount = hostBufferDescriptorCount(abi);
+
+  os << "#define TENSORIUM_HOST_KERNEL_COUNT " << kernelCount << "\n"
+     << "#define TENSORIUM_HOST_BUFFER_COUNT " << bufferCount << "\n\n";
+
+  os << "static const tensorium_host_kernel_desc tensorium_host_kernels["
+     << (kernelCount == 0 ? 1 : kernelCount) << "] = {\n";
+  std::size_t bufferBegin = 0;
+  if (kernelCount == 0) {
+    os << "  {0, 0, 0, 0, 0, 0}\n";
+  } else {
+    for (std::size_t i = 0; i < abi.kernels.size(); ++i) {
+      const auto &kernel = abi.kernels[i];
+      os << "  {" << cStringLiteral(kernel.symbolName) << ", "
+         << cStringLiteral(kernel.wrapperName) << ", "
+         << cStringLiteral(kernel.kind) << ", "
+         << static_cast<std::int64_t>(bufferBegin) << ", "
+         << static_cast<std::int64_t>(kernel.buffers.size()) << ", "
+         << kernel.stencilRadius << "}";
+      bufferBegin += kernel.buffers.size();
+      os << (i + 1 == abi.kernels.size() ? "\n" : ",\n");
+    }
+  }
+  os << "};\n\n";
+
+  os << "static const tensorium_host_buffer_desc tensorium_host_buffers["
+     << (bufferCount == 0 ? 1 : bufferCount) << "] = {\n";
+  if (bufferCount == 0) {
+    os << "  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}\n";
+  } else {
+    bool first = true;
+    for (std::size_t kernelIndex = 0; kernelIndex < abi.kernels.size();
+         ++kernelIndex) {
+      const auto &kernel = abi.kernels[kernelIndex];
+      for (const auto &buffer : kernel.buffers) {
+        if (!first)
+          os << ",\n";
+        first = false;
+        os << "  {" << cStringLiteral(kernel.symbolName) << ", "
+           << cStringLiteral(buffer.name) << ", "
+           << cStringLiteral(buffer.cName) << ", "
+           << static_cast<std::int64_t>(kernelIndex) << ", "
+           << buffer.argIndex << ", " << hostHeaderRoleEnum(buffer.role)
+           << ", " << hostHeaderAccessEnum(buffer.access) << ", "
+           << buffer.up << ", " << buffer.down << ", " << buffer.rank << ", "
+           << buffer.componentCount << "}";
+      }
+    }
+    os << "\n";
+  }
+  os << "};\n\n";
+}
+
 void emitPrinterFlatHelper(std::ostringstream &os) {
   os << "static inline void tensorium_print_tensor_flat(\n"
      << "    const char *name, const double *data, int64_t point_index,\n"
@@ -387,7 +510,12 @@ std::string renderHostHeader(const HostModuleABI &abi) {
         "tensorium_make_memref1d_f64(double *data, int64_t size) {\n"
      << "  tensorium_memref1d_f64 ref = {data, data, 0, size, 1};\n"
      << "  return ref;\n"
-     << "}\n\n"
+     << "}\n\n";
+
+  emitRuntimeDescriptorTypes(os);
+  emitRuntimeDescriptors(os, abi);
+
+  os
      << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
 
   for (const auto &kernel : abi.kernels)
