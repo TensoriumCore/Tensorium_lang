@@ -25,6 +25,8 @@
 #   dgammatilde_ij = dAtilde_ij = dGammahat^i = 0
 #   Hamiltonian = gammaU^ij R_ij + K^2 - A_ij A^ij = 0
 #   Momentum_i = D_j A^j_i - 2/3 d_i K = 0
+
+
 field metric g[mu,nu]
 field inverse_metric gU[mu,nu]
 field scalar alpha
