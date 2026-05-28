@@ -4203,6 +4203,145 @@ static bool testKerrLikeHasNonZeroBetaPhi() {
   return true;
 }
 
+static bool testHartleThorneSlowRotationFixtureMLIRStructure() {
+  ::mlir::MLIRContext ctx;
+  auto module = buildMLIRModuleFromFile(
+      "tests/fixtures/gr/hartle_thorne_slow_rotation.tn",
+      CompilationMode::Executable, ctx);
+
+  auto initFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
+  if (!initFunc) {
+    std::cerr << "FAIL: Hartle-Thorne fixture missing tensorium_init\n";
+    return false;
+  }
+
+  tensorium::mlir::Metric4Op metricOp;
+  for (::mlir::Operation &op : initFunc.getBody().front()) {
+    if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op))
+      metricOp = metric;
+  }
+  if (!metricOp) {
+    std::cerr << "FAIL: Hartle-Thorne fixture missing metric4 op\n";
+    return false;
+  }
+
+  auto comps = metricOp.getComponents();
+  if (comps.size() != 16) {
+    std::cerr << "FAIL: Hartle-Thorne metric4 must carry 16 components\n";
+    return false;
+  }
+
+  if (comps[3] != comps[12]) {
+    std::cerr << "FAIL: Hartle-Thorne g_tphi/g_phit must share a symmetric "
+                 "component\n";
+    return false;
+  }
+
+  auto gtt = comps[0].getDefiningOp<tensorium::mlir::SubOp>();
+  if (!gtt || !isConstValue(gtt.getLhs(), 0.0) ||
+      !isParamNamedValue(gtt.getRhs(), "h")) {
+    std::cerr << "FAIL: Hartle-Thorne g_tt must lower as -h\n";
+    return false;
+  }
+
+  auto grr = comps[5].getDefiningOp<tensorium::mlir::DivOp>();
+  if (!grr || !isConstValue(grr.getLhs(), 1.0) ||
+      !isParamNamedValue(grr.getRhs(), "f")) {
+    std::cerr << "FAIL: Hartle-Thorne g_rr must lower as 1/f\n";
+    return false;
+  }
+
+  auto gtphi = comps[3].getDefiningOp<tensorium::mlir::SubOp>();
+  if (!gtphi || !isConstValue(gtphi.getLhs(), 0.0)) {
+    std::cerr << "FAIL: Hartle-Thorne g_tphi must lower as a negative term\n";
+    return false;
+  }
+
+  if (!valueDependsOn(comps[3], [](::mlir::Operation *op) {
+        auto param = llvm::dyn_cast<tensorium::mlir::ParamOp>(op);
+        return param && param.getName() == "omega";
+      }) ||
+      !valueDependsOn(comps[3], [](::mlir::Operation *op) {
+        auto coord = llvm::dyn_cast<tensorium::mlir::CoordOp>(op);
+        return coord && coord.getName() == "r";
+      }) ||
+      !valueDependsOn(comps[3], [](::mlir::Operation *op) {
+        return llvm::isa<tensorium::mlir::SinOp>(op);
+      })) {
+    std::cerr << "FAIL: Hartle-Thorne g_tphi must depend on omega, r, and "
+                 "sin(theta)\n";
+    return false;
+  }
+
+  return true;
+}
+
+static double hartleThorneSlowRotationOmegaGR(double r, double J) {
+  return 2.0 * J / (r * r * r);
+}
+
+static double hartleThorneSlowRotationOmegaPrimeGR(double r, double J) {
+  return -6.0 * J / (r * r * r * r);
+}
+
+static double hartleThorneSlowRotationRadialFluxGR(double r, double J) {
+  return r * r * r * r * hartleThorneSlowRotationOmegaPrimeGR(r, J);
+}
+
+static bool testHartleThorneSlowRotationRadialEquationGR() {
+  const double J = 0.1;
+  const std::array<double, 4> radii = {4.0, 6.0, 10.0, 20.0};
+  const double expectedFlux = -6.0 * J;
+
+  std::cout << std::setprecision(17)
+            << "[numeric] Hartle-Thorne slow rotation GR radial equation\n";
+
+  for (double r : radii) {
+    const double omega = hartleThorneSlowRotationOmegaGR(r, J);
+    const double omegaPrime = hartleThorneSlowRotationOmegaPrimeGR(r, J);
+    const double flux = hartleThorneSlowRotationRadialFluxGR(r, J);
+    const double fdStep = 1.0e-5 * r;
+    const double omegaPrimeFD =
+        (hartleThorneSlowRotationOmegaGR(r + fdStep, J) -
+         hartleThorneSlowRotationOmegaGR(r - fdStep, J)) /
+        (2.0 * fdStep);
+
+    std::cout << "  r=" << r << " omega=" << omega
+              << " omega_prime=" << omegaPrime << " radial_flux=" << flux
+              << "\n";
+
+    if (!almostEqual(omegaPrime, omegaPrimeFD, 1e-9, 1e-12)) {
+      std::cerr << "FAIL: Hartle-Thorne omega_prime does not match finite "
+                   "difference at r="
+                << r << ": got " << omegaPrime << " fd " << omegaPrimeFD
+                << "\n";
+      return false;
+    }
+    if (!almostEqual(flux, expectedFlux)) {
+      std::cerr << "FAIL: Hartle-Thorne radial flux must equal -6J at r=" << r
+                << ": got " << flux << " expected " << expectedFlux << "\n";
+      return false;
+    }
+  }
+
+  for (std::size_t i = 0; i + 1 < radii.size(); ++i) {
+    const double leftFlux =
+        hartleThorneSlowRotationRadialFluxGR(radii[i], J);
+    const double rightFlux =
+        hartleThorneSlowRotationRadialFluxGR(radii[i + 1], J);
+    const double fdRadialEq =
+        (rightFlux - leftFlux) / (radii[i + 1] - radii[i]);
+    if (!almostEqual(fdRadialEq, 0.0)) {
+      std::cerr << "FAIL: Hartle-Thorne d/dr(r^4 omega') must vanish between r="
+                << radii[i] << " and r=" << radii[i + 1] << ": got "
+                << fdRadialEq << "\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildChristoffelNumericPoint() {
   ::mlir::MLIRContext ctx;
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
@@ -5200,6 +5339,10 @@ int main() {
       {"testKerrLikeReconstructMetricPoint",
        &testKerrLikeReconstructMetricPoint},
       {"testKerrLikeHasNonZeroBetaPhi", &testKerrLikeHasNonZeroBetaPhi},
+      {"testHartleThorneSlowRotationFixtureMLIRStructure",
+       &testHartleThorneSlowRotationFixtureMLIRStructure},
+      {"HartleThorneSlowRotationRadialEquationGR",
+       &testHartleThorneSlowRotationRadialEquationGR},
       {"testNablaMetricPathVarianceMatrix", &testNablaMetricPathVarianceMatrix},
       {"testNablaConnectionFallbackCovariantOnly",
        &testNablaConnectionFallbackCovariantOnly},

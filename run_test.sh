@@ -173,6 +173,7 @@ GR_FIXTURES=(
   tests/fixtures/gr/spatial_offdiag_3d.tn
   tests/fixtures/gr/kerr_like_3d.tn
   tests/fixtures/gr/kerr_like_christoffel_3d.tn
+  tests/fixtures/gr/hartle_thorne_slow_rotation.tn
 )
 
 SYMBOLIC_VALID_TESTS=(
@@ -674,6 +675,7 @@ echo "=============================="
 
 bash tools/dev/test_abi_contract_probe.sh
 bash tools/dev/test_standard_metrics_init_analytic_ll.sh
+bash tools/dev/test_hartle_thorne_metric_init_ll.sh
 bash tools/dev/test_schwarzschild_ll.sh
 bash tools/dev/test_schwarzschild_christoffel_ll.sh
 bash tools/dev/test_reissner_christoffel_ll.sh
