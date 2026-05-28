@@ -10,6 +10,8 @@ This document freezes the ABI contract used by generated functions:
 - `tensorium_init_grid_affine`
 - `tensorium_rhs_grid_scf`
 - `tensorium_rhs_grid_affine`
+- `tensorium_residual_grid_scf`
+- `tensorium_residual_grid_affine`
 
 Source of truth for ABI constants:
 `include/tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h`.
@@ -43,7 +45,9 @@ Generated functions expose argument-order metadata:
 - `tensorium.abi.write_arg_indices`: absolute argument indices (in function
   signature) written by the kernel
 - `tensorium.abi.stencil_radius`: required interior ghost/radius width for RHS
-  grid kernels, derived from lowered stencil reads
+  and residual grid kernels, derived from lowered stencil reads
+- `tensorium.abi.residual_kernel`: internal marker on source residual modules
+  that asks grid lowering to expose residual aliases
 
 ## C/C++ low-level memref contract
 
@@ -116,6 +120,11 @@ consume directly:
   invocation table for grid kernels. `GeneratedHostStorage::invoke(...)` uses
   those adapters to bind runtime-owned buffers by descriptor order instead of
   requiring callers to spell every lowered field argument manually.
+- `constraints` DSL blocks lower through the same scalarization path as RHS
+  kernels but additionally expose `tensorium_residual_grid_affine` /
+  `tensorium_residual_grid_scf` host-callable symbols. These kernels compute
+  residual buffers `F(u)`; the solver runtime is responsible for choosing the
+  update method that drives those residuals toward zero.
 - `GeneratedHostStorage` also exposes a descriptor-level Euler helper for
   standalone runtime experiments: `eulerUpdatePairsFromDerivativePrefix()`
   discovers writable derivative fields named `dX` and maps them to state field
@@ -188,6 +197,21 @@ LLVM-level:
 - prefix: `i64,i64,i64,double,double,double`,
 - then scalar params (`double`),
 - then one 5-argument memref descriptor per field buffer.
+
+### `tensorium_residual_grid_{scf,affine}`
+
+Same low-level signature shape as `tensorium_rhs_grid_{scf,affine}`:
+- prefix: `i64,i64,i64,double,double,double`,
+- scalar params,
+- one 5-argument memref descriptor per participating field buffer.
+
+The semantic difference is the ABI kind:
+- `tensorium.abi.kind = "residual_grid_scf"` or
+  `"residual_grid_affine"`.
+
+Residual grid kernels write the declared `residual` targets from a
+`constraints` block. Host wrappers and descriptor tables expose those outputs in
+the same `tensorium.abi.output_names` and access metadata used by RHS kernels.
 
 ## Memory layout contract (SoA, component-major)
 

@@ -29,6 +29,8 @@ class Parser {
   InitialDataDecl parseInitialData();
   EvolutionEq parseEvolutionEq();
   EvolutionDecl parseEvolution();
+  ConstraintEq parseConstraintEq();
+  ConstraintDecl parseConstraints();
   SimulationConfig parseSimulation();
   TimeConfig parseTimeBlock();
   SpatialConfig parseSpatialBlock();

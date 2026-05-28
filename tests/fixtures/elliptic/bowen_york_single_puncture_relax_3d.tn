@@ -1,0 +1,63 @@
+# Single-puncture Bowen-York momentum-source relaxation.
+#
+# This uses the explicit initial-data constraint surface. The residual kernel
+# computes the analytic flat-space Bowen-York momentum contraction for
+# P^i = (px, 0, 0):
+#   Atilde_ij Atilde^ij = 9/(2*r^4) * (P^2 + 2*(P.n)^2)
+# using the regularized radius
+#   r_eps = sqrt((x-x0)^2 + (y-y0)^2 + (z-z0)^2 + eps2)
+# and the regularized puncture factor psi = 1 + mass/(2*r_eps).
+# This is not yet the exact puncture treatment.
+extern scalar sqrt(scalar)
+
+field scalar u
+field scalar v
+field scalar H
+field scalar du
+field scalar dv
+
+params { c, eps2, eta, mass, px, x0, y0, z0 }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.005
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+constraints BowenYorkSinglePunctureRelax3D {
+  X = x - x0
+  Y = y - y0
+  Z = z - z0
+
+  r2 = X*X + Y*Y + Z*Z + eps2
+  invR = 1.0 / sqrt(r2)
+  invR2 = 1.0 / r2
+  invR4 = invR2 * invR2
+
+  P2 = px * px
+  Pn2 = P2 * X * X * invR2
+  A2 = 4.5 * (P2 + 2.0 * Pn2) * invR4
+
+  psiSingular = 1.0 + 0.5 * mass * invR
+  psiTotal = psiSingular + u
+  psi2 = psiTotal * psiTotal
+  psi4 = psi2 * psi2
+  psi7 = psi4 * psi2 * psiTotal
+
+  Hlocal = laplacian(u) + 0.125 * A2 / psi7
+
+  residual H = Hlocal
+  residual du = v - eta * u
+  residual dv = c * c * Hlocal
+}

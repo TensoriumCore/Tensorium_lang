@@ -106,6 +106,10 @@ Token Lexer::next() {
       return {TokenType::KwInverseMetric, t, tokLine, tokCol};
     if (t == "evolution")
       return {TokenType::KwEvolution, t, tokLine, tokCol};
+    if (t == "constraints")
+      return {TokenType::KwConstraints, t, tokLine, tokCol};
+    if (t == "residual")
+      return {TokenType::KwResidual, t, tokLine, tokCol};
     if (t == "dt")
       return {TokenType::KwDt, t, tokLine, tokCol};
     if (t == "print")

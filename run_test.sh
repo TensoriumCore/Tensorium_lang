@@ -692,6 +692,18 @@ bash tools/dev/test_extern_scalar_ll.sh
 
 echo
 echo "=============================="
+echo " RUN ELLIPTIC INITIAL-DATA SOLVER LLVM SMOKES"
+echo "=============================="
+
+bash tools/dev/test_poisson_relax_l2_ll.sh
+bash tools/dev/test_poisson_source_relax_l2_ll.sh
+bash tools/dev/test_hamiltonian_toy_relax_l2_ll.sh
+bash tools/dev/test_bowen_york_single_puncture_relax_l2_ll.sh
+bash tools/dev/test_bowen_york_single_puncture_p0_ll.sh
+bash tools/dev/test_bowen_york_single_puncture_scan.sh
+
+echo
+echo "=============================="
 echo " ALL TESTS PASSED"
 echo " MLIR outputs in $OUT"
 echo "=============================="

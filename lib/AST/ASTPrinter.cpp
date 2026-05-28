@@ -292,6 +292,41 @@ void printProgram(const Program &prog) {
     }
     std::cout << "}\n";
   }
+
+  for (const auto &constraints : prog.constraints) {
+    std::cout << "Constraints " << constraints.name << " {\n";
+    for (const auto &tmp : constraints.tempAssignments) {
+      std::cout << "  " << tmp.lhs.base;
+      if (!tmp.lhs.indices.empty()) {
+        std::cout << "[";
+        for (size_t i = 0; i < tmp.lhs.indices.size(); ++i) {
+          std::cout << tmp.lhs.indices[i];
+          if (i + 1 < tmp.lhs.indices.size())
+            std::cout << ",";
+        }
+        std::cout << "]";
+      }
+      std::cout << " = ";
+      printExpr(tmp.rhs.get());
+      std::cout << "\n";
+    }
+    for (const auto &eq : constraints.residuals) {
+      std::cout << "  residual " << eq.fieldName;
+      if (!eq.indices.empty()) {
+        std::cout << "[";
+        for (size_t i = 0; i < eq.indices.size(); ++i) {
+          std::cout << eq.indices[i];
+          if (i + 1 < eq.indices.size())
+            std::cout << ",";
+        }
+        std::cout << "]";
+      }
+      std::cout << " = ";
+      printExpr(eq.rhs.get());
+      std::cout << "\n";
+    }
+    std::cout << "}\n";
+  }
 }
 
 } // namespace tensorium

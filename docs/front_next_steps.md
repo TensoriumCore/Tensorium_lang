@@ -20,6 +20,11 @@ remaining work is now about:
 3. tightening the runtime/lowering boundary beyond the init-only ABI,
 4. reducing duplicated dev-script machinery.
 
+The first initial-data solver surface is now explicit: `constraints` blocks
+lower residual equations to generated `tensorium_residual_grid_*` kernels. The
+existing Poisson, Hamiltonian-toy, and Bowen-York single-puncture relaxation
+fixtures use that surface and are wired into the full test suite.
+
 ## Prioritized Work
 ### 1. Pass-level performance observability
 - Use the opt-in `--mlir-pass-timing` mode in `Tensorium_cc`.

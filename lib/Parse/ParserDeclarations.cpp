@@ -331,6 +331,61 @@ EvolutionDecl Parser::parseEvolution() {
   return evo;
 }
 
+ConstraintEq Parser::parseConstraintEq() {
+  expect(TokenType::KwResidual);
+  if (cur.type != TokenType::Identifier)
+    syntaxError("Field name after residual");
+  ConstraintEq eq;
+  eq.fieldName = cur.text;
+  advance();
+
+  TokenType close = TokenType::Unknown;
+  if (cur.type == TokenType::LBracket)
+    close = TokenType::RBracket;
+  else if (cur.type == TokenType::LParen)
+    close = TokenType::RParen;
+
+  if (close != TokenType::Unknown) {
+    advance();
+    while (cur.type == TokenType::Identifier) {
+      eq.indices.push_back(cur.text);
+      advance();
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      break;
+    }
+    expect(close);
+  }
+  expect(TokenType::Equals);
+  eq.rhs = parseExpr();
+  return eq;
+}
+
+ConstraintDecl Parser::parseConstraints() {
+  expect(TokenType::KwConstraints);
+  if (cur.type != TokenType::Identifier)
+    syntaxError("Constraints block name");
+  ConstraintDecl constraints;
+  constraints.name = cur.text;
+  advance();
+  expect(TokenType::LBrace);
+  while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+    if (cur.type == TokenType::KwResidual) {
+      constraints.residuals.push_back(parseConstraintEq());
+      continue;
+    }
+    if (cur.type == TokenType::Identifier) {
+      constraints.tempAssignments.push_back(parseAssignment());
+      continue;
+    }
+    syntaxError("Expected residual or assign");
+  }
+  expect(TokenType::RBrace);
+  return constraints;
+}
+
 PrintDecl Parser::parsePrint() {
   expect(TokenType::KwPrint);
   expect(TokenType::LParen);
@@ -363,6 +418,10 @@ Program Parser::parseProgram() {
     }
     if (cur.type == TokenType::KwEvolution) {
       p.evolutions.push_back(parseEvolution());
+      continue;
+    }
+    if (cur.type == TokenType::KwConstraints) {
+      p.constraints.push_back(parseConstraints());
       continue;
     }
     if (cur.type == TokenType::KwPrint) {

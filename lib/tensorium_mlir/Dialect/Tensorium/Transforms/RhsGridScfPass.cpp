@@ -107,6 +107,37 @@ static ArrayAttr makeI64ArrayAttr(OpBuilder &b,
   return b.getArrayAttr(attrs);
 }
 
+static bool isResidualSource(func::FuncOp rhs) {
+  if (auto attr = rhs->getAttrOfType<BoolAttr>(
+          tensorium_mlir::abi::kAttrResidualKernel))
+    return attr.getValue();
+  return false;
+}
+
+static void createResidualGridAlias(ModuleOp module, OpBuilder &b,
+                                    Location loc, func::FuncOp target,
+                                    StringRef aliasName, StringRef aliasKind) {
+  if (module.lookupSymbol<func::FuncOp>(aliasName))
+    return;
+
+  auto alias = func::FuncOp::create(loc, aliasName, target.getFunctionType());
+  for (NamedAttribute attr : target->getAttrs()) {
+    if (attr.getName().getValue() == "sym_name")
+      continue;
+    alias->setAttr(attr.getName(), attr.getValue());
+  }
+  alias->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(aliasKind));
+
+  Block *entry = alias.addEntryBlock();
+  b.setInsertionPointToEnd(entry);
+  SmallVector<Value> args;
+  for (BlockArgument arg : entry->getArguments())
+    args.push_back(arg);
+  b.create<func::CallOp>(loc, target.getSymName(), TypeRange{}, args);
+  b.create<func::ReturnOp>(loc);
+  module.push_back(alias);
+}
+
 static LogicalResult collectRhsWriteArgIndices(func::FuncOp rhs,
                                                std::vector<int64_t> &out) {
   llvm::SmallSetVector<int64_t, 8> indices;
@@ -1237,6 +1268,11 @@ struct RhsGridScfPass
     b.create<func::ReturnOp>(loc);
 
     module.push_back(outFn);
+    if (isResidualSource(rhs)) {
+      createResidualGridAlias(
+          module, b, loc, outFn, tensorium_mlir::abi::kSymbolResidualGridScf,
+          tensorium_mlir::abi::kKindResidualGridScf);
+    }
   }
 };
 
@@ -1442,6 +1478,11 @@ struct RhsGridAffinePass
     b.create<func::ReturnOp>(loc);
 
     module.push_back(outFn);
+    if (isResidualSource(rhs)) {
+      createResidualGridAlias(
+          module, b, loc, outFn, tensorium_mlir::abi::kSymbolResidualGridAffine,
+          tensorium_mlir::abi::kKindResidualGridAffine);
+    }
   }
 };
 

@@ -79,6 +79,23 @@ This pipeline perform:
 - Einstein validity checking
 - MLIR dump
 
+# Initial-data residual kernels
+
+Initial-data solver residuals can be written with an explicit `constraints`
+block:
+
+```tn
+constraints PoissonInitialData {
+  Hlocal = laplacian(u)
+  residual H = Hlocal
+}
+```
+
+When grid lowering is enabled, these blocks expose a host-callable
+`tensorium_residual_grid_affine` kernel alongside the existing RHS-compatible
+grid path. The residual fields represent `F(u)`; standalone solver runners can
+then drive `F(u) -> 0`.
+
 # Test
 
 All test programs are located in tests/.

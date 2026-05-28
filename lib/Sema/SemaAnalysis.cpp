@@ -43,6 +43,37 @@ static TensorKind deduceKind(int up, int down) {
     return TensorKind::ConTensor4;
   return TensorKind::MixedTensor;
 }
+
+static void seedCoordinateSymbols(const SimulationConfig *sim,
+                                  std::unordered_map<std::string, int> &coords) {
+  if (!sim)
+    return;
+
+  auto add = [&](const std::string &name, int axis) {
+    if (sim->dimension > axis)
+      coords[name] = axis;
+  };
+
+  if (sim->coordinates == CoordinateSystem::Cartesian) {
+    add("x", 0);
+    add("y", 1);
+    add("z", 2);
+    return;
+  }
+
+  if (sim->coordinates == CoordinateSystem::Spherical) {
+    add("r", 0);
+    add("theta", 1);
+    add("phi", 2);
+    return;
+  }
+
+  if (sim->coordinates == CoordinateSystem::Cylindrical) {
+    add("rho", 0);
+    add("phi", 1);
+    add("z", 2);
+  }
+}
 } // namespace
 
 IndexedMetric SemanticAnalyzer::analyzeMetric(const MetricDecl &decl) {
@@ -86,6 +117,7 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
   LocalScopeGuard localsScope(
       locals, std::unordered_map<std::string, TensorTypeDesc>{});
   coordIndex.clear();
+  seedCoordinateSymbols(prog.simulation.get(), coordIndex);
   locals.clear();
 
   IndexedEvolution out;
@@ -171,6 +203,105 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
                                  "' assignments must be symmetric");
       }
     }
+
+    TensorType lhsType = {fd->up, fd->down};
+    checker.checkAssignmentVariance(lhsType, ie.indices, ie.rhs.get());
+    checker.infer(ie.rhs.get());
+    ie.rhs->inferredType.kind = fd->kind;
+    ie.rhs->inferredType.up = fd->up;
+    ie.rhs->inferredType.down = fd->down;
+
+    out.equations.push_back(std::move(ie));
+  }
+
+  return out;
+}
+
+IndexedEvolution
+SemanticAnalyzer::analyzeConstraint(const ConstraintDecl &decl) {
+  LocalScopeGuard localsScope(
+      locals, std::unordered_map<std::string, TensorTypeDesc>{});
+  coordIndex.clear();
+  seedCoordinateSymbols(prog.simulation.get(), coordIndex);
+  locals.clear();
+
+  IndexedEvolution out;
+  out.name = decl.name;
+
+  for (const auto &tmp : decl.tempAssignments)
+    for (const auto &idx : tmp.lhs.indices) {
+      validateSpatialIndex(idx);
+      coordIndex[idx] = -1;
+    }
+
+  for (const auto &eq : decl.residuals)
+    for (const auto &idx : eq.indices) {
+      validateSpatialIndex(idx);
+      coordIndex[idx] = -1;
+    }
+
+  TensorTypeChecker checker(hasConnectionTensor);
+  std::unordered_set<std::string> tempNames;
+
+  for (const auto &tmp : decl.tempAssignments) {
+    if (params.count(tmp.lhs.base)) {
+      throw std::runtime_error("Cannot redeclare parameter '" + tmp.lhs.base +
+                               "' as local");
+    }
+
+    if (fields.count(tmp.lhs.base)) {
+      throw std::runtime_error("Cannot redeclare field '" + tmp.lhs.base +
+                               "' as local");
+    }
+
+    if (!tempNames.insert(tmp.lhs.base).second) {
+      throw std::runtime_error("Cannot redeclare local '" + tmp.lhs.base + "'");
+    }
+
+    if (tmp.lhs.indices.empty())
+      locals[tmp.lhs.base] = TensorTypeDesc{TensorKind::Scalar, 0, 0};
+  }
+
+  for (const auto &tmp : decl.tempAssignments) {
+    auto rhs = transformExpr(tmp.rhs.get());
+    TensorType rhsType = checker.infer(rhs.get());
+    TensorType lhsType{rhsType.up, rhsType.down};
+    checker.checkAssignmentVariance(lhsType, tmp.lhs.indices, rhs.get());
+
+    IndexedAssignment ia;
+    ia.tensor = tmp.lhs.base;
+    ia.indices = tmp.lhs.indices;
+    for (auto &idx : tmp.lhs.indices)
+      ia.indexOffsets.push_back(resolveIndex(idx));
+    ia.rhs = std::move(rhs);
+    out.temp.push_back(std::move(ia));
+
+    locals[tmp.lhs.base] =
+        TensorTypeDesc{deduceKind(rhsType.up, rhsType.down), rhsType.up,
+                       rhsType.down};
+  }
+
+  for (const auto &eq : decl.residuals) {
+
+    auto it = fields.find(eq.fieldName);
+    if (it == fields.end())
+      throw std::runtime_error("Unknown field in constraints residual: " +
+                               eq.fieldName);
+
+    const FieldDecl *fd = it->second;
+    size_t expectedRank = static_cast<size_t>(fd->up + fd->down);
+
+    if (eq.indices.size() != expectedRank) {
+      throw std::runtime_error(
+          "Wrong number of indices in constraints residual for field '" +
+          eq.fieldName + "': expected " + std::to_string(expectedRank) +
+          ", got " + std::to_string(eq.indices.size()));
+    }
+
+    IndexedEvolutionEq ie;
+    ie.fieldName = eq.fieldName;
+    ie.indices = eq.indices;
+    ie.rhs = transformExpr(eq.rhs.get());
 
     TensorType lhsType = {fd->up, fd->down};
     checker.checkAssignmentVariance(lhsType, ie.indices, ie.rhs.get());

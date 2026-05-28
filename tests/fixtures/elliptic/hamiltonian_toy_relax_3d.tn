@@ -1,0 +1,46 @@
+# Nonlinear Hamiltonian-constraint toy relaxation.
+#
+# This keeps the target Bowen-York/puncture algebraic shape on the explicit
+# initial-data constraint surface:
+#   H = laplacian(u) + 1/8 * A2 * (psi + u)^(-7)
+#
+# The host runner manufactures A2 so that a sine mode is an exact discrete
+# solution for psi = 1.
+field scalar u
+field scalar v
+field scalar psi
+field scalar A2
+field scalar H
+field scalar du
+field scalar dv
+
+params { c, eta }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.01
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+constraints HamiltonianToyRelax3D {
+  psiTotal = psi + u
+  psi2 = psiTotal * psiTotal
+  psi4 = psi2 * psi2
+  psi7 = psi4 * psi2 * psiTotal
+  Hlocal = laplacian(u) + 0.125 * A2 / psi7
+
+  residual H = Hlocal
+  residual du = v - eta * u
+  residual dv = c * c * Hlocal
+}

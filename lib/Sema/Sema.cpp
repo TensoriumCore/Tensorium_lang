@@ -52,13 +52,6 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
     return std::make_unique<IndexedNumber>(n->value);
 
   if (auto v = dynamic_cast<const VarExpr *>(e)) {
-    if (auto it = coordIndex.find(v->name); it != coordIndex.end()) {
-      auto iv =
-          std::make_unique<IndexedVar>(v->name, IndexedVarKind::Coordinate);
-      iv->coordIndex = it->second;
-      iv->tensorKind = TensorKind::Scalar;
-      return iv;
-    }
     if (auto itLocal = locals.find(v->name); itLocal != locals.end()) {
       auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Local);
       iv->tensorKind = itLocal->second.kind;
@@ -80,6 +73,14 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       iv->tensorKind = fd->kind;
       iv->up = fd->up;
       iv->down = fd->down;
+      return iv;
+    }
+
+    if (auto it = coordIndex.find(v->name); it != coordIndex.end()) {
+      auto iv =
+          std::make_unique<IndexedVar>(v->name, IndexedVarKind::Coordinate);
+      iv->coordIndex = it->second;
+      iv->tensorKind = TensorKind::Scalar;
       return iv;
     }
 
