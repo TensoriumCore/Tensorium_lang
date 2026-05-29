@@ -96,6 +96,11 @@ When grid lowering is enabled, these blocks expose a host-callable
 grid path. The residual fields represent `F(u)`; standalone solver runners can
 then drive `F(u) -> 0`.
 
+For CPU parallel grid experiments, `--tensorium-rhs-grid-parallel-lower`
+emits `tensorium_rhs_grid_parallel` and, for `constraints` blocks,
+`tensorium_residual_grid_parallel`. LLVM emission lowers the parallel grid loop
+through OpenMP runtime calls.
+
 # Test
 
 All test programs are located in tests/.

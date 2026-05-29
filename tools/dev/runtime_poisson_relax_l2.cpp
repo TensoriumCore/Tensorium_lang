@@ -102,11 +102,18 @@ int main() {
       return 2;
     }
 
-    const char *kernelSymbol =
-        storage.findKernelPlan("tensorium_residual_grid_affine")
-            ? "tensorium_residual_grid_affine"
-            : "tensorium_rhs_grid_affine";
-    const auto *plan = storage.findKernelPlan(kernelSymbol);
+    const char *kernelSymbol = nullptr;
+    const char *candidateKernels[] = {
+        "tensorium_residual_grid_parallel", "tensorium_residual_grid_affine",
+        "tensorium_rhs_grid_parallel", "tensorium_rhs_grid_affine"};
+    for (const char *candidate : candidateKernels) {
+      if (storage.findKernelPlan(candidate)) {
+        kernelSymbol = candidate;
+        break;
+      }
+    }
+    const auto *plan = kernelSymbol ? storage.findKernelPlan(kernelSymbol)
+                                    : nullptr;
     if (!plan) {
       std::fprintf(stderr, "missing residual/rhs grid plan\n");
       return 2;

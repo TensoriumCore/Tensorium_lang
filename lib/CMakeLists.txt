@@ -192,6 +192,8 @@ set(TENSORIUM_MLIR_COMMON_LINK_LIBS
   MLIRTransforms
   MLIRConvertToLLVMPass
   MLIRConvertToLLVMInterface
+  MLIRSCFToOpenMP
+  MLIROpenMPToLLVM
   MLIRSCFToControlFlow
   MLIRAffineToStandard
   MLIRMemRefTransforms
@@ -204,7 +206,9 @@ set(TENSORIUM_MLIR_COMMON_LINK_LIBS
   MLIRLLVMCommonConversion
   MLIRReconcileUnrealizedCasts
   MLIRLLVMDialect
+  MLIROpenMPDialect
   MLIRTargetLLVMIRExport
+  MLIROpenMPToLLVMIRTranslation
   MLIRToLLVMIRTranslationRegistration
   MLIRFuncDialect
   MLIRArithDialect

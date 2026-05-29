@@ -20,7 +20,7 @@ elif [[ -x /opt/llvm-20/bin/llc ]]; then
 else
   LLC_BIN="llc"
 fi
-CXX_BIN="${CXX:-c++}"
+source "$ROOT_DIR/tools/dev/openmp_flags.sh"
 
 LL_PATH="/tmp/tensorium_hamiltonian_toy_relax_l2.ll"
 OBJ_PATH="/tmp/tensorium_hamiltonian_toy_relax_l2.o"
@@ -43,6 +43,7 @@ fi
 echo "[hamiltonian-toy-relax-l2] generating LLVM IR and host header: $LL_PATH"
 "$DRIVER" \
   --tensorium-rhs-grid-affine-lower \
+  --tensorium-rhs-grid-parallel-lower \
   --tensorium-strip-source-funcs \
   --emit-llvm "$LL_PATH" \
   --emit-host-header "$HOST_HEADER" \
@@ -60,6 +61,14 @@ if ! grep -q "tensorium_residual_grid_affine" "$HOST_HEADER"; then
   echo "error: expected generated residual grid kernel in host header" >&2
   exit 2
 fi
+if ! grep -q "tensorium_residual_grid_parallel" "$HOST_HEADER"; then
+  echo "error: expected generated residual parallel grid kernel in host header" >&2
+  exit 2
+fi
+if ! grep -q "__kmpc_fork_call" "$LL_PATH"; then
+  echo "error: expected OpenMP fork call in generated LLVM IR" >&2
+  exit 2
+fi
 
 echo "[hamiltonian-toy-relax-l2] compiling LLVM object"
 if command -v "$LLC_BIN" >/dev/null 2>&1; then
@@ -69,8 +78,9 @@ else
 fi
 
 echo "[hamiltonian-toy-relax-l2] compiling runtime L2 runner"
-"$CXX_BIN" -O0 -std=c++20 -I "$ROOT_DIR/include" -include "$HOST_HEADER" \
-  "$RUNNER_SRC" "$OBJ_PATH" -lm -o "$EXE_PATH"
+"$CXX_BIN" -O0 -std=c++20 "${OPENMP_CXXFLAGS[@]}" -I "$ROOT_DIR/include" \
+  -include "$HOST_HEADER" "$RUNNER_SRC" "$OBJ_PATH" -lm \
+  "${OPENMP_LDFLAGS[@]}" -o "$EXE_PATH"
 
 echo "[hamiltonian-toy-relax-l2] running runtime L2 executable"
 "$EXE_PATH"

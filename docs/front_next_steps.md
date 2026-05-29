@@ -25,6 +25,12 @@ lower residual equations to generated `tensorium_residual_grid_*` kernels. The
 existing Poisson, Hamiltonian-toy, and Bowen-York single-puncture relaxation
 fixtures use that surface and are wired into the full test suite.
 
+RHS/residual grid kernels also have an opt-in parallel lowering path via
+`--tensorium-rhs-grid-parallel-lower`. It exposes
+`tensorium_rhs_grid_parallel` / `tensorium_residual_grid_parallel`, emits
+`scf.parallel` in Tensorium MLIR, and lowers to OpenMP runtime calls during
+LLVM emission.
+
 ## Prioritized Work
 ### 1. Pass-level performance observability
 - Use the opt-in `--mlir-pass-timing` mode in `Tensorium_cc`.
@@ -66,11 +72,13 @@ This should be handled before widening the backend/JIT surface too far.
 ## Recommended Next Sequence
 1. Establish pass-timing baselines from the updated bench workflow.
 2. Profile the real GR/BSSN fixtures and record the largest offenders.
-3. Expand host wrapper generation from the reusable ABI descriptor where it
+3. Link generated parallel-grid objects in benchmark runners with OpenMP and
+   compare serial affine versus parallel kernels on Poisson/Bowen-York grids.
+4. Expand host wrapper generation from the reusable ABI descriptor where it
    reduces duplicated glue.
-4. Revisit runtime ABI generalization only after the current lowering surface is
+5. Revisit runtime ABI generalization only after the current lowering surface is
    measured.
-5. Design point or tile kernel ABI variants before adding AMReX wrappers.
+6. Design point or tile kernel ABI variants before adding AMReX wrappers.
 
 ## Completed Since The Earlier Roadmap
 - Official init-only ABI documentation.

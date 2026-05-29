@@ -63,6 +63,8 @@ void applyPassOptions(MLIRGenOptions &opts,
       opts.enableRhsGridScfPass || passOptions.enableRhsGridScfPass;
   opts.enableRhsGridAffinePass =
       opts.enableRhsGridAffinePass || passOptions.enableRhsGridAffinePass;
+  opts.enableRhsGridParallelPass =
+      opts.enableRhsGridParallelPass || passOptions.enableRhsGridParallelPass;
   opts.enableStripSourceFuncsPass =
       opts.enableStripSourceFuncsPass || passOptions.enableStripSourceFuncsPass;
   opts.enableStencilLoweringPass =

@@ -222,6 +222,9 @@ Rules:
 * During lowering, residual equations reuse the same tensor expression pipeline
   as RHS equations, then expose a host-callable
   `tensorium_residual_grid_affine` wrapper when grid lowering is selected.
+  The opt-in parallel grid lowering additionally exposes
+  `tensorium_residual_grid_parallel` and lowers the grid loop through OpenMP at
+  LLVM emission time.
 * Solvers interpret the generated field outputs as `F(u)` and may also use
   auxiliary increment fields such as `du`/`dv` for relaxation schemes.
 

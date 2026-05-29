@@ -29,6 +29,9 @@ void addEinsteinPipelineSafe(::mlir::PassManager &pm,
   if (opts.enableRhsGridAffinePass) {
     pm.addPass(tensorium::mlir::createTensoriumRhsGridAffinePass());
   }
+  if (opts.enableRhsGridParallelPass) {
+    pm.addPass(tensorium::mlir::createTensoriumRhsGridParallelPass());
+  }
   if (opts.enableStripSourceFuncsPass) {
     pm.addPass(tensorium::mlir::createTensoriumStripSourceFuncsPass());
   }
@@ -101,6 +104,8 @@ bool lowerModuleToLLVM(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createLowerAffinePass());
+  if (opts.enableRhsGridParallelPass)
+    pm.addPass(mlir::createConvertSCFToOpenMPPass());
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::memref::createExpandStridedMetadataPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
@@ -109,6 +114,8 @@ bool lowerModuleToLLVM(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
   pm.addPass(mlir::createConvertControlFlowToLLVMPass());
   pm.addPass(mlir::createConvertFuncToLLVMPass());
   pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  if (opts.enableRhsGridParallelPass)
+    pm.addPass(mlir::createConvertOpenMPToLLVMPass());
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 
   return mlir::succeeded(pm.run(moduleOp));

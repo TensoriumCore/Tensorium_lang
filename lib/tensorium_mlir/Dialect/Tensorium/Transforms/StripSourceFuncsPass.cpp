@@ -23,8 +23,10 @@ struct StripSourceFuncsPass
     const bool hasRhsReplacement =
         module.lookupSymbol<func::FuncOp>("tensorium_rhs_grid_scf") ||
         module.lookupSymbol<func::FuncOp>("tensorium_rhs_grid_affine") ||
+        module.lookupSymbol<func::FuncOp>("tensorium_rhs_grid_parallel") ||
         module.lookupSymbol<func::FuncOp>("tensorium_residual_grid_scf") ||
-        module.lookupSymbol<func::FuncOp>("tensorium_residual_grid_affine");
+        module.lookupSymbol<func::FuncOp>("tensorium_residual_grid_affine") ||
+        module.lookupSymbol<func::FuncOp>("tensorium_residual_grid_parallel");
 
     auto eraseIfPresent = [&](const char *name) {
       if (auto fn = module.lookupSymbol<func::FuncOp>(name))

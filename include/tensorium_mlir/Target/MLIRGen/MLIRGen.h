@@ -35,6 +35,7 @@ struct MLIRPassOptions {
   bool enableInitGridAffinePass = false;
   bool enableRhsGridScfPass = false;
   bool enableRhsGridAffinePass = false;
+  bool enableRhsGridParallelPass = false;
   bool enableStripSourceFuncsPass = false;
   bool enableStencilLoweringPass = false;
   // Constructor options for parameterized Tensorium passes.
@@ -67,6 +68,7 @@ struct MLIRGenOptions {
   bool enableInitGridAffinePass = false;
   bool enableRhsGridScfPass = false;
   bool enableRhsGridAffinePass = false;
+  bool enableRhsGridParallelPass = false;
   bool enableStripSourceFuncsPass = false;
   bool enableStencilLoweringPass = false;
   double dx = 0.1;

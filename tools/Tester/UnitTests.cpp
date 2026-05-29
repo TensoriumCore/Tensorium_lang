@@ -2365,6 +2365,97 @@ evolution CoordInRhs {
   return true;
 }
 
+static bool testRhsGridParallelLoweringEmitsScfParallel() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridParallelPass = true;
+
+  const std::string source = R"(
+field scalar phi
+field scalar dphi
+
+simulation {
+  dimension = 3
+  resolution = [8, 8, 8]
+  time { dt = 0.01 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution ParallelSmoke {
+  dt dphi = phi
+}
+)";
+
+  auto module = buildMLIRModuleFromSourceWithOpts(
+      source, CompilationMode::Executable, ctx, opts);
+
+  auto rhsGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolRhsGridParallel);
+  if (!rhsGrid) {
+    std::cerr << "FAIL: missing tensorium_rhs_grid_parallel\n";
+    return false;
+  }
+
+  auto kind = rhsGrid->getAttrOfType<::mlir::StringAttr>(
+      tensorium_mlir::abi::kAttrABIKind);
+  if (!kind || kind.getValue() != tensorium_mlir::abi::kKindRhsGridParallel) {
+    std::cerr << "FAIL: rhs_grid_parallel ABI kind missing or incorrect\n";
+    return false;
+  }
+
+  int parallelCount = 0;
+  rhsGrid.walk([&](::mlir::scf::ParallelOp) { ++parallelCount; });
+  if (parallelCount != 1) {
+    std::cerr << "FAIL: expected one scf.parallel in rhs_grid_parallel, got "
+              << parallelCount << "\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool testRhsGridParallelLLVMEmitsOpenMP() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableStencilLoweringPass = false;
+  opts.enableRhsGridParallelPass = true;
+  opts.enableStripSourceFuncsPass = true;
+
+  const std::string source = R"(
+field scalar phi
+field scalar dphi
+
+simulation {
+  dimension = 3
+  resolution = [8, 8, 8]
+  time { dt = 0.01 integrator = euler }
+  spatial { scheme = fd derivative = centered order = 2 }
+}
+
+evolution ParallelSmoke {
+  dt dphi = phi
+}
+)";
+
+  backend::ModuleIR mod = buildModuleFromSource(source, CompilationMode::Executable);
+  std::string llvmIR;
+  if (!tensorium_mlir::emitLLVMIR(mod, opts, &llvmIR)) {
+    std::cerr << "FAIL: emitLLVMIR failed for rhs_grid_parallel\n";
+    return false;
+  }
+
+  if (llvmIR.find("tensorium_rhs_grid_parallel") == std::string::npos) {
+    std::cerr << "FAIL: LLVM IR missing tensorium_rhs_grid_parallel symbol\n";
+    return false;
+  }
+  if (llvmIR.find("__kmpc_fork_call") == std::string::npos) {
+    std::cerr << "FAIL: parallel LLVM IR missing OpenMP fork call\n";
+    return false;
+  }
+
+  return true;
+}
+
 static bool testSchwarzschildRhsGridAffineLowering() {
   ::mlir::MLIRContext ctx;
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
@@ -5295,6 +5386,10 @@ int main() {
        &testRhsExplicitParamDeclarationAccepted},
       {"testRhsGridScfLoweringSupportsCoords",
        &testRhsGridScfLoweringSupportsCoords},
+      {"testRhsGridParallelLoweringEmitsScfParallel",
+       &testRhsGridParallelLoweringEmitsScfParallel},
+      {"testRhsGridParallelLLVMEmitsOpenMP",
+       &testRhsGridParallelLLVMEmitsOpenMP},
       {"testSchwarzschildRhsGridAffineLowering",
        &testSchwarzschildRhsGridAffineLowering},
       {"testGeneratedKernelABIMetadata", &testGeneratedKernelABIMetadata},
