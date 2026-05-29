@@ -1,4 +1,4 @@
-#include "tensorium_mlir/Runtime/GeneratedHostStorage.h"
+#include "tensorium_mlir/Runtime/EllipticRelaxation.h"
 
 #include <cmath>
 #include <cstdint>
@@ -13,6 +13,7 @@
 namespace {
 
 using GeneratedHostStorage = tensorium_mlir::runtime::GeneratedHostStorage;
+using GeneratedHostGridShape = tensorium_mlir::runtime::GeneratedHostGridShape;
 
 struct RuntimeViews {
   double *u = nullptr;
@@ -122,8 +123,8 @@ int main() {
   const double amplitude = 0.1;
   const double eta = 2.0;
   const double c = 1.0;
-  const double dt = 0.01;
   const int steps = 1200;
+  const GeneratedHostGridShape shape{nx, ny, nz};
 
   try {
     GeneratedHostStorage storage(
@@ -131,58 +132,33 @@ int main() {
             tensorium_host_kernels, TENSORIUM_HOST_KERNEL_COUNT),
         std::span<const tensorium_host_buffer_desc>(
             tensorium_host_buffers, TENSORIUM_HOST_BUFFER_COUNT),
-        {nx, ny, nz});
+        shape);
     RuntimeViews views = bindViews(storage);
     initializeManufacturedHamiltonian(views, nx, ny, nz, amplitude);
 
-    const auto eulerUpdates = storage.eulerUpdatePairsFromDerivativePrefix();
-    if (eulerUpdates.size() != 2) {
-      std::fprintf(stderr, "Euler update plan mismatch: updates=%zu\n",
-                   eulerUpdates.size());
-      return 2;
-    }
-
-    const char *kernelSymbol = nullptr;
-    const char *candidateKernels[] = {
-        "tensorium_residual_grid_parallel", "tensorium_residual_grid_affine",
-        "tensorium_rhs_grid_parallel", "tensorium_rhs_grid_affine"};
-    for (const char *candidate : candidateKernels) {
-      if (storage.findKernelPlan(candidate)) {
-        kernelSymbol = candidate;
-        break;
-      }
-    }
-    const auto *plan = kernelSymbol ? storage.findKernelPlan(kernelSymbol)
-                                    : nullptr;
-    if (!plan) {
-      std::fprintf(stderr, "missing residual/rhs grid plan\n");
-      return 2;
-    }
+    const auto &plan =
+        tensorium_mlir::runtime::requireResidualGridKernel(storage);
     const std::int64_t radius =
-        plan->stencilRadius > 0 ? plan->stencilRadius : 1;
+        tensorium_mlir::runtime::effectiveStencilRadius(plan);
 
     const std::span<const tensorium_host_kernel_adapter_desc> adapters(
         tensorium_host_kernel_adapters, TENSORIUM_HOST_KERNEL_ADAPTER_COUNT);
     // RhsGrid ABI exposes parameters in sorted name order.
     const double rhsParams[] = {c, eta};
-    const tensorium_mlir::runtime::GeneratedHostGridSpacing spacing{
-        1.0, 1.0, 1.0};
-
-    storage.invoke(adapters, kernelSymbol,
-                   std::span<const double>(rhsParams, 2), spacing);
-    const double initialResidualL2 =
-        l2InteriorField(views.H, nx, ny, nz, radius);
     const double initialErrorL2 =
         l2InteriorError(views.u, nx, ny, nz, radius, amplitude);
 
-    for (int step = 0; step < steps; ++step) {
-      storage.applyEulerUpdate(eulerUpdates, dt);
-      storage.invoke(adapters, kernelSymbol,
-                     std::span<const double>(rhsParams, 2), spacing);
-    }
+    tensorium_mlir::runtime::EllipticSolveOptions solveOptions;
+    solveOptions.maxSteps = steps;
+    solveOptions.residualRatioTarget = 0.2;
+    solveOptions.jacobiWeight = 2.0 / 3.0;
 
-    const double finalResidualL2 =
-        l2InteriorField(views.H, nx, ny, nz, radius);
+    const auto solveResult =
+        tensorium_mlir::runtime::solveWeightedJacobiRelaxation(
+            storage, adapters, std::span<const double>(rhsParams, 2), views.u,
+            views.H, solveOptions);
+    const double initialResidualL2 = solveResult.initialResidualL2;
+    const double finalResidualL2 = solveResult.finalResidualL2;
     const double finalErrorL2 =
         l2InteriorError(views.u, nx, ny, nz, radius, amplitude);
 
@@ -191,7 +167,9 @@ int main() {
     std::printf("[hamiltonian-toy-relax-l2] final   ||H||2   = %.17g\n",
                 finalResidualL2);
     std::printf("[hamiltonian-toy-relax-l2] residual ratio  = %.17g\n",
-                finalResidualL2 / initialResidualL2);
+                solveResult.residualRatio);
+    std::printf("[hamiltonian-toy-relax-l2] steps           = %d\n",
+                solveResult.steps);
     std::printf("[hamiltonian-toy-relax-l2] initial ||err||2 = %.17g\n",
                 initialErrorL2);
     std::printf("[hamiltonian-toy-relax-l2] final   ||err||2 = %.17g\n",
@@ -201,7 +179,7 @@ int main() {
       std::fprintf(stderr, "initial residual norm is not positive\n");
       return 3;
     }
-    if (!(finalResidualL2 < 0.6 * initialResidualL2)) {
+    if (!(solveResult.residualRatio < 0.6)) {
       std::fprintf(stderr, "residual norm did not decrease enough\n");
       return 3;
     }

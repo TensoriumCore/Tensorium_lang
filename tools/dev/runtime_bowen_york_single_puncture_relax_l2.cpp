@@ -1,4 +1,4 @@
-#include "tensorium_mlir/Runtime/GeneratedHostStorage.h"
+#include "tensorium_mlir/Runtime/EllipticRelaxation.h"
 
 #include <cerrno>
 #include <cmath>
@@ -19,6 +19,7 @@
 namespace {
 
 using GeneratedHostStorage = tensorium_mlir::runtime::GeneratedHostStorage;
+using GeneratedHostGridShape = tensorium_mlir::runtime::GeneratedHostGridShape;
 
 struct RuntimeViews {
   double *u = nullptr;
@@ -148,12 +149,31 @@ void printCheckpoint(int step, int finalStep, double residualL2, double maxU) {
               step, residualL2, maxU, step == finalStep ? " final" : "");
 }
 
+struct CheckpointObserverContext {
+  RuntimeViews views;
+  GeneratedHostGridShape shape;
+  bool checkpoints = false;
+};
+
+void observeCheckpoint(const tensorium_mlir::runtime::EllipticSolveResult &result,
+                       GeneratedHostStorage &, void *rawContext) {
+  auto *context = static_cast<CheckpointObserverContext *>(rawContext);
+  if (!context || !context->checkpoints ||
+      !shouldPrintCheckpoint(result.steps, result.maxSteps))
+    return;
+  printCheckpoint(result.steps, result.maxSteps, result.finalResidualL2,
+                  tensorium_mlir::runtime::maxAbsInteriorField(
+                      context->views.u, context->shape,
+                      result.stencilRadius));
+}
+
 } // namespace
 
 int main() {
   const std::int64_t nx = 16;
   const std::int64_t ny = 16;
   const std::int64_t nz = 16;
+  const GeneratedHostGridShape shape{nx, ny, nz};
 
   try {
     const bool csvOutput = isCsvOutput();
@@ -180,42 +200,14 @@ int main() {
             tensorium_host_kernels, TENSORIUM_HOST_KERNEL_COUNT),
         std::span<const tensorium_host_buffer_desc>(
             tensorium_host_buffers, TENSORIUM_HOST_BUFFER_COUNT),
-        {nx, ny, nz});
+        shape);
     RuntimeViews views = bindViews(storage);
     initializeState(views, nx * ny * nz);
-
-    const auto eulerUpdates = storage.eulerUpdatePairsFromDerivativePrefix();
-    if (eulerUpdates.size() != 2) {
-      std::fprintf(stderr, "Euler update plan mismatch: updates=%zu\n",
-                   eulerUpdates.size());
-      return 2;
-    }
-
-    const char *kernelSymbol = nullptr;
-    const char *candidateKernels[] = {
-        "tensorium_residual_grid_parallel", "tensorium_residual_grid_affine",
-        "tensorium_rhs_grid_parallel", "tensorium_rhs_grid_affine"};
-    for (const char *candidate : candidateKernels) {
-      if (storage.findKernelPlan(candidate)) {
-        kernelSymbol = candidate;
-        break;
-      }
-    }
-    const auto *plan = kernelSymbol ? storage.findKernelPlan(kernelSymbol)
-                                    : nullptr;
-    if (!plan) {
-      std::fprintf(stderr, "missing residual/rhs grid plan\n");
-      return 2;
-    }
-    const std::int64_t radius =
-        plan->stencilRadius > 0 ? plan->stencilRadius : 1;
 
     const std::span<const tensorium_host_kernel_adapter_desc> adapters(
         tensorium_host_kernel_adapters, TENSORIUM_HOST_KERNEL_ADAPTER_COUNT);
     // RhsGrid ABI exposes parameters in sorted name order.
     const double rhsParams[] = {c, eps2, eta, mass, px, x0, y0, z0};
-    const tensorium_mlir::runtime::GeneratedHostGridSpacing spacing{
-        1.0, 1.0, 1.0};
 
     if (!csvOutput) {
       std::printf("[bowen-york-single-puncture-l2] params eta=%.17g c=%.17g "
@@ -223,34 +215,25 @@ int main() {
                   eta, c, dt, steps, px, eps2);
     }
 
-    storage.invoke(adapters, kernelSymbol,
-                   std::span<const double>(rhsParams, 8), spacing);
-    const double initialResidualL2 =
-        l2InteriorField(views.H, nx, ny, nz, radius);
-    if (checkpoints) {
-      printCheckpoint(0, steps, initialResidualL2,
-                      maxAbsInterior(views.u, nx, ny, nz, radius));
-    }
+    CheckpointObserverContext observerContext{views, shape, checkpoints};
+    tensorium_mlir::runtime::EllipticSolveOptions solveOptions;
+    solveOptions.dt = dt;
+    solveOptions.maxSteps = steps;
+    solveOptions.residualRatioTarget = expectZero ? 0.0 : decreaseFactor;
+    solveOptions.residualTolerance = expectZero ? zeroTolerance : 0.0;
+    solveOptions.expectedEulerUpdateCount = 2;
+    solveOptions.observer = observeCheckpoint;
+    solveOptions.observerUserData = &observerContext;
 
-    for (int step = 1; step <= steps; ++step) {
-      storage.applyEulerUpdate(eulerUpdates, dt);
-      storage.invoke(adapters, kernelSymbol,
-                     std::span<const double>(rhsParams, 8), spacing);
-      if (checkpoints && shouldPrintCheckpoint(step, steps)) {
-        printCheckpoint(step, steps,
-                        l2InteriorField(views.H, nx, ny, nz, radius),
-                        maxAbsInterior(views.u, nx, ny, nz, radius));
-      }
-    }
-
-    const double finalResidualL2 =
-        l2InteriorField(views.H, nx, ny, nz, radius);
-    const double maxU = maxAbsInterior(views.u, nx, ny, nz, radius);
-    const double ratio =
-        initialResidualL2 > 0.0
-            ? finalResidualL2 / initialResidualL2
-            : (finalResidualL2 == 0.0 ? 0.0
-                                      : std::numeric_limits<double>::infinity());
+    const auto solveResult = tensorium_mlir::runtime::solveExplicitEulerRelaxation(
+        storage, adapters, std::span<const double>(rhsParams, 8), views.H,
+        solveOptions);
+    const double initialResidualL2 = solveResult.initialResidualL2;
+    const double finalResidualL2 = solveResult.finalResidualL2;
+    const double maxU =
+        tensorium_mlir::runtime::maxAbsInteriorField(
+            views.u, shape, solveResult.stencilRadius);
+    const double ratio = solveResult.residualRatio;
 
     const char *status = "ok";
     bool hardFailure = false;
@@ -283,6 +266,8 @@ int main() {
                   finalResidualL2);
       std::printf("[bowen-york-single-puncture-l2] residual ratio = %.17g\n",
                   ratio);
+      std::printf("[bowen-york-single-puncture-l2] steps = %d\n",
+                  solveResult.steps);
       std::printf("[bowen-york-single-puncture-l2] max |u| = %.17g\n",
                   maxU);
       std::printf("[bowen-york-single-puncture-l2] status = %s\n", status);
