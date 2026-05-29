@@ -213,6 +213,7 @@ struct InitialDataIR {
 struct ModuleIR {
   std::optional<SimulationIR> simulation;
   std::optional<InitialDataIR> initialData;
+  bool hasResidualConstraints = false;
   std::vector<FieldIR> fields;
   std::vector<EvolutionIR> evolutions;
   std::vector<PrintIR> prints;

@@ -140,6 +140,18 @@ struct EvolutionDecl {
   std::vector<Assignment> tempAssignments;
 };
 
+struct ConstraintEq {
+  std::string fieldName;
+  std::vector<std::string> indices;
+  std::unique_ptr<Expr> rhs;
+};
+
+struct ConstraintDecl {
+  std::string name;
+  std::vector<ConstraintEq> residuals;
+  std::vector<Assignment> tempAssignments;
+};
+
 struct PrintDecl {
   std::unique_ptr<Expr> expr;
 };
@@ -211,6 +223,7 @@ struct Program {
   std::vector<FieldDecl> fields;
   std::vector<MetricDecl> metrics;
   std::vector<EvolutionDecl> evolutions;
+  std::vector<ConstraintDecl> constraints;
   std::vector<PrintDecl> prints;
   std::unique_ptr<SimulationConfig> simulation;
   std::unique_ptr<InitialDataDecl> initialData;

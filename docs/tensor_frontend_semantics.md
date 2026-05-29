@@ -24,6 +24,10 @@ Top-level constructs:
   maps to `(up, down)` (e.g. covector = `(0,1)`); explicit index names specify
   the expected index arity for evolution equations.
 * `EvolutionDecl` – a collection of right-hand-side expressions `dt field[idxs] = rhs`.
+* `ConstraintDecl` – an initial-data residual block. It contains temporary
+  assignments plus `residual field[idxs] = rhs` equations. The generated kernel
+  computes `F(u)` into declared residual/output fields; the host solver decides
+  how to drive those residuals toward zero.
 * `Assignment` – used for temporaries and metric entries; LHS is a `TensorAccess`.
 * `ExternDecl` – declares external scalar/tensor functions with explicit tensor
   type signatures.
@@ -182,6 +186,44 @@ A program is considered **valid** when:
    - entries of `simulation.resolution`
    - `simulation.spatial.order`
    - `mixed_tensor(up=...,down=...)` attributes
+
+## Initial-Data Constraint Blocks
+
+Initial-data solver kernels should use `constraints`, not pseudo-time
+`evolution`, when the operation is a residual evaluation:
+
+```tn
+field scalar u
+field scalar v
+field scalar H
+field scalar du
+field scalar dv
+
+params { c, eta }
+
+constraints PoissonInitialData {
+  Hlocal = laplacian(u)
+
+  residual H = Hlocal
+  residual du = v - eta * u
+  residual dv = c * c * Hlocal
+}
+```
+
+Rules:
+
+* A `constraints Name { ... }` block accepts ordinary temporary assignments and
+  `residual` equations.
+* Residual targets must be declared fields, with the same rank/index rules as
+  evolution targets.
+* The current executable ABI does not mix `constraints` and `evolution` blocks
+  in one module. A solver module is either residual-kernel oriented or
+  evolution-kernel oriented.
+* During lowering, residual equations reuse the same tensor expression pipeline
+  as RHS equations, then expose a host-callable
+  `tensorium_residual_grid_affine` wrapper when grid lowering is selected.
+* Solvers interpret the generated field outputs as `F(u)` and may also use
+  auxiliary increment fields such as `du`/`dv` for relaxation schemes.
 
 Examples:
 

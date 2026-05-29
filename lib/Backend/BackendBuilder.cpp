@@ -574,6 +574,13 @@ ModuleIR BackendBuilder::build(const Program &prog,
   ModuleIR mod;
   bool hasConnectionTensor = false;
 
+  if (!prog.constraints.empty() && !prog.evolutions.empty()) {
+    throw std::runtime_error(
+        "constraints blocks cannot be mixed with evolution blocks in the "
+        "current residual-kernel ABI");
+  }
+  mod.hasResidualConstraints = !prog.constraints.empty();
+
   if (prog.simulation)
     mod.simulation = lowerSimulation(*prog.simulation);
 
@@ -657,6 +664,34 @@ ModuleIR BackendBuilder::build(const Program &prog,
   mod.evolutions.reserve(prog.evolutions.size());
   for (const auto &evo : prog.evolutions) {
     auto indexed = sem.analyzeEvolution(evo);
+
+    EvolutionIR out;
+    out.name = indexed.name;
+    out.equations.reserve(indexed.equations.size());
+
+    for (const auto &eq : indexed.equations) {
+      EquationIR oeq;
+      oeq.fieldName = eq.fieldName;
+      oeq.indices = eq.indices;
+      oeq.rhs = lowerIndexedExpr(eq.rhs.get(), true, hasConnectionTensor);
+      out.equations.push_back(std::move(oeq));
+    }
+
+    out.temporaries.reserve(indexed.temp.size());
+    for (const auto &tmp : indexed.temp) {
+      TempAssignIR ot;
+      ot.name = tmp.tensor;
+      ot.indices = tmp.indices;
+      ot.indexOffsets = tmp.indexOffsets;
+      ot.rhs = lowerIndexedExpr(tmp.rhs.get(), true, hasConnectionTensor);
+      out.temporaries.push_back(std::move(ot));
+    }
+
+    mod.evolutions.push_back(std::move(out));
+  }
+
+  for (const auto &constraints : prog.constraints) {
+    auto indexed = sem.analyzeConstraint(constraints);
 
     EvolutionIR out;
     out.name = indexed.name;

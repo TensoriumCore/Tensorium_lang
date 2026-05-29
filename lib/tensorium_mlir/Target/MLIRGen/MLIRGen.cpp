@@ -268,7 +268,9 @@ void emitConvenienceWrapper(
              kernel.kind == tensorium_mlir::abi::kKindInitGridAffine) {
     emitInitGridWrapper(os, kernel, componentCounts);
   } else if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
-             kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine) {
+             kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+             kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
+             kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine) {
     emitRhsGridWrapper(os, kernel, componentCounts);
   }
 }
@@ -426,7 +428,9 @@ bool isRuntimeInvokableGridKernel(const HostKernelABI &kernel) {
   return kernel.kind == tensorium_mlir::abi::kKindInitGridScf ||
          kernel.kind == tensorium_mlir::abi::kKindInitGridAffine ||
          kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
-         kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine;
+         kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+         kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
+         kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine;
 }
 
 std::string adapterNameFor(const HostKernelABI &kernel) {
@@ -466,7 +470,9 @@ void emitRuntimeInvokeAdapter(std::ostringstream &os,
     os << "  if (!buffers)\n"
        << "    return -4;\n";
   if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
-      kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine) {
+      kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+      kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
+      kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine) {
     os << "  if (grid->nx <= 0 || grid->ny <= 0 || grid->nz <= 0 || "
           "grid->n_points <= 0)\n"
        << "    return -5;\n";
@@ -475,7 +481,9 @@ void emitRuntimeInvokeAdapter(std::ostringstream &os,
   os << "  " << kernel.symbolName << "(";
   bool first = true;
   if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
-      kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine) {
+      kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+      kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
+      kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine) {
     for (llvm::StringRef expr : {"grid->nx", "grid->ny", "grid->nz",
                                  "grid->dx", "grid->dy", "grid->dz"}) {
       appendComma(os, first);
@@ -774,6 +782,9 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   setCommonABIAttrs(initFunc, tensorium_mlir::abi::kKindInitSource);
   setCommonABIAttrs(rhsFunc, tensorium_mlir::abi::kKindRhsSource);
   setCommonABIAttrs(entryFunc, tensorium_mlir::abi::kKindEntrySource);
+  if (module.hasResidualConstraints)
+    rhsFunc->setAttr(tensorium_mlir::abi::kAttrResidualKernel,
+                     b.getBoolAttr(true));
   initFunc->setAttr(tensorium_mlir::abi::kAttrFieldNames,
                     makeFieldNamesAttr(initArgIndices));
   rhsFunc->setAttr(tensorium_mlir::abi::kAttrFieldNames,

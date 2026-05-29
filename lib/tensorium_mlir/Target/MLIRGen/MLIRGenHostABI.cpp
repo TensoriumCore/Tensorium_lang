@@ -82,7 +82,16 @@ bool isHostCallableKind(llvm::StringRef kind) {
          kind == tensorium_mlir::abi::kKindInitGridScf ||
          kind == tensorium_mlir::abi::kKindInitGridAffine ||
          kind == tensorium_mlir::abi::kKindRhsGridScf ||
-         kind == tensorium_mlir::abi::kKindRhsGridAffine;
+         kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+         kind == tensorium_mlir::abi::kKindResidualGridScf ||
+         kind == tensorium_mlir::abi::kKindResidualGridAffine;
+}
+
+bool isFieldGridKind(llvm::StringRef kind) {
+  return kind == tensorium_mlir::abi::kKindRhsGridScf ||
+         kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+         kind == tensorium_mlir::abi::kKindResidualGridScf ||
+         kind == tensorium_mlir::abi::kKindResidualGridAffine;
 }
 
 std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
@@ -112,7 +121,9 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
     append(coords);
     append(outputs);
   } else if (kind == tensorium_mlir::abi::kKindRhsGridScf ||
-             kind == tensorium_mlir::abi::kKindRhsGridAffine) {
+             kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+             kind == tensorium_mlir::abi::kKindResidualGridScf ||
+             kind == tensorium_mlir::abi::kKindResidualGridAffine) {
     names = {"nx", "ny", "nz", "dx", "dy", "dz"};
     append(params);
     append(fields);
@@ -299,8 +310,7 @@ std::vector<HostBufferABI> hostKernelBuffers(const HostModuleABI &abi,
     return buffers;
   }
 
-  if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
-      kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine) {
+  if (isFieldGridKind(kernel.kind)) {
     const std::int64_t fieldBase =
         6 + static_cast<std::int64_t>(kernel.params.size());
     for (std::size_t i = 0; i < kernel.fields.size(); ++i) {
@@ -462,24 +472,24 @@ std::vector<std::string> validateHostModuleABI(const HostModuleABI &abi) {
             "." + buffer.name);
     }
 
-    const bool isRhs = kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
-                       kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine;
-    if (isRhs) {
+    const bool isFieldGrid = isFieldGridKind(kernel.kind);
+    if (isFieldGrid) {
       if (kernel.rawArgs.size() < 6) {
-        add("rhs kernel must expose grid prefix args: " + kernel.symbolName);
+        add("field grid kernel must expose grid prefix args: " +
+            kernel.symbolName);
       } else if (kernel.rawArgs[0].kind != HostArgKind::Index ||
                  kernel.rawArgs[1].kind != HostArgKind::Index ||
                  kernel.rawArgs[2].kind != HostArgKind::Index ||
                  kernel.rawArgs[3].kind != HostArgKind::F64 ||
                  kernel.rawArgs[4].kind != HostArgKind::F64 ||
                  kernel.rawArgs[5].kind != HostArgKind::F64) {
-        add("rhs kernel grid prefix arg kinds mismatch: " +
+        add("field grid kernel prefix arg kinds mismatch: " +
             kernel.symbolName);
       }
       for (const auto &field : kernel.fields) {
         if (!fieldNames.count(field))
-          add("rhs kernel references unknown field: " + kernel.symbolName +
-              "." + field);
+          add("field grid kernel references unknown field: " +
+              kernel.symbolName + "." + field);
       }
     }
   }

@@ -1,0 +1,50 @@
+# Hartle-Thorne slow-rotation ansatz at first order in the frame-dragging
+# scalar omega. The current initial_data DSL represents h(r), f(r), and
+# omega(r) as scalar parameters h, f, and omega sampled at the point.
+field metric g[mu,nu]
+field inverse_metric gU[mu,nu]
+field scalar alpha
+field scalar phi
+field scalar H
+field cov_tensor2 gamma[i,j]
+field con_tensor2 gammaU[i,j]
+field cov_tensor2 K[i,j]
+
+params { M, J, h, f, omega }
+
+simulation {
+  coordinates = spherical
+  dimension = 3
+  resolution = [32,32,32]
+
+  time {
+    dt = 0.001
+    integrator = rk3
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 4
+  }
+}
+
+initial_data {
+  enforce_symmetry = true
+  metric4 g[mu,nu] = [
+    [0 - h, 0, 0, 0 - (omega*r*r*sin(theta)*sin(theta))],
+    [0, 1/f, 0, 0],
+    [0, 0, r*r, 0],
+    [0 - (omega*r*r*sin(theta)*sin(theta)), 0, 0, r*r*sin(theta)*sin(theta)]
+  ]
+  split_3p1 {
+    alpha -> alpha;
+    gamma -> gamma[i,j];
+    gammaU -> gammaU[i,j];
+  }
+}
+
+evolution HartleThorneSlowRotation {
+  dt H = contract(gammaU[i,j] * d_i(d_j(phi)))
+  dt K[i,j] = d_i(d_j(phi)) + alpha * gamma[i,j]
+}

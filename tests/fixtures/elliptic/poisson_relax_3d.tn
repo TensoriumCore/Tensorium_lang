@@ -1,0 +1,41 @@
+# Minimal elliptic-relaxation smoke fixture.
+#
+# This intentionally uses only existing Tensorium constructs:
+#   H  = laplacian(u)
+#   du = v - eta*u
+#   dv = c*c*H
+#
+# A host runner treats H as the residual buffer and advances u/v explicitly via
+# the generated solver-increment fields du/dv.
+field scalar u
+field scalar v
+field scalar H
+field scalar du
+field scalar dv
+
+params { c, eta }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [16,16,16]
+
+  time {
+    dt = 0.001
+    integrator = euler
+  }
+
+  spatial {
+    scheme = fd
+    derivative = centered
+    order = 2
+  }
+}
+
+constraints PoissonRelax3D {
+  Hlocal = laplacian(u)
+
+  residual H = Hlocal
+  residual du = v - eta * u
+  residual dv = c * c * Hlocal
+}
