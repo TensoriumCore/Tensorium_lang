@@ -42,10 +42,14 @@ inline constexpr const char kSymbolInitGridAffine[] =
     "tensorium_init_grid_affine";
 inline constexpr const char kSymbolRhsGridScf[] = "tensorium_rhs_grid_scf";
 inline constexpr const char kSymbolRhsGridAffine[] = "tensorium_rhs_grid_affine";
+inline constexpr const char kSymbolRhsGridParallel[] =
+    "tensorium_rhs_grid_parallel";
 inline constexpr const char kSymbolResidualGridScf[] =
     "tensorium_residual_grid_scf";
 inline constexpr const char kSymbolResidualGridAffine[] =
     "tensorium_residual_grid_affine";
+inline constexpr const char kSymbolResidualGridParallel[] =
+    "tensorium_residual_grid_parallel";
 
 // Stable function kind tags.
 inline constexpr const char kKindInitSource[] = "init_source";
@@ -56,8 +60,11 @@ inline constexpr const char kKindInitGridScf[] = "init_grid_scf";
 inline constexpr const char kKindInitGridAffine[] = "init_grid_affine";
 inline constexpr const char kKindRhsGridScf[] = "rhs_grid_scf";
 inline constexpr const char kKindRhsGridAffine[] = "rhs_grid_affine";
+inline constexpr const char kKindRhsGridParallel[] = "rhs_grid_parallel";
 inline constexpr const char kKindResidualGridScf[] = "residual_grid_scf";
 inline constexpr const char kKindResidualGridAffine[] = "residual_grid_affine";
+inline constexpr const char kKindResidualGridParallel[] =
+    "residual_grid_parallel";
 
 // C/C++ host-side view of the rank-1 memref descriptor shape used after LLVM
 // lowering: (allocatedPtr, alignedPtr, offset, size, stride).

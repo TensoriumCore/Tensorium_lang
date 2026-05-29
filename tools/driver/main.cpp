@@ -46,6 +46,8 @@ static void printUsage(std::ostream &os) {
      << "  --dump-mlir|--emit-mlir PATH  emit MLIR after selected Tensorium passes\n"
      << "  --dump-llvm-ir|--emit-llvm PATH emit final LLVM IR\n"
      << "  --emit-host-header PATH       emit C host-call wrappers for generated kernels\n"
+     << "  --tensorium-rhs-grid-parallel-lower\n"
+     << "                                emit scf.parallel/OpenMP-ready RHS grid kernels\n"
      << "  --tensorium-dx VALUE          finite-difference grid spacing for stencil passes\n"
      << "  --tensorium-stencil-order N   stencil order, supported values depend on pass\n"
      << "  --tensorium-dissipation-strength VALUE\n"
@@ -271,6 +273,8 @@ int main(int argc, char **argv) {
       passOptions.enableRhsGridScfPass = true;
     } else if (arg == "--tensorium-rhs-grid-affine-lower") {
       passOptions.enableRhsGridAffinePass = true;
+    } else if (arg == "--tensorium-rhs-grid-parallel-lower") {
+      passOptions.enableRhsGridParallelPass = true;
     } else if (arg == "--tensorium-strip-source-funcs") {
       passOptions.enableStripSourceFuncsPass = true;
     } else if (arg == "--tensorium-stencil-lower") {

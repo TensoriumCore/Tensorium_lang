@@ -83,15 +83,19 @@ bool isHostCallableKind(llvm::StringRef kind) {
          kind == tensorium_mlir::abi::kKindInitGridAffine ||
          kind == tensorium_mlir::abi::kKindRhsGridScf ||
          kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+         kind == tensorium_mlir::abi::kKindRhsGridParallel ||
          kind == tensorium_mlir::abi::kKindResidualGridScf ||
-         kind == tensorium_mlir::abi::kKindResidualGridAffine;
+         kind == tensorium_mlir::abi::kKindResidualGridAffine ||
+         kind == tensorium_mlir::abi::kKindResidualGridParallel;
 }
 
 bool isFieldGridKind(llvm::StringRef kind) {
   return kind == tensorium_mlir::abi::kKindRhsGridScf ||
          kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+         kind == tensorium_mlir::abi::kKindRhsGridParallel ||
          kind == tensorium_mlir::abi::kKindResidualGridScf ||
-         kind == tensorium_mlir::abi::kKindResidualGridAffine;
+         kind == tensorium_mlir::abi::kKindResidualGridAffine ||
+         kind == tensorium_mlir::abi::kKindResidualGridParallel;
 }
 
 std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
@@ -122,8 +126,10 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
     append(outputs);
   } else if (kind == tensorium_mlir::abi::kKindRhsGridScf ||
              kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+             kind == tensorium_mlir::abi::kKindRhsGridParallel ||
              kind == tensorium_mlir::abi::kKindResidualGridScf ||
-             kind == tensorium_mlir::abi::kKindResidualGridAffine) {
+             kind == tensorium_mlir::abi::kKindResidualGridAffine ||
+             kind == tensorium_mlir::abi::kKindResidualGridParallel) {
     names = {"nx", "ny", "nz", "dx", "dy", "dz"};
     append(params);
     append(fields);

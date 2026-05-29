@@ -14,6 +14,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/All.h"
+#include "mlir/Target/LLVMIR/Dialect/OpenMP/OpenMPToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
@@ -269,8 +270,10 @@ void emitConvenienceWrapper(
     emitInitGridWrapper(os, kernel, componentCounts);
   } else if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
              kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+             kernel.kind == tensorium_mlir::abi::kKindRhsGridParallel ||
              kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
-             kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine) {
+             kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine ||
+             kernel.kind == tensorium_mlir::abi::kKindResidualGridParallel) {
     emitRhsGridWrapper(os, kernel, componentCounts);
   }
 }
@@ -429,8 +432,10 @@ bool isRuntimeInvokableGridKernel(const HostKernelABI &kernel) {
          kernel.kind == tensorium_mlir::abi::kKindInitGridAffine ||
          kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
          kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+         kernel.kind == tensorium_mlir::abi::kKindRhsGridParallel ||
          kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
-         kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine;
+         kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine ||
+         kernel.kind == tensorium_mlir::abi::kKindResidualGridParallel;
 }
 
 std::string adapterNameFor(const HostKernelABI &kernel) {
@@ -471,8 +476,10 @@ void emitRuntimeInvokeAdapter(std::ostringstream &os,
        << "    return -4;\n";
   if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
       kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+      kernel.kind == tensorium_mlir::abi::kKindRhsGridParallel ||
       kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
-      kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine) {
+      kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine ||
+      kernel.kind == tensorium_mlir::abi::kKindResidualGridParallel) {
     os << "  if (grid->nx <= 0 || grid->ny <= 0 || grid->nz <= 0 || "
           "grid->n_points <= 0)\n"
        << "    return -5;\n";
@@ -482,8 +489,10 @@ void emitRuntimeInvokeAdapter(std::ostringstream &os,
   bool first = true;
   if (kernel.kind == tensorium_mlir::abi::kKindRhsGridScf ||
       kernel.kind == tensorium_mlir::abi::kKindRhsGridAffine ||
+      kernel.kind == tensorium_mlir::abi::kKindRhsGridParallel ||
       kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
-      kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine) {
+      kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine ||
+      kernel.kind == tensorium_mlir::abi::kKindResidualGridParallel) {
     for (llvm::StringRef expr : {"grid->nx", "grid->ny", "grid->nz",
                                  "grid->dx", "grid->dy", "grid->dz"}) {
       appendComma(os, first);
@@ -900,6 +909,7 @@ bool emitLLVMIR(const tensorium::backend::ModuleIR &module,
   mlir::MLIRContext ctx;
   mlir::DialectRegistry registry;
   mlir::registerAllToLLVMIRTranslations(registry);
+  mlir::registerOpenMPDialectTranslation(registry);
   ctx.appendDialectRegistry(registry);
   ctx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
 
@@ -936,6 +946,7 @@ bool emitLLVMIRAndHostHeader(const tensorium::backend::ModuleIR &module,
   mlir::MLIRContext ctx;
   mlir::DialectRegistry registry;
   mlir::registerAllToLLVMIRTranslations(registry);
+  mlir::registerOpenMPDialectTranslation(registry);
   ctx.appendDialectRegistry(registry);
   ctx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
 

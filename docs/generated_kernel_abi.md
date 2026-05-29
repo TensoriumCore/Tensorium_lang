@@ -10,8 +10,10 @@ This document freezes the ABI contract used by generated functions:
 - `tensorium_init_grid_affine`
 - `tensorium_rhs_grid_scf`
 - `tensorium_rhs_grid_affine`
+- `tensorium_rhs_grid_parallel`
 - `tensorium_residual_grid_scf`
 - `tensorium_residual_grid_affine`
+- `tensorium_residual_grid_parallel`
 
 Source of truth for ABI constants:
 `include/tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h`.
@@ -122,9 +124,14 @@ consume directly:
   requiring callers to spell every lowered field argument manually.
 - `constraints` DSL blocks lower through the same scalarization path as RHS
   kernels but additionally expose `tensorium_residual_grid_affine` /
-  `tensorium_residual_grid_scf` host-callable symbols. These kernels compute
-  residual buffers `F(u)`; the solver runtime is responsible for choosing the
-  update method that drives those residuals toward zero.
+  `tensorium_residual_grid_scf` / `tensorium_residual_grid_parallel`
+  host-callable symbols. These kernels compute residual buffers `F(u)`; the
+  solver runtime is responsible for choosing the update method that drives
+  those residuals toward zero.
+- `tensorium_rhs_grid_parallel` and `tensorium_residual_grid_parallel` have the
+  same low-level argument layout as the other field-grid kernels. Their MLIR
+  body uses `scf.parallel`; LLVM emission lowers it through OpenMP runtime
+  calls.
 - `GeneratedHostStorage` also exposes a descriptor-level Euler helper for
   standalone runtime experiments: `eulerUpdatePairsFromDerivativePrefix()`
   discovers writable derivative fields named `dX` and maps them to state field
@@ -212,6 +219,21 @@ The semantic difference is the ABI kind:
 Residual grid kernels write the declared `residual` targets from a
 `constraints` block. Host wrappers and descriptor tables expose those outputs in
 the same `tensorium.abi.output_names` and access metadata used by RHS kernels.
+
+### `tensorium_{rhs,residual}_grid_parallel`
+
+Same low-level signature shape as `tensorium_rhs_grid_affine`:
+- prefix: `i64,i64,i64,double,double,double`,
+- scalar params,
+- one 5-argument memref descriptor per participating field buffer.
+
+The semantic difference is the ABI kind:
+- `tensorium.abi.kind = "rhs_grid_parallel"` or
+  `"residual_grid_parallel"`.
+
+The Tensorium MLIR body is a three-dimensional `scf.parallel` over the interior
+stencil domain. The LLVM lowering pipeline converts this path to OpenMP runtime
+calls, so executables that link the generated object need an OpenMP runtime.
 
 ## Memory layout contract (SoA, component-major)
 

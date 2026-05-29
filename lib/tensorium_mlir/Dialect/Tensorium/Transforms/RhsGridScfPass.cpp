@@ -1276,6 +1276,207 @@ struct RhsGridScfPass
   }
 };
 
+struct RhsGridParallelPass
+    : public PassWrapper<RhsGridParallelPass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RhsGridParallelPass)
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<TensoriumDialect, func::FuncDialect, arith::ArithDialect,
+                    memref::MemRefDialect, scf::SCFDialect>();
+  }
+
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    auto rhs =
+        module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolRhs);
+    if (!rhs)
+      return;
+
+    if (module.lookupSymbol<func::FuncOp>(
+            tensorium_mlir::abi::kSymbolRhsGridParallel))
+      return;
+
+    OpBuilder b(&getContext());
+    Location loc = rhs.getLoc();
+    Type idxTy = b.getIndexType();
+    Type f64 = b.getF64Type();
+    Type dynMemF64 = MemRefType::get({ShapedType::kDynamic}, f64);
+    std::vector<std::string> paramNames = collectRhsParamNames(rhs);
+    std::vector<std::string> fieldNames =
+        parseStringArrayAttr(rhs->getAttrOfType<ArrayAttr>(
+            tensorium_mlir::abi::kAttrFieldNames));
+    if (fieldNames.size() != rhs.getNumArguments()) {
+      rhs.emitError("rhs-grid-parallel: missing or invalid ABI field_names "
+                    "metadata on tensorium_rhs");
+      signalPassFailure();
+      return;
+    }
+    std::vector<int64_t> writeFieldArgIndices;
+    if (failed(collectRhsWriteArgIndices(rhs, writeFieldArgIndices))) {
+      signalPassFailure();
+      return;
+    }
+    std::vector<int64_t> readFieldArgIndices;
+    if (failed(collectRhsReadArgIndices(rhs, readFieldArgIndices))) {
+      signalPassFailure();
+      return;
+    }
+    std::unordered_set<int64_t> readFieldArgSet(readFieldArgIndices.begin(),
+                                                readFieldArgIndices.end());
+    std::unordered_set<int64_t> writeFieldArgSet(writeFieldArgIndices.begin(),
+                                                 writeFieldArgIndices.end());
+    const unsigned stencilRadius = requiredRhsStencilRadius(rhs);
+
+    SmallVector<Type> args;
+    args.push_back(idxTy); // nx
+    args.push_back(idxTy); // ny
+    args.push_back(idxTy); // nz
+    args.push_back(f64);   // dx
+    args.push_back(f64);   // dy
+    args.push_back(f64);   // dz
+    for (std::size_t i = 0; i < paramNames.size(); ++i)
+      args.push_back(f64); // runtime scalar param
+    for (Type argTy : rhs.getFunctionType().getInputs()) {
+      if (!isa<FieldType>(argTy)) {
+        rhs.emitError(
+            "rhs-grid-parallel: expected tensorium.field arg in tensorium_rhs");
+        signalPassFailure();
+        return;
+      }
+      args.push_back(dynMemF64);
+    }
+
+    auto fnTy =
+        b.getFunctionType(args, {});
+    auto outFn = func::FuncOp::create(
+        loc, tensorium_mlir::abi::kSymbolRhsGridParallel, fnTy);
+    auto setCommonABIAttrs = [&](func::FuncOp fn, StringRef kind) {
+      fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
+                  b.getI64IntegerAttr(
+                      tensorium_mlir::abi::kGeneratedKernelABIVersion));
+      fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
+      fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
+                  b.getStringAttr(
+                      tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+      fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
+                  b.getStringAttr(
+                      tensorium_mlir::abi::kMemrefABI1DStridedF64));
+    };
+    setCommonABIAttrs(outFn, tensorium_mlir::abi::kKindRhsGridParallel);
+    outFn->setAttr(tensorium_mlir::abi::kAttrParamNames,
+                   makeStringArrayAttr(b, paramNames));
+    outFn->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+                   makeStringArrayAttr(b, fieldNames));
+    Block *entry = outFn.addEntryBlock();
+    b.setInsertionPointToEnd(entry);
+
+    Value nx = entry->getArgument(0);
+    Value ny = entry->getArgument(1);
+    Value nz = entry->getArgument(2);
+    Value dx = entry->getArgument(3);
+    Value dy = entry->getArgument(4);
+    Value dz = entry->getArgument(5);
+    const unsigned paramBase = 6;
+    const unsigned fieldBase =
+        paramBase + static_cast<unsigned>(paramNames.size());
+    std::vector<int64_t> writeArgIndices;
+    writeArgIndices.reserve(writeFieldArgIndices.size());
+    std::vector<std::string> writeFieldNames;
+    writeFieldNames.reserve(writeFieldArgIndices.size());
+    for (int64_t fieldIdx : writeFieldArgIndices) {
+      writeArgIndices.push_back(static_cast<int64_t>(fieldBase) + fieldIdx);
+      if (fieldIdx >= 0 && static_cast<std::size_t>(fieldIdx) < fieldNames.size())
+        writeFieldNames.push_back(fieldNames[static_cast<std::size_t>(fieldIdx)]);
+    }
+    std::vector<int64_t> readArgIndices;
+    readArgIndices.reserve(readFieldArgIndices.size());
+    for (int64_t fieldIdx : readFieldArgIndices)
+      readArgIndices.push_back(static_cast<int64_t>(fieldBase) + fieldIdx);
+    outFn->setAttr(tensorium_mlir::abi::kAttrReadArgIndices,
+                   makeI64ArrayAttr(b, readArgIndices));
+    outFn->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
+                   makeI64ArrayAttr(b, writeArgIndices));
+    outFn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
+                   makeStringArrayAttr(b, writeFieldNames));
+    outFn->setAttr(tensorium_mlir::abi::kAttrStencilRadius,
+                   b.getI64IntegerAttr(static_cast<int64_t>(stencilRadius)));
+
+    llvm::StringMap<Value> paramScalars;
+    for (unsigned i = 0; i < paramNames.size(); ++i)
+      paramScalars[paramNames[i]] = entry->getArgument(paramBase + i);
+
+    SmallVector<Value> fieldMemrefs;
+    fieldMemrefs.reserve(rhs.getNumArguments());
+    for (unsigned i = 0; i < rhs.getNumArguments(); ++i)
+      fieldMemrefs.push_back(entry->getArgument(fieldBase + i));
+
+    SmallVector<Value> inputMemrefs;
+    SmallVector<Value> allocatedSnapshots;
+    inputMemrefs.reserve(fieldMemrefs.size());
+    Value zeroIdx = b.create<arith::ConstantIndexOp>(loc, 0);
+    for (unsigned fieldIdx = 0; fieldIdx < fieldMemrefs.size(); ++fieldIdx) {
+      Value mem = fieldMemrefs[fieldIdx];
+      const int64_t argIdx = static_cast<int64_t>(fieldIdx);
+      const bool needsOldStateSnapshot =
+          readFieldArgSet.count(argIdx) && writeFieldArgSet.count(argIdx);
+      if (!needsOldStateSnapshot) {
+        inputMemrefs.push_back(mem);
+        continue;
+      }
+      Value size = b.create<memref::DimOp>(loc, mem, zeroIdx);
+      auto snap = b.create<memref::AllocOp>(
+          loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
+      b.create<memref::CopyOp>(loc, mem, snap);
+      inputMemrefs.push_back(snap);
+      allocatedSnapshots.push_back(snap);
+    }
+
+    Value c1 = b.create<arith::ConstantIndexOp>(loc, 1);
+    Value cRadius =
+        b.create<arith::ConstantIndexOp>(loc, static_cast<int64_t>(stencilRadius));
+    Value ubX = b.create<arith::SubIOp>(loc, nx, cRadius);
+    Value ubY = b.create<arith::SubIOp>(loc, ny, cRadius);
+    Value ubZ = b.create<arith::SubIOp>(loc, nz, cRadius);
+
+    SmallVector<Value> lbs = {cRadius, cRadius, cRadius};
+    SmallVector<Value> ubs = {ubX, ubY, ubZ};
+    SmallVector<Value> steps = {c1, c1, c1};
+    bool bodyOK = true;
+    b.create<scf::ParallelOp>(
+        loc, lbs, ubs, steps,
+        [&](OpBuilder &ib, Location nestedLoc, ValueRange ivs) {
+          RhsScalarizer scalarizer(ib, nestedLoc, rhs, nx, ny, nz, dx, dy, dz,
+                                   ivs[0], ivs[1], ivs[2], inputMemrefs,
+                                   fieldMemrefs, paramScalars);
+
+          for (Operation &op : rhs.getBody().front().without_terminator()) {
+            if (auto dt = dyn_cast<DtAssignOp>(&op)) {
+              if (failed(scalarizer.lowerDtAssign(dt))) {
+                bodyOK = false;
+                return;
+              }
+            }
+          }
+          scalarizer.flushPendingStores();
+        });
+    if (!bodyOK) {
+      signalPassFailure();
+      return;
+    }
+
+    for (Value snap : allocatedSnapshots)
+      b.create<memref::DeallocOp>(loc, snap);
+    b.create<func::ReturnOp>(loc);
+
+    module.push_back(outFn);
+    if (isResidualSource(rhs)) {
+      createResidualGridAlias(
+          module, b, loc, outFn, tensorium_mlir::abi::kSymbolResidualGridParallel,
+          tensorium_mlir::abi::kKindResidualGridParallel);
+    }
+  }
+};
+
 struct RhsGridAffinePass
     : public PassWrapper<RhsGridAffinePass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RhsGridAffinePass)
@@ -1494,6 +1695,10 @@ std::unique_ptr<::mlir::Pass> createTensoriumRhsGridScfPass() {
 
 std::unique_ptr<::mlir::Pass> createTensoriumRhsGridAffinePass() {
   return std::make_unique<RhsGridAffinePass>();
+}
+
+std::unique_ptr<::mlir::Pass> createTensoriumRhsGridParallelPass() {
+  return std::make_unique<RhsGridParallelPass>();
 }
 
 } // namespace tensorium::mlir
