@@ -701,6 +701,7 @@ bash tools/dev/test_hamiltonian_toy_relax_l2_ll.sh
 bash tools/dev/test_bowen_york_single_puncture_relax_l2_ll.sh
 bash tools/dev/test_bowen_york_single_puncture_p0_ll.sh
 bash tools/dev/test_bowen_york_single_puncture_scan.sh
+bash tools/dev/test_runtime_spectral_initial_data.sh
 bash tools/dev/test_parallel_residual_grid_ll.sh
 
 echo

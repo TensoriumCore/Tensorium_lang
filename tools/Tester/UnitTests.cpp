@@ -10,6 +10,7 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "tensorium_mlir/Runtime/GeneratedHostStorage.h"
 #include "tensorium_mlir/Runtime/HostBuffers.h"
+#include "tensorium_mlir/Runtime/SpectralGrid.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
@@ -5348,6 +5349,193 @@ static bool testInitRhsInvariantRejectsMetricInRhs() {
   return true;
 }
 
+static bool testSpectralGridManufacturedPoisson() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(7),
+                      SpectralAxis::chebyshevZeros(6),
+                      SpectralAxis::fourierPeriodic(12));
+  std::vector<double> values(grid.size(), 0.0);
+  std::vector<double> expectedLaplacian(grid.size(), 0.0);
+  std::vector<double> expectedD1(grid.size(), 0.0);
+  std::vector<double> expectedD3(grid.size(), 0.0);
+
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double phi = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double x = grid.axis(0).points[i];
+        const std::size_t p = grid.index(i, j, k);
+        const double chebT2Y = 2.0 * y * y - 1.0;
+        const double chebT3X = 4.0 * x * x * x - 3.0 * x;
+        values[p] = chebT3X + 0.5 * chebT2Y + std::sin(2.0 * phi);
+        expectedD1[p] = 12.0 * x * x - 3.0;
+        expectedD3[p] = 2.0 * std::cos(2.0 * phi);
+        expectedLaplacian[p] = 24.0 * x + 2.0 - 4.0 * std::sin(2.0 * phi);
+      }
+    }
+  }
+
+  const auto d1 = grid.derivative(values, 0, 1);
+  const auto d3 = grid.derivative(values, 2, 1);
+  const auto laplacian = grid.laplacian(values);
+
+  double maxD1Err = 0.0;
+  double maxD3Err = 0.0;
+  double maxLapErr = 0.0;
+  for (std::size_t p = 0; p < values.size(); ++p) {
+    maxD1Err = std::max(maxD1Err, std::abs(d1[p] - expectedD1[p]));
+    maxD3Err = std::max(maxD3Err, std::abs(d3[p] - expectedD3[p]));
+    maxLapErr =
+        std::max(maxLapErr, std::abs(laplacian[p] - expectedLaplacian[p]));
+  }
+
+  if (maxD1Err > 2e-11 || maxD3Err > 2e-11 || maxLapErr > 2e-10) {
+    std::cerr << "FAIL: spectral manufactured Poisson errors d1=" << maxD1Err
+              << " dphi=" << maxD3Err << " lap=" << maxLapErr << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSpectralDerivativeBundleAnalyticMixedTerms() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(6),
+                      SpectralAxis::chebyshevZeros(6),
+                      SpectralAxis::fourierPeriodic(10));
+  std::vector<double> values(grid.size(), 0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double phi = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double x = grid.axis(0).points[i];
+        values[grid.index(i, j, k)] = x * y * std::sin(3.0 * phi);
+      }
+    }
+  }
+
+  const auto derivs = grid.derivatives(values);
+  double maxD12Err = 0.0;
+  double maxD13Err = 0.0;
+  double maxD23Err = 0.0;
+  double maxLapErr = 0.0;
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double phi = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double x = grid.axis(0).points[i];
+        const std::size_t p = grid.index(i, j, k);
+        maxD12Err =
+            std::max(maxD12Err, std::abs(derivs.d12[p] - std::sin(3.0 * phi)));
+        maxD13Err = std::max(
+            maxD13Err, std::abs(derivs.d13[p] - 3.0 * y * std::cos(3.0 * phi)));
+        maxD23Err = std::max(
+            maxD23Err, std::abs(derivs.d23[p] - 3.0 * x * std::cos(3.0 * phi)));
+        maxLapErr = std::max(
+            maxLapErr, std::abs(derivs.d11[p] + derivs.d22[p] + derivs.d33[p] +
+                                9.0 * x * y * std::sin(3.0 * phi)));
+      }
+    }
+  }
+
+  if (maxD12Err > 2e-11 || maxD13Err > 2e-10 ||
+      maxD23Err > 2e-10 || maxLapErr > 2e-10) {
+    std::cerr << "FAIL: spectral derivative bundle errors d12=" << maxD12Err
+              << " d13=" << maxD13Err << " d23=" << maxD23Err
+              << " lap=" << maxLapErr << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSpectralPointwisePoissonResidualIsAnalyticallyZero() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(8),
+                      SpectralAxis::chebyshevZeros(7),
+                      SpectralAxis::fourierPeriodic(12));
+  std::vector<double> values(grid.size(), 0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double phi = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double x = grid.axis(0).points[i];
+        values[grid.index(i, j, k)] =
+            (4.0 * x * x * x - 3.0 * x) + y * y + 0.25 * std::cos(2.0 * phi);
+      }
+    }
+  }
+
+  const auto derivs = grid.derivatives(values);
+  const auto residual = grid.evaluateScalarResidual(
+      derivs, [](const auto &point, const auto &u) {
+        const double source =
+            -(24.0 * point.x1 + 2.0 - std::cos(2.0 * point.x3));
+        return u.laplacian() + source;
+      });
+
+  double maxResidual = 0.0;
+  for (double value : residual)
+    maxResidual = std::max(maxResidual, std::abs(value));
+
+  if (maxResidual > 3e-10) {
+    std::cerr << "FAIL: spectral pointwise Poisson residual max="
+              << maxResidual << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(8),
+                      SpectralAxis::chebyshevZeros(7),
+                      SpectralAxis::fourierPeriodic(12));
+  std::vector<double> values(grid.size(), 0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double phi = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      const double t2y = 2.0 * y * y - 1.0;
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double x = grid.axis(0).points[i];
+        const double t2x = 2.0 * x * x - 1.0;
+        values[grid.index(i, j, k)] = 0.05 * t2x * t2y * std::cos(2.0 * phi);
+      }
+    }
+  }
+
+  const auto derivs = grid.derivatives(values);
+  const auto residual = grid.evaluateScalarResidual(
+      derivs, [](const auto &, const auto &u) {
+        const double psiTotal = 1.0 + u.value;
+        const double psi7 = std::pow(psiTotal, 7.0);
+        const double a2 = -8.0 * u.laplacian() * psi7;
+        return u.laplacian() + 0.125 * a2 / psi7;
+      });
+
+  double maxResidual = 0.0;
+  for (double value : residual)
+    maxResidual = std::max(maxResidual, std::abs(value));
+
+  if (maxResidual > 3e-12) {
+    std::cerr << "FAIL: spectral Hamiltonian toy residual max="
+              << maxResidual << "\n";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct NamedTest {
     const char *name;
@@ -5420,6 +5608,14 @@ int main() {
        &testGeneratedHostStorageRunsOneEulerIteration},
       {"testGeneratedHostStorageEulerUpdatePairs",
        &testGeneratedHostStorageEulerUpdatePairs},
+      {"testSpectralGridManufacturedPoisson",
+       &testSpectralGridManufacturedPoisson},
+      {"testSpectralDerivativeBundleAnalyticMixedTerms",
+       &testSpectralDerivativeBundleAnalyticMixedTerms},
+      {"testSpectralPointwisePoissonResidualIsAnalyticallyZero",
+       &testSpectralPointwisePoissonResidualIsAnalyticallyZero},
+      {"testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero",
+       &testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero},
       {"testCompilerApiCompileFileToLLVMIR",
        &testCompilerApiCompileFileToLLVMIR},
       {"testCompilerApiSymbolicWarningPropagation",

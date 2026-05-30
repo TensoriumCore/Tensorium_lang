@@ -21,6 +21,9 @@ Source of truth for ABI constants:
 Source of truth for the host-callable kernel descriptor:
 `include/tensorium_mlir/Target/MLIRGen/MLIRGenHostABI.h`.
 
+Source of truth for the runtime spectral residual callback ABI:
+`include/tensorium_mlir/Runtime/SpectralResidualKernel.h`.
+
 Architectural context: `docs/language_mlir_abi_architecture.md` describes how
 this ABI fits between Tensorium MLIR/LLVM kernels, generated host glue,
 standalone execution, and optional AMReX integration.
@@ -138,6 +141,13 @@ consume directly:
   `X`, then `applyEulerUpdate(...)` performs `X += dt * dX` over the runtime
   arena. This is intentionally minimal and should be replaced by the target
   runtime's integrator once AMReX owns the storage.
+- Spectral initial-data experiments use `tensorium_spectral_residual_point` and
+  `tensorium_spectral_residual_kernel_fn` as the pointwise residual callback
+  ABI. The runtime constructs the derivative bundle on the selected spectral
+  grid, applies an optional coordinate map, then calls the generated callback to
+  compute one scalar `F(u)=0` value per collocation point. This keeps
+  NRPy/Kadath/TwoPunctures-style formulations above the generic spectral grid
+  and solver machinery.
 
 Generated host headers also expose the same runtime contract in C-compatible
 tables:
