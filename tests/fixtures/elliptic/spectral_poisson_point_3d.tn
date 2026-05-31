@@ -1,0 +1,34 @@
+# Spectral point-residual smoke fixture.
+#
+# The generated point kernel evaluates:
+#   F(u) = laplacian(u) + alpha * u + x * y
+#
+# The dev runner provides a polynomial/trigonometric manufactured solution and
+# checks the generated callback through the runtime spectral ABI.
+field scalar u
+field scalar H
+
+params { alpha }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [8,7,12]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralPoissonPoint3D {
+  Hlocal = laplacian(u) + alpha * u + x * y
+
+  residual H = Hlocal
+}

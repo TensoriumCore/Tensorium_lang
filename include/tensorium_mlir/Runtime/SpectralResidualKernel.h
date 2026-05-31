@@ -8,6 +8,9 @@
 #include <string>
 #include <vector>
 
+#ifndef TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H
+#define TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H
+
 typedef struct tensorium_spectral_residual_point {
   std::int64_t i;
   std::int64_t j;
@@ -46,6 +49,8 @@ typedef struct tensorium_spectral_coordinate_map_desc {
   tensorium_spectral_coordinate_map_fn map;
   void *user_data;
 } tensorium_spectral_coordinate_map_desc;
+
+#endif /* TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H */
 
 namespace tensorium_mlir::runtime {
 

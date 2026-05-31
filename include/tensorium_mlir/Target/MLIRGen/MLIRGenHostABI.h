@@ -16,6 +16,8 @@ namespace tensorium_mlir {
 
 enum class HostArgKind { F64, Index, Memref1DF64 };
 
+enum class HostReturnKind { Void, F64 };
+
 enum class HostBufferRole { Coordinate, Field, Output };
 
 enum class HostArgAccess { None, Read, Write, ReadWrite };
@@ -49,6 +51,7 @@ struct HostKernelABI {
   std::string symbolName;
   std::string wrapperName;
   std::string kind;
+  HostReturnKind returnKind = HostReturnKind::Void;
   std::vector<HostArgABI> rawArgs;
   std::vector<HostBufferABI> buffers;
   std::vector<std::string> params;

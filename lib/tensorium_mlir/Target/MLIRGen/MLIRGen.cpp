@@ -5,9 +5,11 @@
 #include "MLIRGenInitialData.h"
 #include "MLIRGenPipeline.h"
 #include "MLIRGenShared.h"
+#include "MLIRGenSpectralResidual.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -121,7 +123,9 @@ void emitRawFormal(std::ostringstream &os, const HostArgABI &arg,
 }
 
 void emitRawPrototype(std::ostringstream &os, const HostKernelABI &kernel) {
-  os << "extern void " << kernel.symbolName << "(";
+  os << "extern "
+     << (kernel.returnKind == HostReturnKind::F64 ? "double " : "void ")
+     << kernel.symbolName << "(";
   bool first = true;
   for (const auto &arg : kernel.rawArgs)
     emitRawFormal(os, arg, first);
@@ -260,6 +264,34 @@ void emitRhsGridWrapper(
   os << ");\n}\n";
 }
 
+void emitSpectralResidualWrapper(std::ostringstream &os,
+                                 const HostKernelABI &kernel) {
+  if (kernel.fields.size() != 1 || kernel.outputs.size() != 1)
+    return;
+
+  os << "static inline double " << kernel.wrapperName << "(\n"
+     << "    const tensorium_spectral_residual_point *point,\n"
+     << "    const double *params, int64_t param_count, void *user_data) {\n"
+     << "  (void)user_data;\n"
+     << "  if (!point)\n"
+     << "    return 0.0;\n"
+     << "  if (param_count != "
+     << static_cast<std::int64_t>(kernel.params.size()) << ")\n"
+     << "    return 0.0;\n";
+  if (!kernel.params.empty())
+    os << "  if (!params)\n"
+       << "    return 0.0;\n";
+
+  os << "  return " << kernel.symbolName << "("
+     << "point->value, point->d1, point->d2, point->d3, point->d11, "
+        "point->d12, point->d13, point->d22, point->d23, point->d33, "
+        "point->physical[0], point->physical[1], point->physical[2]";
+  for (std::size_t i = 0; i < kernel.params.size(); ++i)
+    os << ", params[" << i << "]";
+  os << ");\n"
+     << "}\n";
+}
+
 void emitConvenienceWrapper(
     std::ostringstream &os, const HostKernelABI &kernel,
     const std::unordered_map<std::string, std::int64_t> &componentCounts) {
@@ -275,6 +307,8 @@ void emitConvenienceWrapper(
              kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine ||
              kernel.kind == tensorium_mlir::abi::kKindResidualGridParallel) {
     emitRhsGridWrapper(os, kernel, componentCounts);
+  } else if (kernel.kind == tensorium_mlir::abi::kKindSpectralResidualPoint) {
+    emitSpectralResidualWrapper(os, kernel);
   }
 }
 
@@ -370,6 +404,46 @@ void emitRuntimeInvokeTypes(std::ostringstream &os) {
      << "  tensorium_host_kernel_invoke_fn invoke;\n"
      << "} tensorium_host_kernel_adapter_desc;\n\n"
      << "#endif /* TENSORIUM_GENERATED_HOST_INVOKE_TYPES_H */\n\n";
+}
+
+void emitSpectralResidualTypes(std::ostringstream &os) {
+  os << "#ifndef TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H\n"
+     << "#define TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H\n\n"
+     << "typedef struct tensorium_spectral_residual_point {\n"
+     << "  int64_t i;\n"
+     << "  int64_t j;\n"
+     << "  int64_t k;\n"
+     << "  int64_t index;\n"
+     << "  double logical[3];\n"
+     << "  double physical[3];\n"
+     << "  double value;\n"
+     << "  double d1;\n"
+     << "  double d2;\n"
+     << "  double d3;\n"
+     << "  double d11;\n"
+     << "  double d12;\n"
+     << "  double d13;\n"
+     << "  double d22;\n"
+     << "  double d23;\n"
+     << "  double d33;\n"
+     << "} tensorium_spectral_residual_point;\n\n"
+     << "typedef double (*tensorium_spectral_residual_kernel_fn)(\n"
+     << "    const tensorium_spectral_residual_point *point,\n"
+     << "    const double *params, int64_t param_count, void *user_data);\n\n"
+     << "typedef void (*tensorium_spectral_coordinate_map_fn)(\n"
+     << "    const double *logical, double *physical, const double *params,\n"
+     << "    int64_t param_count, void *user_data);\n\n"
+     << "typedef struct tensorium_spectral_residual_kernel_desc {\n"
+     << "  const char *symbol_name;\n"
+     << "  tensorium_spectral_residual_kernel_fn evaluate;\n"
+     << "  void *user_data;\n"
+     << "} tensorium_spectral_residual_kernel_desc;\n\n"
+     << "typedef struct tensorium_spectral_coordinate_map_desc {\n"
+     << "  const char *symbol_name;\n"
+     << "  tensorium_spectral_coordinate_map_fn map;\n"
+     << "  void *user_data;\n"
+     << "} tensorium_spectral_coordinate_map_desc;\n\n"
+     << "#endif /* TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H */\n\n";
 }
 
 void emitRuntimeDescriptors(std::ostringstream &os, const HostModuleABI &abi) {
@@ -536,6 +610,41 @@ void emitRuntimeInvokeAdapters(std::ostringstream &os,
   os << "};\n\n";
 }
 
+bool isSpectralResidualKernel(const HostKernelABI &kernel) {
+  return kernel.kind == tensorium_mlir::abi::kKindSpectralResidualPoint;
+}
+
+void emitSpectralResidualDescriptors(std::ostringstream &os,
+                                     const HostModuleABI &abi) {
+  std::size_t count = 0;
+  for (const auto &kernel : abi.kernels) {
+    if (isSpectralResidualKernel(kernel))
+      ++count;
+  }
+
+  os << "#define TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT " << count
+     << "\n\n";
+  os << "static const tensorium_spectral_residual_kernel_desc "
+        "tensorium_spectral_residual_kernels["
+     << (count == 0 ? 1 : count) << "] = {\n";
+  if (count == 0) {
+    os << "  {0, 0, 0}\n";
+  } else {
+    bool first = true;
+    for (const auto &kernel : abi.kernels) {
+      if (!isSpectralResidualKernel(kernel))
+        continue;
+      if (!first)
+        os << ",\n";
+      first = false;
+      os << "  {" << cStringLiteral(kernel.symbolName) << ", &"
+         << kernel.wrapperName << ", 0}";
+    }
+    os << "\n";
+  }
+  os << "};\n\n";
+}
+
 void emitPrinterFlatHelper(std::ostringstream &os) {
   os << "static inline void tensorium_print_tensor_flat(\n"
      << "    const char *name, const double *data, int64_t point_index,\n"
@@ -657,6 +766,7 @@ std::string renderHostHeader(const HostModuleABI &abi) {
 
   emitRuntimeDescriptorTypes(os);
   emitRuntimeInvokeTypes(os);
+  emitSpectralResidualTypes(os);
   emitRuntimeDescriptors(os, abi);
 
   os
@@ -672,6 +782,7 @@ std::string renderHostHeader(const HostModuleABI &abi) {
     os << "\n";
   }
 
+  emitSpectralResidualDescriptors(os, abi);
   emitRuntimeInvokeAdapters(os, abi);
 
   emitPrintRequestHelper(os, abi);
@@ -727,6 +838,7 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
   ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
+  ctx.getOrLoadDialect<mlir::math::MathDialect>();
   ctx.getOrLoadDialect<tensorium::mlir::TensoriumDialect>();
 
   mlir::OpBuilder b(&ctx);
@@ -851,6 +963,7 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   moduleOp->push_back(initFunc);
   moduleOp->push_back(rhsFunc);
   moduleOp->push_back(entryFunc);
+  emitSpectralResidualKernels(b, loc, *moduleOp, module);
 
   MLIRGenOptions pipelineOpts = opts;
   if (module.simulation) {

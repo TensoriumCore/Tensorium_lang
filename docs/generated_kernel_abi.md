@@ -14,6 +14,7 @@ This document freezes the ABI contract used by generated functions:
 - `tensorium_residual_grid_scf`
 - `tensorium_residual_grid_affine`
 - `tensorium_residual_grid_parallel`
+- `tensorium_spectral_residual_<target>`
 
 Source of truth for ABI constants:
 `include/tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h`.
@@ -148,6 +149,11 @@ consume directly:
   compute one scalar `F(u)=0` value per collocation point. This keeps
   NRPy/Kadath/TwoPunctures-style formulations above the generic spectral grid
   and solver machinery.
+- For `constraints` modules with `spatial { scheme = spectral order = 0 }`, the
+  compiler emits `tensorium_spectral_residual_<target>` point kernels for scalar
+  residuals whose RHS depends on exactly one scalar unknown and its supplied
+  spectral derivatives. Generated host headers expose these through
+  `tensorium_spectral_residual_kernels`.
 
 Generated host headers also expose the same runtime contract in C-compatible
 tables:
@@ -244,6 +250,22 @@ The semantic difference is the ABI kind:
 The Tensorium MLIR body is a three-dimensional `scf.parallel` over the interior
 stencil domain. The LLVM lowering pipeline converts this path to OpenMP runtime
 calls, so executables that link the generated object need an OpenMP runtime.
+
+### `tensorium_spectral_residual_<target>`
+
+MLIR-level:
+- `(value, d1, d2, d3, d11, d12, d13, d22, d23, d33, x1, x2, x3, params...) -> f64`
+
+Host callback-level:
+- generated headers define a `tensorium_spectral_residual_kernel_desc` entry;
+- the callback receives `tensorium_spectral_residual_point`, scalar params, and
+  optional user data;
+- `point.physical[]` is populated by the runtime coordinate map before the
+  generated residual is called.
+
+The initial compiler path supports scalar single-unknown residuals. Auxiliary
+spectral fields and multi-unknown systems are intentionally left to the next ABI
+extension.
 
 ## Memory layout contract (SoA, component-major)
 

@@ -69,6 +69,12 @@ bool isSupportedHostType(mlir::Type type) {
   return isSupportedHostScalarType(type) || isSupportedHostMemrefType(type);
 }
 
+bool hasSupportedHostResults(mlir::func::FuncOp fn) {
+  if (fn.getNumResults() == 0)
+    return true;
+  return fn.getNumResults() == 1 && fn.getResultTypes()[0].isF64();
+}
+
 bool hasOnlySupportedHostTypes(mlir::func::FuncOp fn) {
   for (unsigned i = 0; i < fn.getNumArguments(); ++i) {
     if (!isSupportedHostType(fn.getArgument(i).getType()))
@@ -86,7 +92,8 @@ bool isHostCallableKind(llvm::StringRef kind) {
          kind == tensorium_mlir::abi::kKindRhsGridParallel ||
          kind == tensorium_mlir::abi::kKindResidualGridScf ||
          kind == tensorium_mlir::abi::kKindResidualGridAffine ||
-         kind == tensorium_mlir::abi::kKindResidualGridParallel;
+         kind == tensorium_mlir::abi::kKindResidualGridParallel ||
+         kind == tensorium_mlir::abi::kKindSpectralResidualPoint;
 }
 
 bool isFieldGridKind(llvm::StringRef kind) {
@@ -133,6 +140,11 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
     names = {"nx", "ny", "nz", "dx", "dy", "dz"};
     append(params);
     append(fields);
+  } else if (kind == tensorium_mlir::abi::kKindSpectralResidualPoint) {
+    names = {"value", "d1", "d2", "d3",  "d11", "d12", "d13",
+             "d22",   "d23", "d33"};
+    append(coords);
+    append(params);
   }
 
   while (names.size() < fn.getNumArguments())
@@ -336,8 +348,11 @@ bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
   kernel.wrapperName = hostWrapperName(fn);
   kernel.kind =
       getStringAttr(fn.getOperation(), tensorium_mlir::abi::kAttrABIKind);
-  if (!isHostCallableKind(kernel.kind) || !hasOnlySupportedHostTypes(fn))
+  if (!isHostCallableKind(kernel.kind) || !hasOnlySupportedHostTypes(fn) ||
+      !hasSupportedHostResults(fn))
     return false;
+  if (fn.getNumResults() == 1)
+    kernel.returnKind = HostReturnKind::F64;
 
   kernel.params =
       getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrParamNames);

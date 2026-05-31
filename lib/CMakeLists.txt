@@ -298,6 +298,7 @@ add_library(tensoriumMlirCodegen
   tensorium_mlir/Target/MLIRGen/MLIRGenHostABI.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenInitialData.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenExpr.cpp
+  tensorium_mlir/Target/MLIRGen/MLIRGenSpectralResidual.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGen.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenOptions.cpp
   tensorium_mlir/Target/MLIRGen/MLIRGenPipeline.cpp
