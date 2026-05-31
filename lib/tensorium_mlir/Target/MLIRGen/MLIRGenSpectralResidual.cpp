@@ -7,6 +7,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/APFloat.h"
@@ -652,6 +654,20 @@ std::string spectralSymbolFor(const std::string &target) {
          makeHostCIdentifier(target, "residual");
 }
 
+std::string spectralGridSymbolFor(const std::string &target) {
+  return std::string(tensorium_mlir::abi::kSymbolSpectralResidualGridPrefix) +
+         makeHostCIdentifier(target, "residual");
+}
+
+mlir::ArrayAttr makeI64ArrayAttr(mlir::OpBuilder &b,
+                                 const std::vector<std::int64_t> &values) {
+  llvm::SmallVector<mlir::Attribute, 8> attrs;
+  attrs.reserve(values.size());
+  for (std::int64_t value : values)
+    attrs.push_back(b.getI64IntegerAttr(value));
+  return b.getArrayAttr(attrs);
+}
+
 void emitOneSpectralResidual(mlir::OpBuilder &b, mlir::Location loc,
                              mlir::ModuleOp moduleOp, const ModuleIR &module,
                              const EvolutionIR &evo, const EquationIR &eq,
@@ -718,6 +734,121 @@ void emitOneSpectralResidual(mlir::OpBuilder &b, mlir::Location loc,
   moduleOp.push_back(fn);
 }
 
+void emitOneSpectralResidualGrid(mlir::OpBuilder &b, mlir::Location loc,
+                                 mlir::ModuleOp moduleOp,
+                                 const ModuleIR &module,
+                                 const EvolutionIR &evo,
+                                 const EquationIR &eq,
+                                 const SpectralCandidate &candidate) {
+  const std::string pointSymbol = spectralSymbolFor(candidate.target);
+  const std::string gridSymbol = spectralGridSymbolFor(candidate.target);
+  if (moduleOp.lookupSymbol<mlir::func::FuncOp>(gridSymbol))
+    return;
+  if (!moduleOp.lookupSymbol<mlir::func::FuncOp>(pointSymbol))
+    return;
+
+  const auto temps = tempDefsFor(evo);
+  const std::vector<std::string> params = sortedParamNames(eq.rhs.get(), temps);
+  const std::vector<std::string> coords = spectralCoordNames(module);
+  std::vector<std::string> fields;
+  fields.reserve(1 + candidate.auxiliaryFields.size());
+  fields.push_back(candidate.unknown);
+  fields.insert(fields.end(), candidate.auxiliaryFields.begin(),
+                candidate.auxiliaryFields.end());
+
+  mlir::Type indexType = b.getIndexType();
+  mlir::Type f64 = b.getF64Type();
+  mlir::Type memrefF64 =
+      mlir::MemRefType::get({mlir::ShapedType::kDynamic}, f64);
+  llvm::SmallVector<mlir::Type, 24> argTypes;
+  argTypes.push_back(indexType);
+  for (std::size_t i = 0; i < params.size(); ++i)
+    argTypes.push_back(f64);
+  for (std::size_t i = 0;
+       i < 10 + candidate.auxiliaryFields.size() + coords.size() + 1; ++i)
+    argTypes.push_back(memrefF64);
+
+  auto fn = mlir::func::FuncOp::create(
+      loc, gridSymbol, b.getFunctionType(argTypes, mlir::TypeRange{}));
+  setCommonABIAttrs(b, fn, tensorium_mlir::abi::kKindSpectralResidualGrid);
+  fn->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+              makeStringArrayAttr(b, fields));
+  fn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
+              makeStringArrayAttr(b, {candidate.target}));
+  fn->setAttr(tensorium_mlir::abi::kAttrCoordNames,
+              makeStringArrayAttr(b, coords));
+  fn->setAttr(tensorium_mlir::abi::kAttrParamNames,
+              makeStringArrayAttr(b, params));
+  fn->setAttr(tensorium_mlir::abi::kAttrStencilRadius, b.getI64IntegerAttr(0));
+
+  const std::int64_t derivativeBase =
+      1 + static_cast<std::int64_t>(params.size());
+  const std::int64_t auxiliaryBase = derivativeBase + 10;
+  const std::int64_t coordBase =
+      auxiliaryBase +
+      static_cast<std::int64_t>(candidate.auxiliaryFields.size());
+  const std::int64_t outputArg = coordBase + static_cast<std::int64_t>(coords.size());
+  std::vector<std::int64_t> readArgIndices;
+  for (std::int64_t i = derivativeBase; i < outputArg; ++i)
+    readArgIndices.push_back(i);
+  fn->setAttr(tensorium_mlir::abi::kAttrReadArgIndices,
+              makeI64ArrayAttr(b, readArgIndices));
+  fn->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
+              makeI64ArrayAttr(b, {outputArg}));
+
+  mlir::Block *entry = fn.addEntryBlock();
+  b.setInsertionPointToEnd(entry);
+  mlir::Value nPoints = entry->getArgument(0);
+
+  llvm::SmallVector<mlir::Value, 8> paramValues;
+  paramValues.reserve(params.size());
+  for (std::size_t i = 0; i < params.size(); ++i)
+    paramValues.push_back(entry->getArgument(1 + i));
+
+  llvm::SmallVector<mlir::Value, 10> derivativeBuffers;
+  for (std::size_t i = 0; i < 10; ++i)
+    derivativeBuffers.push_back(entry->getArgument(derivativeBase + i));
+
+  llvm::SmallVector<mlir::Value, 4> auxiliaryBuffers;
+  for (std::size_t i = 0; i < candidate.auxiliaryFields.size(); ++i)
+    auxiliaryBuffers.push_back(entry->getArgument(auxiliaryBase + i));
+
+  llvm::SmallVector<mlir::Value, 3> coordBuffers;
+  for (std::size_t i = 0; i < coords.size(); ++i)
+    coordBuffers.push_back(entry->getArgument(coordBase + i));
+  while (coordBuffers.size() < 3)
+    coordBuffers.push_back(entry->getArgument(coordBase + coords.size() - 1));
+  mlir::Value outputBuffer = entry->getArgument(outputArg);
+
+  mlir::Value c0 = b.create<mlir::arith::ConstantIndexOp>(loc, 0);
+  mlir::Value c1 = b.create<mlir::arith::ConstantIndexOp>(loc, 1);
+  auto loop = b.create<mlir::scf::ForOp>(loc, c0, nPoints, c1);
+  b.setInsertionPointToStart(loop.getBody());
+  mlir::Value p = loop.getInductionVar();
+
+  llvm::SmallVector<mlir::Value, 24> callArgs;
+  for (mlir::Value buffer : derivativeBuffers)
+    callArgs.push_back(
+        b.create<mlir::memref::LoadOp>(loc, buffer, mlir::ValueRange{p}));
+  for (mlir::Value buffer : auxiliaryBuffers)
+    callArgs.push_back(
+        b.create<mlir::memref::LoadOp>(loc, buffer, mlir::ValueRange{p}));
+  for (std::size_t i = 0; i < 3; ++i)
+    callArgs.push_back(
+        b.create<mlir::memref::LoadOp>(loc, coordBuffers[i],
+                                       mlir::ValueRange{p}));
+  callArgs.append(paramValues.begin(), paramValues.end());
+
+  auto result = b.create<mlir::func::CallOp>(
+      loc, pointSymbol, mlir::TypeRange{f64}, callArgs);
+  b.create<mlir::memref::StoreOp>(loc, result.getResult(0), outputBuffer,
+                                  mlir::ValueRange{p});
+
+  b.setInsertionPointAfter(loop);
+  b.create<mlir::func::ReturnOp>(loc);
+  moduleOp.push_back(fn);
+}
+
 } // namespace
 
 void emitSpectralResidualKernels(mlir::OpBuilder &b, mlir::Location loc,
@@ -733,6 +864,8 @@ void emitSpectralResidualKernels(mlir::OpBuilder &b, mlir::Location loc,
       if (!candidate)
         continue;
       emitOneSpectralResidual(b, loc, moduleOp, module, evo, eq, *candidate);
+      emitOneSpectralResidualGrid(b, loc, moduleOp, module, evo, eq,
+                                  *candidate);
     }
   }
 }

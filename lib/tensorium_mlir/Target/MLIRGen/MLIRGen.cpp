@@ -10,6 +10,8 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -301,6 +303,46 @@ void emitSpectralResidualWrapper(std::ostringstream &os,
      << "}\n";
 }
 
+void emitSpectralResidualGridWrapper(std::ostringstream &os,
+                                     const HostKernelABI &kernel) {
+  if (kernel.fields.empty() || kernel.outputs.size() != 1)
+    return;
+  const std::size_t auxiliaryCount = kernel.fields.size() - 1;
+  const char *derivativeNames[] = {"value", "d1",  "d2",  "d3",  "d11",
+                                   "d12",   "d13", "d22", "d23", "d33"};
+
+  os << "static inline void " << kernel.wrapperName << "(";
+  bool first = true;
+  emitScalarFormal(os, "int64_t", "n_points", first);
+  for (const auto &param : kernel.params)
+    emitScalarFormal(os, "double", param, first);
+  for (const char *name : derivativeNames)
+    emitBufferFormal(os, name, first);
+  for (std::size_t i = 0; i < auxiliaryCount; ++i)
+    emitBufferFormal(os, kernel.fields[i + 1], first);
+  for (const auto &coord : kernel.coords)
+    emitBufferFormal(os, coord, first);
+  emitBufferFormal(os, kernel.outputs.front(), first);
+  os << ") {\n"
+     << "  " << kernel.symbolName << "(";
+
+  first = true;
+  appendComma(os, first);
+  os << "n_points";
+  for (const auto &param : kernel.params) {
+    appendComma(os, first);
+    os << makeHostCIdentifier(param, "param");
+  }
+  for (const char *name : derivativeNames)
+    emitDescriptorCallArgs(os, name, "n_points", first);
+  for (std::size_t i = 0; i < auxiliaryCount; ++i)
+    emitDescriptorCallArgs(os, kernel.fields[i + 1], "n_points", first);
+  for (const auto &coord : kernel.coords)
+    emitDescriptorCallArgs(os, coord, "n_points", first);
+  emitDescriptorCallArgs(os, kernel.outputs.front(), "n_points", first);
+  os << ");\n}\n";
+}
+
 void emitConvenienceWrapper(
     std::ostringstream &os, const HostKernelABI &kernel,
     const std::unordered_map<std::string, std::int64_t> &componentCounts) {
@@ -318,6 +360,9 @@ void emitConvenienceWrapper(
     emitRhsGridWrapper(os, kernel, componentCounts);
   } else if (kernel.kind == tensorium_mlir::abi::kKindSpectralResidualPoint) {
     emitSpectralResidualWrapper(os, kernel);
+  } else if (kernel.kind ==
+             tensorium_mlir::abi::kKindSpectralResidualGrid) {
+    emitSpectralResidualGridWrapper(os, kernel);
   }
 }
 
@@ -850,6 +895,8 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
   ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
   ctx.getOrLoadDialect<mlir::math::MathDialect>();
+  ctx.getOrLoadDialect<mlir::memref::MemRefDialect>();
+  ctx.getOrLoadDialect<mlir::scf::SCFDialect>();
   ctx.getOrLoadDialect<tensorium::mlir::TensoriumDialect>();
 
   mlir::OpBuilder b(&ctx);

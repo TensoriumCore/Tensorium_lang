@@ -93,7 +93,8 @@ bool isHostCallableKind(llvm::StringRef kind) {
          kind == tensorium_mlir::abi::kKindResidualGridScf ||
          kind == tensorium_mlir::abi::kKindResidualGridAffine ||
          kind == tensorium_mlir::abi::kKindResidualGridParallel ||
-         kind == tensorium_mlir::abi::kKindSpectralResidualPoint;
+         kind == tensorium_mlir::abi::kKindSpectralResidualPoint ||
+         kind == tensorium_mlir::abi::kKindSpectralResidualGrid;
 }
 
 bool isFieldGridKind(llvm::StringRef kind) {
@@ -147,6 +148,17 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
       names.push_back(fields[i]);
     append(coords);
     append(params);
+  } else if (kind == tensorium_mlir::abi::kKindSpectralResidualGrid) {
+    names = {"n_points"};
+    append(params);
+    const char *derivatives[] = {"value", "d1",  "d2",  "d3",  "d11",
+                                 "d12",   "d13", "d22", "d23", "d33"};
+    for (const char *name : derivatives)
+      names.push_back(name);
+    for (std::size_t i = 1; i < fields.size(); ++i)
+      names.push_back(fields[i]);
+    append(coords);
+    append(outputs);
   }
 
   while (names.size() < fn.getNumArguments())

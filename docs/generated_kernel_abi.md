@@ -15,6 +15,7 @@ This document freezes the ABI contract used by generated functions:
 - `tensorium_residual_grid_affine`
 - `tensorium_residual_grid_parallel`
 - `tensorium_spectral_residual_<target>`
+- `tensorium_spectral_residual_grid_<target>`
 
 Source of truth for ABI constants:
 `include/tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h`.
@@ -154,6 +155,18 @@ consume directly:
   residuals whose RHS depends on one scalar unknown, its supplied spectral
   derivatives, and optional scalar auxiliary fields. Generated host headers
   expose these through `tensorium_spectral_residual_kernels`.
+- `SpectralResidualProblem` is the runtime-side assembly surface for these point
+  kernels. It binds the grid, generated callback, scalar params, optional
+  auxiliary fields, and optional coordinate map. `assembleSpectralResidual(...)`
+  computes the global collocation vector `F(u)` plus L2/max norms, and
+  `evaluateSpectralJacobianVectorProduct(...)` provides a finite-difference JVP
+  hook for future Newton/Krylov elliptic solvers.
+- The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
+  kernels. These consume the runtime-computed spectral derivative buffers,
+  auxiliary field buffers, coordinate buffers, scalar params, and one residual
+  output buffer, then call the point kernel inside an MLIR `scf.for` loop. This
+  moves global `F(u)` evaluation into generated code while keeping spectral
+  differentiation in the runtime grid layer for now.
 
 Generated host headers also expose the same runtime contract in C-compatible
 tables:
@@ -269,6 +282,19 @@ Host callback-level:
 The initial compiler path supports scalar single-unknown residuals with scalar
 auxiliary point fields. Multi-unknown systems are intentionally left to the next
 ABI extension.
+
+### `tensorium_spectral_residual_grid_<target>`
+
+MLIR-level:
+- `(n_points:index, params..., value, d1, d2, d3, d11, d12, d13, d22, d23, d33, aux..., x1, x2, x3, residual_out) -> ()`
+- derivative, auxiliary, coordinate, and output buffers are `memref<?xf64>`.
+
+Generated host wrapper:
+- `tensorium_call_spectral_residual_grid_<target>(n_points, params..., value, d1, ..., d33, aux..., x1, x2, x3, residual_out)`
+
+This kernel does not compute spectral derivatives itself. The runtime supplies
+the derivative buffers from its selected spectral basis and coordinate mapping,
+then the generated MLIR loop evaluates the residual at every collocation point.
 
 ## Memory layout contract (SoA, component-major)
 

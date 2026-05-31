@@ -2,7 +2,10 @@
 
 #include "tensorium_mlir/Runtime/SpectralGrid.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -68,6 +71,40 @@ struct SpectralCoordinateMap {
   void *userData = nullptr;
 };
 
+struct SpectralResidualProblem {
+  const SpectralGrid3D *grid = nullptr;
+  SpectralResidualKernel kernel;
+  std::span<const double> params{};
+  std::span<const std::vector<double>> auxiliaryFields{};
+  SpectralCoordinateMap coordinateMap{};
+  std::span<const double> coordinateParams{};
+};
+
+struct SpectralResidualAssemblyResult {
+  std::vector<double> values;
+  double l2Norm = 0.0;
+  double maxAbs = 0.0;
+  bool finite = true;
+
+  std::size_t size() const { return values.size(); }
+};
+
+struct SpectralJacobianVectorProductOptions {
+  double relativeStep = 1.4901161193847656e-8;
+  double absoluteStep = 0.0;
+  bool centeredDifference = true;
+};
+
+struct SpectralJacobianVectorProductResult {
+  std::vector<double> values;
+  double step = 0.0;
+  double l2Norm = 0.0;
+  double maxAbs = 0.0;
+  bool finite = true;
+
+  std::size_t size() const { return values.size(); }
+};
+
 inline SpectralResidualKernel
 spectralResidualKernelFromDesc(const tensorium_spectral_residual_kernel_desc &desc) {
   if (!desc.symbol_name || desc.symbol_name[0] == '\0')
@@ -97,6 +134,65 @@ inline void validateSpectralDerivativeBundle(const SpectralGrid3D &grid,
       derivs.d23.size() != size || derivs.d33.size() != size) {
     throw std::runtime_error("spectral derivative bundle size mismatch");
   }
+}
+
+inline double spectralVectorMaxAbs(std::span<const double> values) {
+  double out = 0.0;
+  for (double value : values) {
+    if (!std::isfinite(value))
+      return value;
+    out = std::max(out, std::fabs(value));
+  }
+  return out;
+}
+
+inline double spectralVectorL2Norm(std::span<const double> values) {
+  if (values.empty())
+    return 0.0;
+  double sum = 0.0;
+  for (double value : values) {
+    if (!std::isfinite(value))
+      return value;
+    sum += value * value;
+  }
+  return std::sqrt(sum / static_cast<double>(values.size()));
+}
+
+inline bool spectralVectorIsFinite(std::span<const double> values) {
+  for (double value : values) {
+    if (!std::isfinite(value))
+      return false;
+  }
+  return true;
+}
+
+inline SpectralResidualAssemblyResult
+makeSpectralResidualAssemblyResult(std::vector<double> values) {
+  SpectralResidualAssemblyResult result;
+  result.values = std::move(values);
+  result.l2Norm = spectralVectorL2Norm(result.values);
+  result.maxAbs = spectralVectorMaxAbs(result.values);
+  result.finite = spectralVectorIsFinite(result.values);
+  return result;
+}
+
+inline SpectralJacobianVectorProductResult
+makeSpectralJacobianVectorProductResult(std::vector<double> values,
+                                        double step) {
+  SpectralJacobianVectorProductResult result;
+  result.values = std::move(values);
+  result.step = step;
+  result.l2Norm = spectralVectorL2Norm(result.values);
+  result.maxAbs = spectralVectorMaxAbs(result.values);
+  result.finite = spectralVectorIsFinite(result.values);
+  return result;
+}
+
+inline const SpectralGrid3D &
+requireSpectralResidualGrid(const SpectralResidualProblem &problem) {
+  if (!problem.grid)
+    throw std::runtime_error("spectral residual problem grid is null");
+  return *problem.grid;
 }
 
 inline tensorium_spectral_residual_point makeSpectralResidualPoint(
@@ -201,6 +297,109 @@ inline std::vector<double> evaluateSpectralResidualWithAuxFields(
   return evaluateSpectralResidualWithAuxFields(
       grid, grid.derivatives(values), kernel, params, auxiliaryFields,
       coordinateMap, coordinateParams);
+}
+
+inline SpectralResidualAssemblyResult assembleSpectralResidual(
+    const SpectralResidualProblem &problem,
+    const SpectralDerivatives3D &derivs) {
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  return makeSpectralResidualAssemblyResult(evaluateSpectralResidualWithAuxFields(
+      grid, derivs, problem.kernel, problem.params, problem.auxiliaryFields,
+      problem.coordinateMap, problem.coordinateParams));
+}
+
+inline SpectralResidualAssemblyResult assembleSpectralResidual(
+    const SpectralResidualProblem &problem, const std::vector<double> &values) {
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  if (values.size() != grid.size())
+    throw std::runtime_error("spectral residual state size mismatch");
+  return assembleSpectralResidual(problem, grid.derivatives(values));
+}
+
+inline SpectralResidualAssemblyResult assembleSpectralResidual(
+    const SpectralGrid3D &grid, const std::vector<double> &values,
+    const SpectralResidualKernel &kernel, std::span<const double> params,
+    std::span<const std::vector<double>> auxiliaryFields = {},
+    const SpectralCoordinateMap &coordinateMap = {},
+    std::span<const double> coordinateParams = {}) {
+  const SpectralResidualProblem problem{&grid, kernel, params, auxiliaryFields,
+                                        coordinateMap, coordinateParams};
+  return assembleSpectralResidual(problem, values);
+}
+
+inline double spectralJacobianVectorProductStep(
+    const SpectralGrid3D &grid, std::span<const double> values,
+    std::span<const double> direction,
+    const SpectralJacobianVectorProductOptions &options) {
+  if (values.size() != grid.size())
+    throw std::runtime_error("spectral residual state size mismatch");
+  if (direction.size() != grid.size())
+    throw std::runtime_error("spectral residual direction size mismatch");
+  if (!(options.relativeStep > 0.0) || !std::isfinite(options.relativeStep))
+    throw std::runtime_error("spectral JVP relative step must be positive");
+  if (options.absoluteStep < 0.0 || !std::isfinite(options.absoluteStep))
+    throw std::runtime_error("spectral JVP absolute step must be finite");
+
+  const double stateMax = spectralVectorMaxAbs(values);
+  const double directionMax = spectralVectorMaxAbs(direction);
+  if (!std::isfinite(stateMax) || !std::isfinite(directionMax))
+    throw std::runtime_error("spectral JVP state and direction must be finite");
+  if (directionMax == 0.0)
+    return 0.0;
+  return std::max(options.absoluteStep,
+                  options.relativeStep * std::max(1.0, stateMax) /
+                      directionMax);
+}
+
+inline SpectralJacobianVectorProductResult
+evaluateSpectralJacobianVectorProduct(
+    const SpectralResidualProblem &problem, const std::vector<double> &values,
+    const std::vector<double> &direction,
+    const SpectralJacobianVectorProductOptions &options = {}) {
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  const double step =
+      spectralJacobianVectorProductStep(grid, values, direction, options);
+  if (step == 0.0)
+    return makeSpectralJacobianVectorProductResult(
+        std::vector<double>(grid.size(), 0.0), step);
+
+  std::vector<double> plus(values.size(), 0.0);
+  for (std::size_t p = 0; p < values.size(); ++p)
+    plus[p] = values[p] + step * direction[p];
+  const auto plusResidual = assembleSpectralResidual(problem, plus);
+
+  std::vector<double> out(values.size(), 0.0);
+  if (options.centeredDifference) {
+    std::vector<double> minus(values.size(), 0.0);
+    for (std::size_t p = 0; p < values.size(); ++p)
+      minus[p] = values[p] - step * direction[p];
+    const auto minusResidual = assembleSpectralResidual(problem, minus);
+    const double scale = 0.5 / step;
+    for (std::size_t p = 0; p < values.size(); ++p)
+      out[p] = (plusResidual.values[p] - minusResidual.values[p]) * scale;
+  } else {
+    const auto baseResidual = assembleSpectralResidual(problem, values);
+    const double scale = 1.0 / step;
+    for (std::size_t p = 0; p < values.size(); ++p)
+      out[p] = (plusResidual.values[p] - baseResidual.values[p]) * scale;
+  }
+
+  return makeSpectralJacobianVectorProductResult(std::move(out), step);
+}
+
+inline SpectralJacobianVectorProductResult
+evaluateSpectralJacobianVectorProduct(
+    const SpectralGrid3D &grid, const std::vector<double> &values,
+    const std::vector<double> &direction, const SpectralResidualKernel &kernel,
+    std::span<const double> params,
+    std::span<const std::vector<double>> auxiliaryFields = {},
+    const SpectralJacobianVectorProductOptions &options = {},
+    const SpectralCoordinateMap &coordinateMap = {},
+    std::span<const double> coordinateParams = {}) {
+  const SpectralResidualProblem problem{&grid, kernel, params, auxiliaryFields,
+                                        coordinateMap, coordinateParams};
+  return evaluateSpectralJacobianVectorProduct(problem, values, direction,
+                                               options);
 }
 
 } // namespace tensorium_mlir::runtime

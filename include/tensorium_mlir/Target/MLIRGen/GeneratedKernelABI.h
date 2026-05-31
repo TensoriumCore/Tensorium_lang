@@ -52,6 +52,8 @@ inline constexpr const char kSymbolResidualGridParallel[] =
     "tensorium_residual_grid_parallel";
 inline constexpr const char kSymbolSpectralResidualPrefix[] =
     "tensorium_spectral_residual_";
+inline constexpr const char kSymbolSpectralResidualGridPrefix[] =
+    "tensorium_spectral_residual_grid_";
 
 // Stable function kind tags.
 inline constexpr const char kKindInitSource[] = "init_source";
@@ -69,6 +71,8 @@ inline constexpr const char kKindResidualGridParallel[] =
     "residual_grid_parallel";
 inline constexpr const char kKindSpectralResidualPoint[] =
     "spectral_residual_point";
+inline constexpr const char kKindSpectralResidualGrid[] =
+    "spectral_residual_grid";
 
 // C/C++ host-side view of the rank-1 memref descriptor shape used after LLVM
 // lowering: (allocatedPtr, alignedPtr, offset, size, stride).
