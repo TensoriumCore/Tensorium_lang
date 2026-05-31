@@ -61,6 +61,7 @@ struct SpectralPointArgs {
 struct SpectralCandidate {
   std::string target;
   std::string unknown;
+  std::vector<std::string> auxiliaryFields;
 };
 
 bool isScalarField(const ModuleIR &module, const std::string &name) {
@@ -360,9 +361,19 @@ classifySpectralCandidate(const ModuleIR &module, const EvolutionIR &evo,
   const std::string unknown = *derivativeFields.begin();
   if (!isScalarField(module, unknown))
     return std::nullopt;
-  if (fieldNames.size() != 1 || !fieldNames.count(unknown))
+  if (!fieldNames.count(unknown))
     return std::nullopt;
-  return SpectralCandidate{eq.fieldName, unknown};
+  std::vector<std::string> auxiliaryFields;
+  auxiliaryFields.reserve(fieldNames.size() - 1);
+  for (const std::string &fieldName : fieldNames) {
+    if (fieldName == unknown)
+      continue;
+    if (!isScalarField(module, fieldName))
+      return std::nullopt;
+    auxiliaryFields.push_back(fieldName);
+  }
+  std::sort(auxiliaryFields.begin(), auxiliaryFields.end());
+  return SpectralCandidate{eq.fieldName, unknown, std::move(auxiliaryFields)};
 }
 
 class SpectralScalarEmitter {
@@ -371,9 +382,11 @@ public:
                         std::string unknown,
                         const std::unordered_map<std::string, const ExprIR *> &temps,
                         const SpectralPointArgs &pointArgs,
+                        const llvm::StringMap<mlir::Value> &auxiliaryArgs,
                         const llvm::StringMap<mlir::Value> &paramArgs)
       : b(b), loc(loc), unknown(std::move(unknown)), temps(temps),
-        pointArgs(pointArgs), paramArgs(paramArgs) {}
+        pointArgs(pointArgs), auxiliaryArgs(auxiliaryArgs),
+        paramArgs(paramArgs) {}
 
   mlir::Value emit(const ExprIR *expr) {
     if (!expr)
@@ -431,8 +444,13 @@ private:
   mlir::Value emitVar(const VarIR *var) {
     if (var->vkind == VarKind::Field) {
       if (var->name != unknown) {
-        emitUnsupportedExprError(
-            loc, "spectral point residual currently supports one scalar field");
+        auto it = auxiliaryArgs.find(var->name);
+        if (it == auxiliaryArgs.end()) {
+          emitUnsupportedExprError(
+              loc, "spectral point residual references unsupported field '" +
+                       var->name + "'");
+        }
+        return it->second;
       }
       return pointArgs.value;
     }
@@ -624,6 +642,7 @@ private:
   std::string unknown;
   const std::unordered_map<std::string, const ExprIR *> &temps;
   const SpectralPointArgs &pointArgs;
+  const llvm::StringMap<mlir::Value> &auxiliaryArgs;
   const llvm::StringMap<mlir::Value> &paramArgs;
   llvm::StringMap<mlir::Value> localValues;
 };
@@ -644,17 +663,23 @@ void emitOneSpectralResidual(mlir::OpBuilder &b, mlir::Location loc,
   const auto temps = tempDefsFor(evo);
   const std::vector<std::string> params = sortedParamNames(eq.rhs.get(), temps);
   const std::vector<std::string> coords = spectralCoordNames(module);
+  std::vector<std::string> fields;
+  fields.reserve(1 + candidate.auxiliaryFields.size());
+  fields.push_back(candidate.unknown);
+  fields.insert(fields.end(), candidate.auxiliaryFields.begin(),
+                candidate.auxiliaryFields.end());
 
   mlir::Type f64 = b.getF64Type();
   llvm::SmallVector<mlir::Type, 16> argTypes;
-  for (unsigned i = 0; i < 13 + params.size(); ++i)
+  for (unsigned i = 0; i < 13 + candidate.auxiliaryFields.size() +
+                               params.size(); ++i)
     argTypes.push_back(f64);
 
   auto fn = mlir::func::FuncOp::create(
       loc, symbol, b.getFunctionType(argTypes, mlir::TypeRange{f64}));
   setCommonABIAttrs(b, fn, tensorium_mlir::abi::kKindSpectralResidualPoint);
   fn->setAttr(tensorium_mlir::abi::kAttrFieldNames,
-              makeStringArrayAttr(b, {candidate.unknown}));
+              makeStringArrayAttr(b, fields));
   fn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
               makeStringArrayAttr(b, {candidate.target}));
   fn->setAttr(tensorium_mlir::abi::kAttrCoordNames,
@@ -671,14 +696,23 @@ void emitOneSpectralResidual(mlir::OpBuilder &b, mlir::Location loc,
                               entry->getArgument(4), entry->getArgument(5),
                               entry->getArgument(6), entry->getArgument(7),
                               entry->getArgument(8), entry->getArgument(9),
-                              entry->getArgument(10), entry->getArgument(11),
-                              entry->getArgument(12)};
+                              entry->getArgument(
+                                  10 + candidate.auxiliaryFields.size()),
+                              entry->getArgument(
+                                  11 + candidate.auxiliaryFields.size()),
+                              entry->getArgument(
+                                  12 + candidate.auxiliaryFields.size())};
+  llvm::StringMap<mlir::Value> auxiliaryArgs;
+  for (std::size_t i = 0; i < candidate.auxiliaryFields.size(); ++i)
+    auxiliaryArgs[candidate.auxiliaryFields[i]] = entry->getArgument(10 + i);
+
   llvm::StringMap<mlir::Value> paramArgs;
+  const std::size_t paramBase = 13 + candidate.auxiliaryFields.size();
   for (std::size_t i = 0; i < params.size(); ++i)
-    paramArgs[params[i]] = entry->getArgument(13 + i);
+    paramArgs[params[i]] = entry->getArgument(paramBase + i);
 
   SpectralScalarEmitter emitter(b, loc, candidate.unknown, temps, pointArgs,
-                                paramArgs);
+                                auxiliaryArgs, paramArgs);
   mlir::Value value = emitter.emit(eq.rhs.get());
   b.create<mlir::func::ReturnOp>(loc, value);
   moduleOp.push_back(fn);

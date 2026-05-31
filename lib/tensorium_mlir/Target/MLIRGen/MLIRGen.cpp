@@ -266,8 +266,9 @@ void emitRhsGridWrapper(
 
 void emitSpectralResidualWrapper(std::ostringstream &os,
                                  const HostKernelABI &kernel) {
-  if (kernel.fields.size() != 1 || kernel.outputs.size() != 1)
+  if (kernel.fields.empty() || kernel.outputs.size() != 1)
     return;
+  const std::size_t auxiliaryCount = kernel.fields.size() - 1;
 
   os << "static inline double " << kernel.wrapperName << "(\n"
      << "    const tensorium_spectral_residual_point *point,\n"
@@ -281,11 +282,19 @@ void emitSpectralResidualWrapper(std::ostringstream &os,
   if (!kernel.params.empty())
     os << "  if (!params)\n"
        << "    return 0.0;\n";
+  os << "  if (point->aux_count != "
+     << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
+     << "    return 0.0;\n";
+  if (auxiliaryCount > 0)
+    os << "  if (!point->aux_values)\n"
+       << "    return 0.0;\n";
 
   os << "  return " << kernel.symbolName << "("
      << "point->value, point->d1, point->d2, point->d3, point->d11, "
-        "point->d12, point->d13, point->d22, point->d23, point->d33, "
-        "point->physical[0], point->physical[1], point->physical[2]";
+        "point->d12, point->d13, point->d22, point->d23, point->d33";
+  for (std::size_t i = 0; i < auxiliaryCount; ++i)
+    os << ", point->aux_values[" << i << "]";
+  os << ", point->physical[0], point->physical[1], point->physical[2]";
   for (std::size_t i = 0; i < kernel.params.size(); ++i)
     os << ", params[" << i << "]";
   os << ");\n"
@@ -426,6 +435,8 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "  double d22;\n"
      << "  double d23;\n"
      << "  double d33;\n"
+     << "  const double *aux_values;\n"
+     << "  int64_t aux_count;\n"
      << "} tensorium_spectral_residual_point;\n\n"
      << "typedef double (*tensorium_spectral_residual_kernel_fn)(\n"
      << "    const tensorium_spectral_residual_point *point,\n"

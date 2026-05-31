@@ -28,6 +28,8 @@ typedef struct tensorium_spectral_residual_point {
   double d22;
   double d23;
   double d33;
+  const double *aux_values;
+  std::int64_t aux_count;
 } tensorium_spectral_residual_point;
 
 typedef double (*tensorium_spectral_residual_kernel_fn)(
@@ -101,7 +103,8 @@ inline tensorium_spectral_residual_point makeSpectralResidualPoint(
     const SpectralGrid3D &grid, const SpectralDerivatives3D &derivs,
     std::size_t i, std::size_t j, std::size_t k,
     const SpectralCoordinateMap &coordinateMap,
-    std::span<const double> coordinateParams) {
+    std::span<const double> coordinateParams,
+    std::span<const double> auxiliaryValues = {}) {
   const SpectralPoint3D point = grid.point(i, j, k);
   const SpectralPointDerivatives3D u =
       grid.pointDerivatives(derivs, point.index);
@@ -132,24 +135,35 @@ inline tensorium_spectral_residual_point makeSpectralResidualPoint(
   out.d22 = u.d22;
   out.d23 = u.d23;
   out.d33 = u.d33;
+  out.aux_values = auxiliaryValues.data();
+  out.aux_count = static_cast<std::int64_t>(auxiliaryValues.size());
   return out;
 }
 
-inline std::vector<double> evaluateSpectralResidual(
+inline std::vector<double> evaluateSpectralResidualWithAuxFields(
     const SpectralGrid3D &grid, const SpectralDerivatives3D &derivs,
     const SpectralResidualKernel &kernel, std::span<const double> params,
+    std::span<const std::vector<double>> auxiliaryFields,
     const SpectralCoordinateMap &coordinateMap = {},
     std::span<const double> coordinateParams = {}) {
   validateSpectralDerivativeBundle(grid, derivs);
   if (!kernel.evaluate)
     throw std::runtime_error("spectral residual kernel callback is null");
+  for (const auto &field : auxiliaryFields) {
+    if (field.size() != grid.size())
+      throw std::runtime_error("spectral auxiliary field size mismatch");
+  }
 
   std::vector<double> out(grid.size(), 0.0);
+  std::vector<double> pointAux(auxiliaryFields.size(), 0.0);
   for (std::size_t k = 0; k < grid.n3(); ++k) {
     for (std::size_t j = 0; j < grid.n2(); ++j) {
       for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const std::size_t pointIndex = grid.index(i, j, k);
+        for (std::size_t aux = 0; aux < auxiliaryFields.size(); ++aux)
+          pointAux[aux] = auxiliaryFields[aux][pointIndex];
         const auto point = makeSpectralResidualPoint(
-            grid, derivs, i, j, k, coordinateMap, coordinateParams);
+            grid, derivs, i, j, k, coordinateMap, coordinateParams, pointAux);
         out[static_cast<std::size_t>(point.index)] =
             kernel.evaluate(&point, params.data(),
                             static_cast<std::int64_t>(params.size()),
@@ -161,12 +175,32 @@ inline std::vector<double> evaluateSpectralResidual(
 }
 
 inline std::vector<double> evaluateSpectralResidual(
+    const SpectralGrid3D &grid, const SpectralDerivatives3D &derivs,
+    const SpectralResidualKernel &kernel, std::span<const double> params,
+    const SpectralCoordinateMap &coordinateMap = {},
+    std::span<const double> coordinateParams = {}) {
+  return evaluateSpectralResidualWithAuxFields(grid, derivs, kernel, params, {},
+                                               coordinateMap, coordinateParams);
+}
+
+inline std::vector<double> evaluateSpectralResidual(
     const SpectralGrid3D &grid, const std::vector<double> &values,
     const SpectralResidualKernel &kernel, std::span<const double> params,
     const SpectralCoordinateMap &coordinateMap = {},
     std::span<const double> coordinateParams = {}) {
   return evaluateSpectralResidual(grid, grid.derivatives(values), kernel,
                                   params, coordinateMap, coordinateParams);
+}
+
+inline std::vector<double> evaluateSpectralResidualWithAuxFields(
+    const SpectralGrid3D &grid, const std::vector<double> &values,
+    const SpectralResidualKernel &kernel, std::span<const double> params,
+    std::span<const std::vector<double>> auxiliaryFields,
+    const SpectralCoordinateMap &coordinateMap = {},
+    std::span<const double> coordinateParams = {}) {
+  return evaluateSpectralResidualWithAuxFields(
+      grid, grid.derivatives(values), kernel, params, auxiliaryFields,
+      coordinateMap, coordinateParams);
 }
 
 } // namespace tensorium_mlir::runtime
