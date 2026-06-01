@@ -178,6 +178,9 @@ consume directly:
   exactly one differentiated scalar unknown, but auxiliary fields may include
   other current unknown fields, which is enough to test coupled residual
   assembly before adding full multi-unknown Newton/GMRES.
+  `evaluateSpectralResidualSystemJacobianVectorProduct(...)` perturbs the
+  field-major unknown bundle and returns equation-major `Jv`, resolving
+  auxiliary unknown maps so coupled residuals see the current perturbation.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

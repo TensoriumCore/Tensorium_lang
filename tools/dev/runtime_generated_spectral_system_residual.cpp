@@ -19,10 +19,13 @@ namespace {
 
 using tensorium_mlir::runtime::SpectralAxis;
 using tensorium_mlir::runtime::SpectralGrid3D;
+using tensorium_mlir::runtime::SpectralJacobianVectorProductOptions;
 using tensorium_mlir::runtime::SpectralResidualProblem;
 using tensorium_mlir::runtime::SpectralResidualSystemEquation;
 using tensorium_mlir::runtime::SpectralResidualSystemProblem;
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
+using tensorium_mlir::runtime::evaluateSpectralResidualSystemJacobianVectorProduct;
+using tensorium_mlir::runtime::kSpectralStaticAuxiliary;
 using tensorium_mlir::runtime::spectralResidualGridKernelFromDesc;
 using tensorium_mlir::runtime::spectralResidualKernelFromDesc;
 
@@ -70,6 +73,24 @@ double lapV(double, double y, double z) {
   return 1.0 - 2.4 * y - 1.35 * std::sin(3.0 * z);
 }
 
+double dirU(double x, double y, double z) {
+  return 0.3 * (4.0 * x * x * x - 3.0 * x) - 0.15 * y * y +
+         0.07 * std::cos(2.0 * z);
+}
+
+double lapDirU(double x, double, double z) {
+  return 7.2 * x - 0.3 - 0.28 * std::cos(2.0 * z);
+}
+
+double dirV(double x, double y, double z) {
+  return -0.2 * (2.0 * x * x - 1.0) + 0.11 * y * y * y +
+         0.05 * std::sin(3.0 * z);
+}
+
+double lapDirV(double, double y, double z) {
+  return -0.8 + 0.66 * y - 0.45 * std::sin(3.0 * z);
+}
+
 double maxAbs(std::span<const double> values) {
   double out = 0.0;
   for (double value : values)
@@ -107,6 +128,8 @@ int main() {
 
     std::vector<double> u(grid.size(), 0.0);
     std::vector<double> v(grid.size(), 0.0);
+    std::vector<double> du(grid.size(), 0.0);
+    std::vector<double> dv(grid.size(), 0.0);
     std::vector<double> sourceU(grid.size(), 0.0);
     std::vector<double> sourceV(grid.size(), 0.0);
     for (std::size_t k = 0; k < grid.n3(); ++k) {
@@ -118,6 +141,8 @@ int main() {
           const std::size_t p = grid.index(i, j, k);
           u[p] = exactU(x, y, z);
           v[p] = exactV(x, y, z);
+          du[p] = dirU(x, y, z);
+          dv[p] = dirV(x, y, z);
           sourceU[p] = -(lapU(x, y, z) + alpha * u[p] + coupling * v[p]);
           sourceV[p] = -(lapV(x, y, z) + beta * v[p] + coupling * u[p]);
         }
@@ -125,6 +150,7 @@ int main() {
     }
 
     const std::array<std::vector<double>, 2> unknownFields{u, v};
+    const std::array<std::vector<double>, 2> directionFields{du, dv};
     const std::array<std::vector<double>, 2> huAuxiliaryFields{sourceU, v};
     const std::array<std::vector<double>, 2> hvAuxiliaryFields{sourceV, u};
 
@@ -144,9 +170,19 @@ int main() {
                                              hvAuxiliaryFields.size())};
     hvProblem.gridKernel = hvGrid;
 
+    const std::array<std::size_t, 2> huAuxiliaryMap{
+        kSpectralStaticAuxiliary, 1};
+    const std::array<std::size_t, 2> hvAuxiliaryMap{
+        kSpectralStaticAuxiliary, 0};
     const std::array<SpectralResidualSystemEquation, 2> equations{{
-        SpectralResidualSystemEquation{huProblem, 0, "Hu"},
-        SpectralResidualSystemEquation{hvProblem, 1, "Hv"},
+        SpectralResidualSystemEquation{
+            huProblem, 0, "Hu",
+            std::span<const std::size_t>(huAuxiliaryMap.data(),
+                                         huAuxiliaryMap.size())},
+        SpectralResidualSystemEquation{
+            hvProblem, 1, "Hv",
+            std::span<const std::size_t>(hvAuxiliaryMap.data(),
+                                         hvAuxiliaryMap.size())},
     }};
     const SpectralResidualSystemProblem system{
         &grid, std::span<const SpectralResidualSystemEquation>(
@@ -175,6 +211,47 @@ int main() {
         result.maxAbs > 6e-10) {
       std::fprintf(stderr, "generated spectral system residual mismatch\n");
       return 3;
+    }
+
+    SpectralJacobianVectorProductOptions jvpOptions;
+    jvpOptions.relativeStep = 1.0e-6;
+    const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
+        system, std::span<const std::vector<double>>(unknownFields.data(),
+                                                     unknownFields.size()),
+        std::span<const std::vector<double>>(directionFields.data(),
+                                             directionFields.size()),
+        jvpOptions);
+
+    std::vector<double> jvpErrors(2 * grid.size(), 0.0);
+    for (std::size_t k = 0; k < grid.n3(); ++k) {
+      const double z = grid.axis(2).points[k];
+      for (std::size_t j = 0; j < grid.n2(); ++j) {
+        const double y = grid.axis(1).points[j];
+        for (std::size_t i = 0; i < grid.n1(); ++i) {
+          const double x = grid.axis(0).points[i];
+          const std::size_t p = grid.index(i, j, k);
+          const double expectedHu =
+              lapDirU(x, y, z) + alpha * du[p] + coupling * dv[p];
+          const double expectedHv =
+              lapDirV(x, y, z) + beta * dv[p] + coupling * du[p];
+          jvpErrors[p] = jvp.values[p] - expectedHu;
+          jvpErrors[grid.size() + p] =
+              jvp.values[grid.size() + p] - expectedHv;
+        }
+      }
+    }
+
+    const double jvpError = maxAbs(jvpErrors);
+    std::printf("[generated-spectral-system] jvp step = %.17g\n", jvp.step);
+    std::printf("[generated-spectral-system] jvp l2 = %.17g max = %.17g\n",
+                jvp.l2Norm, jvp.maxAbs);
+    std::printf("[generated-spectral-system] jvp max error = %.17g\n",
+                jvpError);
+    if (!jvp.finite || !jvp.usedGeneratedGridKernels ||
+        jvp.size() != 2 * grid.size() || jvp.step <= 0.0 ||
+        jvpError > 2e-8) {
+      std::fprintf(stderr, "generated spectral system JVP mismatch\n");
+      return 4;
     }
   } catch (const std::exception &ex) {
     std::fprintf(stderr,

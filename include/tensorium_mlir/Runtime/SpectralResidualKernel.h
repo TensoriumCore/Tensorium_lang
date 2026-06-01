@@ -74,6 +74,9 @@ typedef struct tensorium_spectral_coordinate_map_desc {
 
 namespace tensorium_mlir::runtime {
 
+inline constexpr std::size_t kSpectralStaticAuxiliary =
+    std::numeric_limits<std::size_t>::max();
+
 struct SpectralResidualKernel {
   std::string symbolName;
   tensorium_spectral_residual_kernel_fn evaluate = nullptr;
@@ -116,6 +119,7 @@ struct SpectralResidualSystemEquation {
   SpectralResidualProblem problem;
   std::size_t unknownIndex = 0;
   std::string residualName;
+  std::span<const std::size_t> auxiliaryUnknownIndices{};
 };
 
 struct SpectralResidualSystemProblem {
@@ -128,6 +132,17 @@ struct SpectralResidualSystemAssemblyResult {
   std::vector<SpectralResidualAssemblyResult> equationResults;
   std::size_t equationCount = 0;
   std::size_t pointsPerEquation = 0;
+  double l2Norm = 0.0;
+  double maxAbs = 0.0;
+  bool finite = true;
+  bool usedGeneratedGridKernels = false;
+
+  std::size_t size() const { return values.size(); }
+};
+
+struct SpectralResidualSystemJacobianVectorProductResult {
+  std::vector<double> values;
+  double step = 0.0;
   double l2Norm = 0.0;
   double maxAbs = 0.0;
   bool finite = true;
@@ -556,6 +571,29 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
       problem.grid = &grid;
     if (problem.grid != &grid)
       throw std::runtime_error("spectral residual system grid mismatch");
+    std::vector<std::vector<double>> resolvedAuxiliaryFields;
+    if (!equation.auxiliaryUnknownIndices.empty()) {
+      if (equation.auxiliaryUnknownIndices.size() !=
+          problem.auxiliaryFields.size()) {
+        throw std::runtime_error(
+            "spectral residual system auxiliary map size mismatch");
+      }
+      resolvedAuxiliaryFields.reserve(problem.auxiliaryFields.size());
+      for (std::size_t i = 0; i < problem.auxiliaryFields.size(); ++i) {
+        const std::size_t mappedUnknown = equation.auxiliaryUnknownIndices[i];
+        if (mappedUnknown == kSpectralStaticAuxiliary) {
+          resolvedAuxiliaryFields.push_back(problem.auxiliaryFields[i]);
+          continue;
+        }
+        if (mappedUnknown >= unknownFields.size()) {
+          throw std::runtime_error(
+              "spectral residual system auxiliary unknown index out of range");
+        }
+        resolvedAuxiliaryFields.push_back(unknownFields[mappedUnknown]);
+      }
+      problem.auxiliaryFields = std::span<const std::vector<double>>(
+          resolvedAuxiliaryFields.data(), resolvedAuxiliaryFields.size());
+    }
 
     const auto residual =
         assembleSpectralResidual(problem, unknownFields[equation.unknownIndex]);
@@ -571,6 +609,137 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
   result.maxAbs = spectralVectorMaxAbs(result.values);
   result.finite = result.finite && spectralVectorIsFinite(result.values);
   return result;
+}
+
+inline double spectralSystemMaxAbs(std::span<const std::vector<double>> fields) {
+  double out = 0.0;
+  for (const auto &field : fields) {
+    const double fieldMax = spectralVectorMaxAbs(field);
+    if (!std::isfinite(fieldMax))
+      return fieldMax;
+    out = std::max(out, fieldMax);
+  }
+  return out;
+}
+
+inline void validateSpectralSystemFieldBundle(
+    const SpectralGrid3D &grid, std::span<const std::vector<double>> fields,
+    const char *label) {
+  if (fields.empty())
+    throw std::runtime_error(std::string("spectral residual system ") + label +
+                             " bundle is empty");
+  for (const auto &field : fields) {
+    if (field.size() != grid.size()) {
+      throw std::runtime_error(std::string("spectral residual system ") +
+                               label + " size mismatch");
+    }
+  }
+}
+
+inline double spectralSystemJacobianVectorProductStep(
+    const SpectralGrid3D &grid, std::span<const std::vector<double>> values,
+    std::span<const std::vector<double>> directions,
+    const SpectralJacobianVectorProductOptions &options) {
+  validateSpectralSystemFieldBundle(grid, values, "state");
+  validateSpectralSystemFieldBundle(grid, directions, "direction");
+  if (values.size() != directions.size())
+    throw std::runtime_error(
+        "spectral residual system state/direction count mismatch");
+  if (!(options.relativeStep > 0.0) || !std::isfinite(options.relativeStep))
+    throw std::runtime_error("spectral system JVP relative step must be positive");
+  if (options.absoluteStep < 0.0 || !std::isfinite(options.absoluteStep))
+    throw std::runtime_error("spectral system JVP absolute step must be finite");
+
+  const double stateMax = spectralSystemMaxAbs(values);
+  const double directionMax = spectralSystemMaxAbs(directions);
+  if (!std::isfinite(stateMax) || !std::isfinite(directionMax))
+    throw std::runtime_error("spectral system JVP state/direction must be finite");
+  if (directionMax == 0.0)
+    return 0.0;
+  return std::max(options.absoluteStep,
+                  options.relativeStep * std::max(1.0, stateMax) /
+                      directionMax);
+}
+
+inline std::vector<std::vector<double>> perturbSpectralSystemUnknowns(
+    std::span<const std::vector<double>> values,
+    std::span<const std::vector<double>> directions, double scale) {
+  if (values.size() != directions.size())
+    throw std::runtime_error(
+        "spectral residual system perturbation count mismatch");
+  std::vector<std::vector<double>> out;
+  out.reserve(values.size());
+  for (std::size_t field = 0; field < values.size(); ++field) {
+    if (values[field].size() != directions[field].size())
+      throw std::runtime_error(
+          "spectral residual system perturbation size mismatch");
+    out.push_back(values[field]);
+    for (std::size_t p = 0; p < out.back().size(); ++p)
+      out.back()[p] += scale * directions[field][p];
+  }
+  return out;
+}
+
+inline SpectralResidualSystemJacobianVectorProductResult
+makeSpectralResidualSystemJacobianVectorProductResult(std::vector<double> values,
+                                                      double step,
+                                                      bool usedGridKernels) {
+  SpectralResidualSystemJacobianVectorProductResult result;
+  result.values = std::move(values);
+  result.step = step;
+  result.l2Norm = spectralVectorL2Norm(result.values);
+  result.maxAbs = spectralVectorMaxAbs(result.values);
+  result.finite = spectralVectorIsFinite(result.values);
+  result.usedGeneratedGridKernels = usedGridKernels;
+  return result;
+}
+
+inline SpectralResidualSystemJacobianVectorProductResult
+evaluateSpectralResidualSystemJacobianVectorProduct(
+    const SpectralResidualSystemProblem &system,
+    std::span<const std::vector<double>> values,
+    std::span<const std::vector<double>> directions,
+    const SpectralJacobianVectorProductOptions &options = {}) {
+  const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+  const double step =
+      spectralSystemJacobianVectorProductStep(grid, values, directions, options);
+  if (step == 0.0) {
+    return makeSpectralResidualSystemJacobianVectorProductResult(
+        std::vector<double>(system.equations.size() * grid.size(), 0.0), step,
+        false);
+  }
+
+  const auto plus = perturbSpectralSystemUnknowns(values, directions, step);
+  const auto plusResidual = assembleSpectralResidualSystem(
+      system, std::span<const std::vector<double>>(plus.data(), plus.size()));
+
+  std::vector<double> out(plusResidual.values.size(), 0.0);
+  bool usedGridKernels = plusResidual.usedGeneratedGridKernels;
+  if (options.centeredDifference) {
+    const auto minus = perturbSpectralSystemUnknowns(values, directions, -step);
+    const auto minusResidual = assembleSpectralResidualSystem(
+        system,
+        std::span<const std::vector<double>>(minus.data(), minus.size()));
+    if (minusResidual.values.size() != out.size())
+      throw std::runtime_error("spectral residual system JVP size mismatch");
+    usedGridKernels =
+        usedGridKernels && minusResidual.usedGeneratedGridKernels;
+    const double scale = 0.5 / step;
+    for (std::size_t p = 0; p < out.size(); ++p)
+      out[p] = (plusResidual.values[p] - minusResidual.values[p]) * scale;
+  } else {
+    const auto baseResidual = assembleSpectralResidualSystem(system, values);
+    if (baseResidual.values.size() != out.size())
+      throw std::runtime_error("spectral residual system JVP size mismatch");
+    usedGridKernels =
+        usedGridKernels && baseResidual.usedGeneratedGridKernels;
+    const double scale = 1.0 / step;
+    for (std::size_t p = 0; p < out.size(); ++p)
+      out[p] = (plusResidual.values[p] - baseResidual.values[p]) * scale;
+  }
+
+  return makeSpectralResidualSystemJacobianVectorProductResult(
+      std::move(out), step, usedGridKernels);
 }
 
 inline double spectralJacobianVectorProductStep(
