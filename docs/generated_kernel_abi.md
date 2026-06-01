@@ -172,6 +172,12 @@ consume directly:
   over the same JVP interface. The current GMRES path is unpreconditioned and is
   intended as the scalable solve interface; production physical grids still need
   preconditioning and richer boundary/domain handling.
+- `SpectralResidualSystemProblem` is the first multi-residual assembly surface.
+  It combines several scalar `SpectralResidualProblem` equations into one
+  equation-major vector `[F0(points), F1(points), ...]`. Each equation still has
+  exactly one differentiated scalar unknown, but auxiliary fields may include
+  other current unknown fields, which is enough to test coupled residual
+  assembly before adding full multi-unknown Newton/GMRES.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

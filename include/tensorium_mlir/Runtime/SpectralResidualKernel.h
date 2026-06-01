@@ -112,6 +112,30 @@ struct SpectralResidualAssemblyResult {
   std::size_t size() const { return values.size(); }
 };
 
+struct SpectralResidualSystemEquation {
+  SpectralResidualProblem problem;
+  std::size_t unknownIndex = 0;
+  std::string residualName;
+};
+
+struct SpectralResidualSystemProblem {
+  const SpectralGrid3D *grid = nullptr;
+  std::span<const SpectralResidualSystemEquation> equations{};
+};
+
+struct SpectralResidualSystemAssemblyResult {
+  std::vector<double> values;
+  std::vector<SpectralResidualAssemblyResult> equationResults;
+  std::size_t equationCount = 0;
+  std::size_t pointsPerEquation = 0;
+  double l2Norm = 0.0;
+  double maxAbs = 0.0;
+  bool finite = true;
+  bool usedGeneratedGridKernels = false;
+
+  std::size_t size() const { return values.size(); }
+};
+
 struct SpectralJacobianVectorProductOptions {
   double relativeStep = 1.4901161193847656e-8;
   double absoluteStep = 0.0;
@@ -496,6 +520,57 @@ inline SpectralResidualAssemblyResult assembleSpectralResidual(
   const SpectralResidualProblem problem{&grid, kernel, params, auxiliaryFields,
                                         coordinateMap, coordinateParams};
   return assembleSpectralResidual(problem, values);
+}
+
+inline const SpectralGrid3D &requireSpectralResidualSystemGrid(
+    const SpectralResidualSystemProblem &system) {
+  if (!system.grid)
+    throw std::runtime_error("spectral residual system grid is null");
+  return *system.grid;
+}
+
+inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
+    const SpectralResidualSystemProblem &system,
+    std::span<const std::vector<double>> unknownFields) {
+  const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+  if (system.equations.empty())
+    throw std::runtime_error("spectral residual system has no equations");
+  for (const auto &field : unknownFields) {
+    if (field.size() != grid.size())
+      throw std::runtime_error("spectral residual system unknown size mismatch");
+  }
+
+  SpectralResidualSystemAssemblyResult result;
+  result.equationCount = system.equations.size();
+  result.pointsPerEquation = grid.size();
+  result.values.reserve(result.equationCount * result.pointsPerEquation);
+  result.equationResults.reserve(result.equationCount);
+  result.usedGeneratedGridKernels = true;
+
+  for (const auto &equation : system.equations) {
+    if (equation.unknownIndex >= unknownFields.size())
+      throw std::runtime_error(
+          "spectral residual system equation unknown index out of range");
+    SpectralResidualProblem problem = equation.problem;
+    if (!problem.grid)
+      problem.grid = &grid;
+    if (problem.grid != &grid)
+      throw std::runtime_error("spectral residual system grid mismatch");
+
+    const auto residual =
+        assembleSpectralResidual(problem, unknownFields[equation.unknownIndex]);
+    result.usedGeneratedGridKernels =
+        result.usedGeneratedGridKernels && residual.usedGeneratedGridKernel;
+    result.finite = result.finite && residual.finite;
+    result.values.insert(result.values.end(), residual.values.begin(),
+                         residual.values.end());
+    result.equationResults.push_back(std::move(residual));
+  }
+
+  result.l2Norm = spectralVectorL2Norm(result.values);
+  result.maxAbs = spectralVectorMaxAbs(result.values);
+  result.finite = result.finite && spectralVectorIsFinite(result.values);
+  return result;
 }
 
 inline double spectralJacobianVectorProductStep(
