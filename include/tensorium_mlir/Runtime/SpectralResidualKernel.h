@@ -1065,6 +1065,159 @@ inline bool buildDenseSpectralJacobianByJVP(
   return true;
 }
 
+inline std::vector<std::vector<double>> unflattenSpectralSystemVector(
+    std::span<const double> values, std::size_t fieldCount,
+    std::size_t pointsPerField) {
+  if (values.size() != fieldCount * pointsPerField)
+    throw std::runtime_error("spectral residual system vector size mismatch");
+  std::vector<std::vector<double>> out(
+      fieldCount, std::vector<double>(pointsPerField, 0.0));
+  for (std::size_t field = 0; field < fieldCount; ++field) {
+    const std::size_t offset = field * pointsPerField;
+    for (std::size_t p = 0; p < pointsPerField; ++p)
+      out[field][p] = values[offset + p];
+  }
+  return out;
+}
+
+inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
+    const SpectralResidualSystemProblem &system,
+    std::span<const std::vector<double>> values, std::span<const double> rhs,
+    const SpectralEllipticSolveOptions &options) {
+  const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+  const std::size_t fieldCount = values.size();
+  const std::size_t n = fieldCount * grid.size();
+  SpectralGMRESResult result;
+  result.solution.assign(n, 0.0);
+  if (fieldCount == 0 || rhs.size() != n || options.gmresMaxIterations < 0)
+    return result;
+  for (const auto &field : values) {
+    if (field.size() != grid.size())
+      return result;
+  }
+
+  const double rhsEuclidean = spectralVectorEuclideanNorm(rhs);
+  const double rhsL2 =
+      rhsEuclidean / std::sqrt(static_cast<double>(std::max<std::size_t>(1, n)));
+  const double target = std::max(options.gmresTolerance,
+                                 options.gmresRelativeTolerance * rhsL2);
+  result.residualL2 = rhsL2;
+  if (rhsL2 <= target) {
+    result.converged = true;
+    return result;
+  }
+  const std::size_t maxIterations = std::min<std::size_t>(
+      n, static_cast<std::size_t>(options.gmresMaxIterations));
+  if (maxIterations == 0)
+    return result;
+
+  std::vector<double> basis((maxIterations + 1) * n, 0.0);
+  for (std::size_t i = 0; i < n; ++i)
+    basis[i] = rhs[i] / rhsEuclidean;
+
+  std::vector<double> hessenberg((maxIterations + 1) * maxIterations, 0.0);
+  std::vector<double> arnoldiVector(n, 0.0);
+  std::vector<double> y;
+  std::vector<double> bestY;
+  std::size_t bestColumns = 0;
+
+  for (std::size_t col = 0; col < maxIterations; ++col) {
+    std::span<const double> direction(&basis[col * n], n);
+    const auto directionFields =
+        unflattenSpectralSystemVector(direction, fieldCount, grid.size());
+    const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
+        system, values,
+        std::span<const std::vector<double>>(directionFields.data(),
+                                             directionFields.size()),
+        options.jvpOptions);
+    if (!jvp.finite || jvp.values.size() != n)
+      return result;
+    arnoldiVector = jvp.values;
+
+    for (std::size_t row = 0; row <= col; ++row) {
+      std::span<const double> basisVector(&basis[row * n], n);
+      const double h = spectralVectorDot(arnoldiVector, basisVector);
+      hessenberg[row * maxIterations + col] = h;
+      for (std::size_t i = 0; i < n; ++i)
+        arnoldiVector[i] -= h * basisVector[i];
+    }
+
+    const double nextNorm = spectralVectorEuclideanNorm(arnoldiVector);
+    hessenberg[(col + 1) * maxIterations + col] = nextNorm;
+    if (nextNorm > options.linearPivotTolerance && col + 1 < maxIterations + 1) {
+      for (std::size_t i = 0; i < n; ++i)
+        basis[(col + 1) * n + i] = arnoldiVector[i] / nextNorm;
+    }
+
+    const std::size_t columns = col + 1;
+    const std::size_t rows = col + 2;
+    double projectedResidualL2 = std::numeric_limits<double>::infinity();
+    if (!solveSpectralLeastSquaresNormalEquations(
+            hessenberg, rows, columns, maxIterations, rhsEuclidean,
+            options.linearPivotTolerance, y, projectedResidualL2, n)) {
+      return result;
+    }
+
+    result.iterations = static_cast<int>(columns);
+    result.residualL2 = projectedResidualL2;
+    bestY = y;
+    bestColumns = columns;
+    if (projectedResidualL2 <= target) {
+      result.converged = true;
+      break;
+    }
+    if (nextNorm <= options.linearPivotTolerance)
+      break;
+  }
+
+  if (bestColumns == 0)
+    return result;
+  result.solution.assign(n, 0.0);
+  for (std::size_t col = 0; col < bestColumns; ++col) {
+    for (std::size_t i = 0; i < n; ++i)
+      result.solution[i] += bestY[col] * basis[col * n + i];
+  }
+  return result;
+}
+
+inline bool buildDenseSpectralSystemJacobianByJVP(
+    const SpectralResidualSystemProblem &system,
+    std::span<const std::vector<double>> values,
+    const SpectralEllipticSolveOptions &options,
+    std::vector<double> &jacobian) {
+  const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+  const std::size_t fieldCount = values.size();
+  const std::size_t n = fieldCount * grid.size();
+  if (fieldCount == 0)
+    throw std::runtime_error("spectral Newton system has no unknown fields");
+  for (const auto &field : values) {
+    if (field.size() != grid.size())
+      throw std::runtime_error("spectral Newton system state size mismatch");
+  }
+  if (n > options.denseJacobianMaxUnknowns)
+    return false;
+
+  jacobian.assign(n * n, 0.0);
+  std::vector<std::vector<double>> directionFields(
+      fieldCount, std::vector<double>(grid.size(), 0.0));
+  for (std::size_t col = 0; col < n; ++col) {
+    const std::size_t field = col / grid.size();
+    const std::size_t point = col % grid.size();
+    directionFields[field][point] = 1.0;
+    const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
+        system, values,
+        std::span<const std::vector<double>>(directionFields.data(),
+                                             directionFields.size()),
+        options.jvpOptions);
+    directionFields[field][point] = 0.0;
+    if (!jvp.finite || jvp.values.size() != n)
+      return false;
+    for (std::size_t row = 0; row < n; ++row)
+      jacobian[row * n + col] = jvp.values[row];
+  }
+  return true;
+}
+
 inline void updateSpectralSolveResidualState(
     SpectralEllipticSolveResult &result,
     const SpectralResidualAssemblyResult &residual) {
@@ -1074,6 +1227,17 @@ inline void updateSpectralSolveResidualState(
       spectralResidualRatio(result.initialResidualL2, result.finalResidualL2);
   result.usedGeneratedGridKernel =
       result.usedGeneratedGridKernel || residual.usedGeneratedGridKernel;
+}
+
+inline void updateSpectralSolveResidualState(
+    SpectralEllipticSolveResult &result,
+    const SpectralResidualSystemAssemblyResult &residual) {
+  result.finalResidualL2 = residual.l2Norm;
+  result.finalResidualMaxAbs = residual.maxAbs;
+  result.residualRatio =
+      spectralResidualRatio(result.initialResidualL2, result.finalResidualL2);
+  result.usedGeneratedGridKernel =
+      result.usedGeneratedGridKernel || residual.usedGeneratedGridKernels;
 }
 
 inline SpectralEllipticSolveResult solveSpectralNewton(
@@ -1181,6 +1345,153 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
     }
 
     values = std::move(candidate);
+    residual = std::move(candidateResidual);
+    result.steps = step;
+    result.lastDamping = damping;
+    updateSpectralSolveResidualState(result, residual);
+    if (!residual.finite) {
+      result.status = SpectralEllipticSolveStatus::InvalidResidual;
+      return result;
+    }
+    if (reachedSpectralResidualTarget(result, options)) {
+      result.status = SpectralEllipticSolveStatus::Converged;
+      return result;
+    }
+  }
+
+  result.status = SpectralEllipticSolveStatus::MaxSteps;
+  return result;
+}
+
+inline SpectralEllipticSolveResult solveSpectralNewton(
+    const SpectralResidualSystemProblem &system,
+    std::span<std::vector<double>> unknownFields,
+    const SpectralEllipticSolveOptions &options = {}) {
+  const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+  SpectralEllipticSolveResult result;
+  result.maxSteps = options.maxNewtonSteps;
+  result.unknowns = unknownFields.size() * grid.size();
+
+  if (unknownFields.empty() || system.equations.empty() ||
+      unknownFields.size() != system.equations.size() ||
+      options.maxNewtonSteps < 0 || options.maxLineSearchSteps < 0 ||
+      !(options.initialDamping > 0.0) ||
+      !(options.lineSearchReduction > 0.0 &&
+        options.lineSearchReduction < 1.0) ||
+      !(options.minDamping > 0.0) ||
+      !(options.linearPivotTolerance > 0.0) ||
+      options.gmresMaxIterations < 0 || options.gmresTolerance < 0.0 ||
+      options.gmresRelativeTolerance < 0.0) {
+    result.status = SpectralEllipticSolveStatus::InvalidInput;
+    return result;
+  }
+  for (const auto &field : unknownFields) {
+    if (field.size() != grid.size()) {
+      result.status = SpectralEllipticSolveStatus::InvalidInput;
+      return result;
+    }
+  }
+
+  auto residual = assembleSpectralResidualSystem(system, unknownFields);
+  result.initialResidualL2 = residual.l2Norm;
+  updateSpectralSolveResidualState(result, residual);
+  if (!residual.finite) {
+    result.status = SpectralEllipticSolveStatus::InvalidResidual;
+    return result;
+  }
+  if (reachedSpectralResidualTarget(result, options)) {
+    result.status = SpectralEllipticSolveStatus::Converged;
+    return result;
+  }
+
+  const std::size_t fieldCount = unknownFields.size();
+  const std::size_t pointsPerField = grid.size();
+  const std::size_t n = fieldCount * pointsPerField;
+  const bool denseAllowed =
+      options.denseJacobianMaxUnknowns > 0 &&
+      n <= options.denseJacobianMaxUnknowns;
+  const bool useDense =
+      options.linearSolver == SpectralLinearSolveKind::DenseJacobian ||
+      (options.linearSolver == SpectralLinearSolveKind::Auto && denseAllowed);
+  if (useDense && !denseAllowed) {
+    result.status = SpectralEllipticSolveStatus::InvalidInput;
+    return result;
+  }
+
+  for (int step = 1; step <= options.maxNewtonSteps; ++step) {
+    std::vector<double> rhs(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i)
+      rhs[i] = -residual.values[i];
+
+    std::vector<double> correction;
+    if (useDense) {
+      std::vector<double> jacobian;
+      if (!buildDenseSpectralSystemJacobianByJVP(
+              system, std::span<const std::vector<double>>(
+                          unknownFields.data(), unknownFields.size()),
+              options, jacobian)) {
+        result.status = SpectralEllipticSolveStatus::LinearSolveFailed;
+        return result;
+      }
+      if (!solveDenseLinearSystem(std::move(jacobian), std::move(rhs),
+                                  correction,
+                                  options.linearPivotTolerance)) {
+        result.status = SpectralEllipticSolveStatus::LinearSolveFailed;
+        return result;
+      }
+      result.linearIterations += static_cast<int>(n);
+      result.finalLinearResidualL2 = 0.0;
+    } else {
+      const auto linear = solveSpectralSystemGMRESByJVP(
+          system,
+          std::span<const std::vector<double>>(unknownFields.data(),
+                                               unknownFields.size()),
+          rhs, options);
+      result.linearIterations += linear.iterations;
+      result.finalLinearResidualL2 = linear.residualL2;
+      result.usedMatrixFreeGMRES = true;
+      if (!linear.converged || linear.solution.size() != n) {
+        result.status = SpectralEllipticSolveStatus::LinearSolveFailed;
+        return result;
+      }
+      correction = linear.solution;
+    }
+
+    bool accepted = false;
+    double damping = options.initialDamping;
+    std::vector<std::vector<double>> candidate(
+        fieldCount, std::vector<double>(pointsPerField, 0.0));
+    SpectralResidualSystemAssemblyResult candidateResidual;
+    for (int attempt = 0; attempt <= options.maxLineSearchSteps; ++attempt) {
+      for (std::size_t field = 0; field < fieldCount; ++field) {
+        const std::size_t offset = field * pointsPerField;
+        for (std::size_t p = 0; p < pointsPerField; ++p) {
+          candidate[field][p] =
+              unknownFields[field][p] + damping * correction[offset + p];
+        }
+      }
+      candidateResidual = assembleSpectralResidualSystem(
+          system, std::span<const std::vector<double>>(candidate.data(),
+                                                       candidate.size()));
+      if (candidateResidual.finite &&
+          (candidateResidual.l2Norm < residual.l2Norm ||
+           candidateResidual.l2Norm <= options.residualTolerance ||
+           residual.l2Norm == 0.0)) {
+        accepted = true;
+        break;
+      }
+      damping *= options.lineSearchReduction;
+      if (damping < options.minDamping)
+        break;
+    }
+
+    if (!accepted) {
+      result.status = SpectralEllipticSolveStatus::LineSearchFailed;
+      return result;
+    }
+
+    for (std::size_t field = 0; field < fieldCount; ++field)
+      unknownFields[field] = std::move(candidate[field]);
     residual = std::move(candidateResidual);
     result.steps = step;
     result.lastDamping = damping;

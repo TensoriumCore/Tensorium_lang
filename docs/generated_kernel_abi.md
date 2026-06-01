@@ -181,6 +181,9 @@ consume directly:
   `evaluateSpectralResidualSystemJacobianVectorProduct(...)` perturbs the
   field-major unknown bundle and returns equation-major `Jv`, resolving
   auxiliary unknown maps so coupled residuals see the current perturbation.
+  `solveSpectralNewton(...)` also accepts a system problem plus a mutable
+  field-major unknown bundle; it solves the square multi-residual system with
+  either dense JVP assembly or matrix-free GMRES over the same system JVP.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

@@ -18,14 +18,17 @@
 namespace {
 
 using tensorium_mlir::runtime::SpectralAxis;
+using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralJacobianVectorProductOptions;
+using tensorium_mlir::runtime::SpectralLinearSolveKind;
 using tensorium_mlir::runtime::SpectralResidualProblem;
 using tensorium_mlir::runtime::SpectralResidualSystemEquation;
 using tensorium_mlir::runtime::SpectralResidualSystemProblem;
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
 using tensorium_mlir::runtime::evaluateSpectralResidualSystemJacobianVectorProduct;
 using tensorium_mlir::runtime::kSpectralStaticAuxiliary;
+using tensorium_mlir::runtime::solveSpectralNewton;
 using tensorium_mlir::runtime::spectralResidualGridKernelFromDesc;
 using tensorium_mlir::runtime::spectralResidualKernelFromDesc;
 
@@ -122,9 +125,9 @@ int main() {
     const double huParams[] = {alpha, coupling};
     const double hvParams[] = {beta, coupling};
 
-    SpectralGrid3D grid(SpectralAxis::chebyshevZeros(7),
-                        SpectralAxis::chebyshevZeros(6),
-                        SpectralAxis::fourierPeriodic(10));
+    SpectralGrid3D grid(SpectralAxis::chebyshevZeros(4),
+                        SpectralAxis::chebyshevZeros(4),
+                        SpectralAxis::fourierPeriodic(8));
 
     std::vector<double> u(grid.size(), 0.0);
     std::vector<double> v(grid.size(), 0.0);
@@ -252,6 +255,58 @@ int main() {
         jvpError > 2e-8) {
       std::fprintf(stderr, "generated spectral system JVP mismatch\n");
       return 4;
+    }
+
+    std::array<std::vector<double>, 2> solutionFields{
+        std::vector<double>(grid.size(), 0.0),
+        std::vector<double>(grid.size(), 0.0)};
+    SpectralEllipticSolveOptions solveOptions;
+    solveOptions.maxNewtonSteps = 4;
+    solveOptions.residualTolerance = 8e-10;
+    solveOptions.residualRatioTarget = 1e-12;
+    solveOptions.linearSolver = SpectralLinearSolveKind::Auto;
+    solveOptions.denseJacobianMaxUnknowns = 1;
+    solveOptions.gmresMaxIterations = 512;
+    solveOptions.gmresTolerance = 2e-12;
+    solveOptions.gmresRelativeTolerance = 1e-13;
+    solveOptions.jvpOptions.relativeStep = 1e-6;
+    solveOptions.linearPivotTolerance = 1e-13;
+
+    const auto solveResult = solveSpectralNewton(
+        system, std::span<std::vector<double>>(solutionFields.data(),
+                                               solutionFields.size()),
+        solveOptions);
+    const auto finalResidual = assembleSpectralResidualSystem(
+        system, std::span<const std::vector<double>>(solutionFields.data(),
+                                                     solutionFields.size()));
+
+    std::vector<double> solutionErrors(2 * grid.size(), 0.0);
+    for (std::size_t p = 0; p < grid.size(); ++p) {
+      solutionErrors[p] = solutionFields[0][p] - u[p];
+      solutionErrors[grid.size() + p] = solutionFields[1][p] - v[p];
+    }
+    const double solutionError = maxAbs(solutionErrors);
+    std::printf("[generated-spectral-system] solve steps = %d status = %d\n",
+                solveResult.steps, static_cast<int>(solveResult.status));
+    std::printf("[generated-spectral-system] solve initial l2 = %.17g\n",
+                solveResult.initialResidualL2);
+    std::printf("[generated-spectral-system] solve final l2 = %.17g\n",
+                solveResult.finalResidualL2);
+    std::printf("[generated-spectral-system] solve linear iterations = %d\n",
+                solveResult.linearIterations);
+    std::printf("[generated-spectral-system] solve linear l2 = %.17g\n",
+                solveResult.finalLinearResidualL2);
+    std::printf("[generated-spectral-system] solve final max = %.17g\n",
+                finalResidual.maxAbs);
+    std::printf("[generated-spectral-system] solve max error = %.17g\n",
+                solutionError);
+    if (!solveResult.converged() || !solveResult.usedGeneratedGridKernel ||
+        !solveResult.usedMatrixFreeGMRES ||
+        !finalResidual.usedGeneratedGridKernels ||
+        solveResult.finalResidualL2 > 1e-9 || finalResidual.maxAbs > 8e-9 ||
+        solutionError > 8e-8) {
+      std::fprintf(stderr, "generated spectral system solve mismatch\n");
+      return 5;
     }
   } catch (const std::exception &ex) {
     std::fprintf(stderr,
