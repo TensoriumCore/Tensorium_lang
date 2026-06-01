@@ -157,16 +157,29 @@ consume directly:
   expose these through `tensorium_spectral_residual_kernels`.
 - `SpectralResidualProblem` is the runtime-side assembly surface for these point
   kernels. It binds the grid, generated callback, scalar params, optional
-  auxiliary fields, and optional coordinate map. `assembleSpectralResidual(...)`
-  computes the global collocation vector `F(u)` plus L2/max norms, and
-  `evaluateSpectralJacobianVectorProduct(...)` provides a finite-difference JVP
-  hook for future Newton/Krylov elliptic solvers.
+  auxiliary fields, optional coordinate map, and optional generated grid kernel.
+  `assembleSpectralResidual(...)` computes the global collocation vector `F(u)`
+  plus L2/max norms. When `SpectralResidualProblem::gridKernel` is set from
+  `tensorium_spectral_residual_grid_kernels`, assembly uses the generated
+  MLIR/LLVM global kernel; otherwise it falls back to the pointwise callback
+  loop. `evaluateSpectralJacobianVectorProduct(...)` provides a
+  finite-difference JVP hook for future Newton/Krylov elliptic solvers.
+- `solveSpectralNewton(...)` is the first scalar spectral elliptic solve path.
+  It uses finite-difference JVPs to assemble a dense Jacobian, solves the dense
+  Newton system with pivoting, and performs a damped residual-decreasing line
+  search. In `SpectralLinearSolveKind::Auto`, small problems use the dense
+  Jacobian path and grids above `denseJacobianMaxUnknowns` use matrix-free GMRES
+  over the same JVP interface. The current GMRES path is unpreconditioned and is
+  intended as the scalable solve interface; production physical grids still need
+  preconditioning and richer boundary/domain handling.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual
   output buffer, then call the point kernel inside an MLIR `scf.for` loop. This
   moves global `F(u)` evaluation into generated code while keeping spectral
   differentiation in the runtime grid layer for now.
+  Generated host headers expose uniform descriptors through
+  `tensorium_spectral_residual_grid_kernels`.
 
 Generated host headers also expose the same runtime contract in C-compatible
 tables:
@@ -291,6 +304,8 @@ MLIR-level:
 
 Generated host wrapper:
 - `tensorium_call_spectral_residual_grid_<target>(n_points, params..., value, d1, ..., d33, aux..., x1, x2, x3, residual_out)`
+- `tensorium_spectral_residual_grid_kernels[]` exposes the same generated
+  kernel through a uniform callback consumed by `SpectralResidualProblem`.
 
 This kernel does not compute spectral derivatives itself. The runtime supplies
 the derivative buffers from its selected spectral basis and coordinate mapping,

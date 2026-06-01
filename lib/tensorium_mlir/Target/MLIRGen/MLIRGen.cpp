@@ -303,6 +303,11 @@ void emitSpectralResidualWrapper(std::ostringstream &os,
      << "}\n";
 }
 
+std::string spectralResidualGridEvalNameFor(const HostKernelABI &kernel) {
+  return "tensorium_eval_" +
+         makeHostCIdentifier(kernel.symbolName, "spectral_residual_grid");
+}
+
 void emitSpectralResidualGridWrapper(std::ostringstream &os,
                                      const HostKernelABI &kernel) {
   if (kernel.fields.empty() || kernel.outputs.size() != 1)
@@ -341,6 +346,95 @@ void emitSpectralResidualGridWrapper(std::ostringstream &os,
     emitDescriptorCallArgs(os, coord, "n_points", first);
   emitDescriptorCallArgs(os, kernel.outputs.front(), "n_points", first);
   os << ");\n}\n";
+
+  os << "static inline int " << spectralResidualGridEvalNameFor(kernel)
+     << "(\n"
+     << "    int64_t n_points, const double *params, int64_t param_count,\n"
+     << "    const double *value, const double *d1, const double *d2,\n"
+     << "    const double *d3, const double *d11, const double *d12,\n"
+     << "    const double *d13, const double *d22, const double *d23,\n"
+     << "    const double *d33, const double *const *aux_fields,\n"
+     << "    int64_t aux_count, const double *x1, const double *x2,\n"
+     << "    const double *x3, double *out, void *user_data) {\n"
+     << "  (void)user_data;\n"
+     << "  if (n_points < 0)\n"
+     << "    return -1;\n"
+     << "  if (param_count != "
+     << static_cast<std::int64_t>(kernel.params.size()) << ")\n"
+     << "    return -2;\n";
+  if (!kernel.params.empty())
+    os << "  if (!params)\n"
+       << "    return -3;\n";
+  os << "  if (aux_count != "
+     << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
+     << "    return -4;\n"
+     << "  if (!value || !d1 || !d2 || !d3 || !d11 || !d12 || !d13 || "
+        "!d22 || !d23 || !d33 || !x1 || !x2 || !x3 || !out)\n"
+     << "    return -5;\n";
+  if (auxiliaryCount > 0) {
+    os << "  if (!aux_fields)\n"
+       << "    return -6;\n";
+    for (std::size_t i = 0; i < auxiliaryCount; ++i)
+      os << "  if (!aux_fields[" << i << "])\n"
+         << "    return -7;\n";
+  }
+  os << "  " << kernel.symbolName << "(";
+  first = true;
+  appendComma(os, first);
+  os << "n_points";
+  for (std::size_t i = 0; i < kernel.params.size(); ++i) {
+    appendComma(os, first);
+    os << "params[" << i << "]";
+  }
+  for (const char *name : derivativeNames) {
+    appendComma(os, first);
+    os << "(double *)" << name;
+    appendComma(os, first);
+    os << "(double *)" << name;
+    appendComma(os, first);
+    os << "0";
+    appendComma(os, first);
+    os << "n_points";
+    appendComma(os, first);
+    os << "1";
+  }
+  for (std::size_t i = 0; i < auxiliaryCount; ++i) {
+    appendComma(os, first);
+    os << "(double *)aux_fields[" << i << "]";
+    appendComma(os, first);
+    os << "(double *)aux_fields[" << i << "]";
+    appendComma(os, first);
+    os << "0";
+    appendComma(os, first);
+    os << "n_points";
+    appendComma(os, first);
+    os << "1";
+  }
+  for (const char *name : {"x1", "x2", "x3"}) {
+    appendComma(os, first);
+    os << "(double *)" << name;
+    appendComma(os, first);
+    os << "(double *)" << name;
+    appendComma(os, first);
+    os << "0";
+    appendComma(os, first);
+    os << "n_points";
+    appendComma(os, first);
+    os << "1";
+  }
+  appendComma(os, first);
+  os << "out";
+  appendComma(os, first);
+  os << "out";
+  appendComma(os, first);
+  os << "0";
+  appendComma(os, first);
+  os << "n_points";
+  appendComma(os, first);
+  os << "1";
+  os << ");\n"
+     << "  return 0;\n"
+     << "}\n";
 }
 
 void emitConvenienceWrapper(
@@ -486,6 +580,14 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "typedef double (*tensorium_spectral_residual_kernel_fn)(\n"
      << "    const tensorium_spectral_residual_point *point,\n"
      << "    const double *params, int64_t param_count, void *user_data);\n\n"
+     << "typedef int (*tensorium_spectral_residual_grid_kernel_fn)(\n"
+     << "    int64_t n_points, const double *params, int64_t param_count,\n"
+     << "    const double *value, const double *d1, const double *d2,\n"
+     << "    const double *d3, const double *d11, const double *d12,\n"
+     << "    const double *d13, const double *d22, const double *d23,\n"
+     << "    const double *d33, const double *const *aux_fields,\n"
+     << "    int64_t aux_count, const double *x1, const double *x2,\n"
+     << "    const double *x3, double *out, void *user_data);\n\n"
      << "typedef void (*tensorium_spectral_coordinate_map_fn)(\n"
      << "    const double *logical, double *physical, const double *params,\n"
      << "    int64_t param_count, void *user_data);\n\n"
@@ -494,6 +596,11 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "  tensorium_spectral_residual_kernel_fn evaluate;\n"
      << "  void *user_data;\n"
      << "} tensorium_spectral_residual_kernel_desc;\n\n"
+     << "typedef struct tensorium_spectral_residual_grid_kernel_desc {\n"
+     << "  const char *symbol_name;\n"
+     << "  tensorium_spectral_residual_grid_kernel_fn evaluate;\n"
+     << "  void *user_data;\n"
+     << "} tensorium_spectral_residual_grid_kernel_desc;\n\n"
      << "typedef struct tensorium_spectral_coordinate_map_desc {\n"
      << "  const char *symbol_name;\n"
      << "  tensorium_spectral_coordinate_map_fn map;\n"
@@ -670,6 +777,10 @@ bool isSpectralResidualKernel(const HostKernelABI &kernel) {
   return kernel.kind == tensorium_mlir::abi::kKindSpectralResidualPoint;
 }
 
+bool isSpectralResidualGridKernel(const HostKernelABI &kernel) {
+  return kernel.kind == tensorium_mlir::abi::kKindSpectralResidualGrid;
+}
+
 void emitSpectralResidualDescriptors(std::ostringstream &os,
                                      const HostModuleABI &abi) {
   std::size_t count = 0;
@@ -695,6 +806,37 @@ void emitSpectralResidualDescriptors(std::ostringstream &os,
       first = false;
       os << "  {" << cStringLiteral(kernel.symbolName) << ", &"
          << kernel.wrapperName << ", 0}";
+    }
+    os << "\n";
+  }
+  os << "};\n\n";
+}
+
+void emitSpectralResidualGridDescriptors(std::ostringstream &os,
+                                         const HostModuleABI &abi) {
+  std::size_t count = 0;
+  for (const auto &kernel : abi.kernels) {
+    if (isSpectralResidualGridKernel(kernel))
+      ++count;
+  }
+
+  os << "#define TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT " << count
+     << "\n\n";
+  os << "static const tensorium_spectral_residual_grid_kernel_desc "
+        "tensorium_spectral_residual_grid_kernels["
+     << (count == 0 ? 1 : count) << "] = {\n";
+  if (count == 0) {
+    os << "  {0, 0, 0}\n";
+  } else {
+    bool first = true;
+    for (const auto &kernel : abi.kernels) {
+      if (!isSpectralResidualGridKernel(kernel))
+        continue;
+      if (!first)
+        os << ",\n";
+      first = false;
+      os << "  {" << cStringLiteral(kernel.symbolName) << ", &"
+         << spectralResidualGridEvalNameFor(kernel) << ", 0}";
     }
     os << "\n";
   }
@@ -839,6 +981,7 @@ std::string renderHostHeader(const HostModuleABI &abi) {
   }
 
   emitSpectralResidualDescriptors(os, abi);
+  emitSpectralResidualGridDescriptors(os, abi);
   emitRuntimeInvokeAdapters(os, abi);
 
   emitPrintRequestHelper(os, abi);

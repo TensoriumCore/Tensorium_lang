@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DRIVER="$ROOT_DIR/build/tools/driver/Tensorium_cc"
 FIXTURE="$ROOT_DIR/tests/fixtures/elliptic/spectral_poisson_source_point_3d.tn"
-RUNNER_SRC="$ROOT_DIR/tools/dev/runtime_generated_spectral_global_residual.cpp"
+RUNNER_SRC="$ROOT_DIR/tools/dev/runtime_generated_spectral_newton_solve.cpp"
 
 if [[ -n "${CLANG:-}" ]]; then
   CLANG_BIN="$CLANG"
@@ -22,10 +22,10 @@ else
 fi
 CXX_BIN="${CXX:-c++}"
 
-LL_PATH="/tmp/tensorium_generated_spectral_global_residual.ll"
-OBJ_PATH="/tmp/tensorium_generated_spectral_global_residual.o"
-HOST_HEADER="/tmp/tensorium_generated_spectral_global_residual_host.h"
-EXE_PATH="/tmp/tensorium_generated_spectral_global_residual_runner"
+LL_PATH="/tmp/tensorium_generated_spectral_newton_solve.ll"
+OBJ_PATH="/tmp/tensorium_generated_spectral_newton_solve.o"
+HOST_HEADER="/tmp/tensorium_generated_spectral_newton_solve_host.h"
+EXE_PATH="/tmp/tensorium_generated_spectral_newton_solve_runner"
 
 if [[ ! -x "$DRIVER" ]]; then
   echo "error: missing driver binary: $DRIVER" >&2
@@ -40,7 +40,7 @@ if [[ ! -f "$RUNNER_SRC" ]]; then
   exit 2
 fi
 
-echo "[generated-spectral-global-residual] generating LLVM IR and host header"
+echo "[generated-spectral-newton] generating LLVM IR and host header"
 "$DRIVER" \
   --tensorium-rhs-grid-affine-lower \
   --tensorium-strip-source-funcs \
@@ -56,20 +56,8 @@ if [[ ! -s "$HOST_HEADER" ]]; then
   echo "error: generated host header is missing or empty: $HOST_HEADER" >&2
   exit 2
 fi
-if ! grep -q "tensorium_spectral_residual_grid_H" "$HOST_HEADER"; then
-  echo "error: expected spectral global residual symbol in host header" >&2
-  exit 2
-fi
-if ! grep -q "tensorium_call_spectral_residual_grid_H" "$HOST_HEADER"; then
-  echo "error: expected spectral global residual wrapper in host header" >&2
-  exit 2
-fi
 if ! grep -q "tensorium_spectral_residual_grid_kernels" "$HOST_HEADER"; then
   echo "error: expected spectral global residual descriptor table" >&2
-  exit 2
-fi
-if ! grep -q "tensorium_eval_tensorium_spectral_residual_grid_H" "$HOST_HEADER"; then
-  echo "error: expected spectral global residual runtime adapter" >&2
   exit 2
 fi
 if ! grep -q "define void @tensorium_spectral_residual_grid_H" "$LL_PATH"; then
@@ -77,16 +65,16 @@ if ! grep -q "define void @tensorium_spectral_residual_grid_H" "$LL_PATH"; then
   exit 2
 fi
 
-echo "[generated-spectral-global-residual] compiling LLVM object"
+echo "[generated-spectral-newton] compiling LLVM object"
 if command -v "$LLC_BIN" >/dev/null 2>&1; then
   "$LLC_BIN" -filetype=obj "$LL_PATH" -o "$OBJ_PATH"
 else
   "$CLANG_BIN" -c "$LL_PATH" -o "$OBJ_PATH"
 fi
 
-echo "[generated-spectral-global-residual] compiling runtime runner"
+echo "[generated-spectral-newton] compiling runtime runner"
 "$CXX_BIN" -O0 -std=c++20 -I "$ROOT_DIR/include" -include "$HOST_HEADER" \
   "$RUNNER_SRC" "$OBJ_PATH" -lm -o "$EXE_PATH"
 
-echo "[generated-spectral-global-residual] running runtime executable"
+echo "[generated-spectral-newton] running runtime executable"
 "$EXE_PATH"
