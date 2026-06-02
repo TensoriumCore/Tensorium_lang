@@ -25,6 +25,9 @@ Source of truth for the host-callable kernel descriptor:
 
 Source of truth for the runtime spectral residual callback ABI:
 `include/tensorium_mlir/Runtime/SpectralResidualKernel.h`.
+This remains the public umbrella include; the runtime implementation is split
+under `SpectralResidualTypes.h`, `SpectralResidualAssembly.h`,
+`SpectralResidualJVP.h`, and `SpectralEllipticSolver.h`.
 
 Architectural context: `docs/language_mlir_abi_architecture.md` describes how
 this ABI fits between Tensorium MLIR/LLVM kernels, generated host glue,
