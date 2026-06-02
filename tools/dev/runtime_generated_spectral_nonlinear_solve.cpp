@@ -22,6 +22,7 @@ using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
+using tensorium_mlir::runtime::SpectralPreconditionerKind;
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
 using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
 using tensorium_mlir::runtime::solveSpectralNewton;
@@ -120,13 +121,15 @@ int main() {
     options.maxNewtonSteps = 8;
     options.residualTolerance = 4e-10;
     options.residualRatioTarget = 1e-12;
-    options.linearSolver = SpectralLinearSolveKind::Auto;
-    options.denseJacobianMaxUnknowns = 256;
+    options.linearSolver = SpectralLinearSolveKind::MatrixFreeGMRES;
+    options.denseJacobianMaxUnknowns = 1;
     options.gmresMaxIterations = 256;
     options.gmresTolerance = 8e-12;
     options.gmresRelativeTolerance = 1e-13;
+    options.gmresPreconditioner = SpectralPreconditionerKind::DiagonalJVP;
     options.jvpOptions.relativeStep = 1e-6;
     options.linearPivotTolerance = 1e-13;
+    options.preconditionerPivotTolerance = 1e-12;
 
     const auto solveResult = solveSpectralNewton(
         system, std::span<std::vector<double>>(solutionFields.data(),
@@ -153,12 +156,14 @@ int main() {
                 solveResult.linearIterations);
     std::printf("[generated-spectral-nonlinear] linear residual l2 = %.17g\n",
                 solveResult.finalLinearResidualL2);
+    std::printf("[generated-spectral-nonlinear] used preconditioner = %d\n",
+                solveResult.usedPreconditioner ? 1 : 0);
     std::printf("[generated-spectral-nonlinear] solution max error = %.17g\n",
                 solutionError);
 
     if (!initialResidual.usedGeneratedGridKernels ||
         !solveResult.converged() || !solveResult.usedGeneratedGridKernel ||
-        solveResult.usedMatrixFreeGMRES ||
+        !solveResult.usedMatrixFreeGMRES || !solveResult.usedPreconditioner ||
         !finalResidual.usedGeneratedGridKernels ||
         solveResult.finalResidualL2 > 8e-10 ||
         finalResidual.maxAbs > 6e-9 || solutionError > 5e-8) {
