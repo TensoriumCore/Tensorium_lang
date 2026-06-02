@@ -208,6 +208,12 @@ consume directly:
   `laplacian(psi) + mass * psi + alpha * psi^5 + source = 0` from a non-exact
   local guess with matrix-free GMRES preconditioned by `laplacian + mass`,
   validating nonlinear Newton/JVP behavior against an analytic solution.
+- `tests/fixtures/elliptic/spectral_lichnerowicz_manufactured_3d.tn` is the
+  first manufactured conformal Hamiltonian fixture:
+  `laplacian(u) + 1/8 * A2 * (background + u)^(-7) + source = 0`. Its runtime
+  test keeps `A2` and `source` as auxiliary fields, solves from a non-exact
+  guess with modal GMRES preconditioning, and checks against the analytic
+  manufactured solution.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual
