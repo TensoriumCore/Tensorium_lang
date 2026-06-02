@@ -70,12 +70,34 @@ typedef struct tensorium_spectral_coordinate_map_desc {
   void *user_data;
 } tensorium_spectral_coordinate_map_desc;
 
+typedef struct tensorium_spectral_residual_system_equation_desc {
+  const char *residual_name;
+  const char *unknown_name;
+  std::int64_t unknown_index;
+  std::int64_t point_kernel_index;
+  std::int64_t grid_kernel_index;
+  const char *const *param_names;
+  std::int64_t param_count;
+  const char *const *auxiliary_names;
+  const std::int64_t *auxiliary_unknown_indices;
+  std::int64_t auxiliary_count;
+} tensorium_spectral_residual_system_equation_desc;
+
+typedef struct tensorium_spectral_residual_system_desc {
+  const char *symbol_name;
+  const char *const *unknown_names;
+  std::int64_t unknown_count;
+  const tensorium_spectral_residual_system_equation_desc *equations;
+  std::int64_t equation_count;
+} tensorium_spectral_residual_system_desc;
+
 #endif /* TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H */
 
 namespace tensorium_mlir::runtime {
 
-inline constexpr std::size_t kSpectralStaticAuxiliary =
-    std::numeric_limits<std::size_t>::max();
+using SpectralAuxiliaryUnknownIndex = std::int64_t;
+
+inline constexpr SpectralAuxiliaryUnknownIndex kSpectralStaticAuxiliary = -1;
 
 struct SpectralResidualKernel {
   std::string symbolName;
@@ -119,7 +141,7 @@ struct SpectralResidualSystemEquation {
   SpectralResidualProblem problem;
   std::size_t unknownIndex = 0;
   std::string residualName;
-  std::span<const std::size_t> auxiliaryUnknownIndices{};
+  std::span<const SpectralAuxiliaryUnknownIndex> auxiliaryUnknownIndices{};
 };
 
 struct SpectralResidualSystemProblem {
@@ -149,6 +171,23 @@ struct SpectralResidualSystemJacobianVectorProductResult {
   bool usedGeneratedGridKernels = false;
 
   std::size_t size() const { return values.size(); }
+};
+
+struct SpectralGeneratedResidualSystemEquationInputs {
+  std::span<const double> params{};
+  std::span<const std::vector<double>> auxiliaryFields{};
+};
+
+struct SpectralGeneratedResidualSystem {
+  const SpectralGrid3D *grid = nullptr;
+  std::string symbolName;
+  std::vector<SpectralResidualSystemEquation> equations;
+
+  SpectralResidualSystemProblem view() const {
+    return SpectralResidualSystemProblem{
+        grid, std::span<const SpectralResidualSystemEquation>(equations.data(),
+                                                              equations.size())};
+  }
 };
 
 struct SpectralJacobianVectorProductOptions {
@@ -249,6 +288,89 @@ spectralCoordinateMapFromDesc(const tensorium_spectral_coordinate_map_desc &desc
   if (!desc.map)
     throw std::runtime_error("spectral coordinate map callback is null");
   return SpectralCoordinateMap{desc.symbol_name, desc.map, desc.user_data};
+}
+
+inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
+    const tensorium_spectral_residual_system_desc &desc,
+    const SpectralGrid3D &grid,
+    const tensorium_spectral_residual_kernel_desc *pointKernelDescs,
+    std::size_t pointKernelCount,
+    const tensorium_spectral_residual_grid_kernel_desc *gridKernelDescs,
+    std::size_t gridKernelCount,
+    std::span<const SpectralGeneratedResidualSystemEquationInputs> inputs) {
+  if (!desc.symbol_name || !desc.equations || desc.equation_count <= 0 ||
+      desc.unknown_count <= 0) {
+    throw std::runtime_error("spectral residual system descriptor is invalid");
+  }
+  if (!pointKernelDescs)
+    throw std::runtime_error("spectral residual system point kernels are null");
+  if (inputs.size() != static_cast<std::size_t>(desc.equation_count)) {
+    throw std::runtime_error(
+        "spectral residual system input count mismatch");
+  }
+
+  SpectralGeneratedResidualSystem out;
+  out.grid = &grid;
+  out.symbolName = desc.symbol_name;
+  out.equations.reserve(static_cast<std::size_t>(desc.equation_count));
+
+  for (std::int64_t i = 0; i < desc.equation_count; ++i) {
+    const auto &equationDesc = desc.equations[i];
+    if (!equationDesc.residual_name || !equationDesc.unknown_name ||
+        equationDesc.unknown_index < 0 ||
+        equationDesc.unknown_index >= desc.unknown_count ||
+        equationDesc.point_kernel_index < 0 ||
+        static_cast<std::size_t>(equationDesc.point_kernel_index) >=
+            pointKernelCount) {
+      throw std::runtime_error(
+          "spectral residual system equation descriptor is invalid");
+    }
+    if (equationDesc.param_count < 0 || equationDesc.auxiliary_count < 0)
+      throw std::runtime_error(
+          "spectral residual system equation descriptor count is invalid");
+    const auto &input = inputs[static_cast<std::size_t>(i)];
+    if (input.params.size() !=
+        static_cast<std::size_t>(equationDesc.param_count)) {
+      throw std::runtime_error(
+          "spectral residual system parameter count mismatch");
+    }
+    if (input.auxiliaryFields.size() !=
+        static_cast<std::size_t>(equationDesc.auxiliary_count)) {
+      throw std::runtime_error(
+          "spectral residual system auxiliary count mismatch");
+    }
+    if (equationDesc.auxiliary_count > 0 &&
+        !equationDesc.auxiliary_unknown_indices) {
+      throw std::runtime_error(
+          "spectral residual system auxiliary map is null");
+    }
+
+    SpectralResidualProblem problem{
+        &grid,
+        spectralResidualKernelFromDesc(
+            pointKernelDescs[equationDesc.point_kernel_index]),
+        input.params,
+        input.auxiliaryFields};
+    if (equationDesc.grid_kernel_index >= 0) {
+      if (!gridKernelDescs ||
+          static_cast<std::size_t>(equationDesc.grid_kernel_index) >=
+              gridKernelCount) {
+        throw std::runtime_error(
+            "spectral residual system grid kernel index out of range");
+      }
+      problem.gridKernel = spectralResidualGridKernelFromDesc(
+          gridKernelDescs[equationDesc.grid_kernel_index]);
+    }
+
+    out.equations.push_back(SpectralResidualSystemEquation{
+        problem,
+        static_cast<std::size_t>(equationDesc.unknown_index),
+        equationDesc.residual_name,
+        std::span<const SpectralAuxiliaryUnknownIndex>(
+            equationDesc.auxiliary_unknown_indices,
+            static_cast<std::size_t>(equationDesc.auxiliary_count))});
+  }
+  return out;
 }
 
 inline void validateSpectralDerivativeBundle(const SpectralGrid3D &grid,
@@ -580,16 +702,19 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
       }
       resolvedAuxiliaryFields.reserve(problem.auxiliaryFields.size());
       for (std::size_t i = 0; i < problem.auxiliaryFields.size(); ++i) {
-        const std::size_t mappedUnknown = equation.auxiliaryUnknownIndices[i];
+        const SpectralAuxiliaryUnknownIndex mappedUnknown =
+            equation.auxiliaryUnknownIndices[i];
         if (mappedUnknown == kSpectralStaticAuxiliary) {
           resolvedAuxiliaryFields.push_back(problem.auxiliaryFields[i]);
           continue;
         }
-        if (mappedUnknown >= unknownFields.size()) {
+        if (mappedUnknown < 0 ||
+            static_cast<std::size_t>(mappedUnknown) >= unknownFields.size()) {
           throw std::runtime_error(
               "spectral residual system auxiliary unknown index out of range");
         }
-        resolvedAuxiliaryFields.push_back(unknownFields[mappedUnknown]);
+        resolvedAuxiliaryFields.push_back(
+            unknownFields[static_cast<std::size_t>(mappedUnknown)]);
       }
       problem.auxiliaryFields = std::span<const std::vector<double>>(
           resolvedAuxiliaryFields.data(), resolvedAuxiliaryFields.size());

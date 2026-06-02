@@ -1,0 +1,38 @@
+# Spectral nonlinear Hamiltonian-toy fixture.
+#
+# The generated kernel evaluates:
+#   H = laplacian(psi) + mass * psi + alpha * psi^5 + source
+#
+# Runtime tests manufacture source from a positive analytic psi and solve from
+# a non-exact initial guess to exercise nonlinear Newton/JVP behavior.
+field scalar psi
+field scalar source
+field scalar H
+
+params { alpha, mass }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [5,5,8]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralHamiltonianToyNonlinear3D {
+  psi2 = psi * psi
+  psi4 = psi2 * psi2
+  psi5 = psi4 * psi
+  Hlocal = laplacian(psi) + mass * psi + alpha * psi5 + source
+
+  residual H = Hlocal
+}

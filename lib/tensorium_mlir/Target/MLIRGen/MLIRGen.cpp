@@ -606,6 +606,25 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "  tensorium_spectral_coordinate_map_fn map;\n"
      << "  void *user_data;\n"
      << "} tensorium_spectral_coordinate_map_desc;\n\n"
+     << "typedef struct tensorium_spectral_residual_system_equation_desc {\n"
+     << "  const char *residual_name;\n"
+     << "  const char *unknown_name;\n"
+     << "  int64_t unknown_index;\n"
+     << "  int64_t point_kernel_index;\n"
+     << "  int64_t grid_kernel_index;\n"
+     << "  const char *const *param_names;\n"
+     << "  int64_t param_count;\n"
+     << "  const char *const *auxiliary_names;\n"
+     << "  const int64_t *auxiliary_unknown_indices;\n"
+     << "  int64_t auxiliary_count;\n"
+     << "} tensorium_spectral_residual_system_equation_desc;\n\n"
+     << "typedef struct tensorium_spectral_residual_system_desc {\n"
+     << "  const char *symbol_name;\n"
+     << "  const char *const *unknown_names;\n"
+     << "  int64_t unknown_count;\n"
+     << "  const tensorium_spectral_residual_system_equation_desc *equations;\n"
+     << "  int64_t equation_count;\n"
+     << "} tensorium_spectral_residual_system_desc;\n\n"
      << "#endif /* TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H */\n\n";
 }
 
@@ -843,6 +862,143 @@ void emitSpectralResidualGridDescriptors(std::ostringstream &os,
   os << "};\n\n";
 }
 
+std::int64_t spectralResidualKernelDescriptorIndex(
+    const HostModuleABI &abi, llvm::StringRef symbolName, bool gridKernel) {
+  std::int64_t index = 0;
+  for (const auto &kernel : abi.kernels) {
+    const bool matchesKind =
+        gridKernel ? isSpectralResidualGridKernel(kernel)
+                   : isSpectralResidualKernel(kernel);
+    if (!matchesKind)
+      continue;
+    if (kernel.symbolName == symbolName)
+      return index;
+    ++index;
+  }
+  return -1;
+}
+
+void emitStringPointerArray(std::ostringstream &os, llvm::StringRef name,
+                            const std::vector<std::string> &values) {
+  os << "static const char *const " << name.str() << "["
+     << (values.empty() ? 1 : values.size()) << "] = {\n";
+  if (values.empty()) {
+    os << "  0\n";
+  } else {
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      os << "  " << cStringLiteral(values[i])
+         << (i + 1 == values.size() ? "\n" : ",\n");
+    }
+  }
+  os << "};\n\n";
+}
+
+void emitI64Array(std::ostringstream &os, llvm::StringRef name,
+                  const std::vector<std::int64_t> &values) {
+  os << "static const int64_t " << name.str() << "["
+     << (values.empty() ? 1 : values.size()) << "] = {\n";
+  if (values.empty()) {
+    os << "  0\n";
+  } else {
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      os << "  " << values[i] << (i + 1 == values.size() ? "\n" : ",\n");
+    }
+  }
+  os << "};\n\n";
+}
+
+void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
+                                           const HostModuleABI &abi) {
+  const std::size_t count = abi.spectralResidualSystems.size();
+  os << "#define TENSORIUM_SPECTRAL_RESIDUAL_STATIC_AUXILIARY -1\n"
+     << "#define TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT " << count
+     << "\n\n";
+
+  for (std::size_t systemIndex = 0; systemIndex < count; ++systemIndex) {
+    const auto &system = abi.spectralResidualSystems[systemIndex];
+    const std::string prefix =
+        "tensorium_spectral_residual_system_" +
+        std::to_string(systemIndex);
+    emitStringPointerArray(os, prefix + "_unknown_names",
+                           system.unknownNames);
+
+    for (std::size_t equationIndex = 0;
+         equationIndex < system.equations.size(); ++equationIndex) {
+      const auto &equation = system.equations[equationIndex];
+      const std::string eqPrefix =
+          prefix + "_equation_" + std::to_string(equationIndex);
+      emitStringPointerArray(os, eqPrefix + "_param_names", equation.params);
+      emitStringPointerArray(os, eqPrefix + "_auxiliary_names",
+                             equation.auxiliaryNames);
+      emitI64Array(os, eqPrefix + "_auxiliary_unknown_indices",
+                   equation.auxiliaryUnknownIndices);
+    }
+
+    os << "static const tensorium_spectral_residual_system_equation_desc "
+       << prefix << "_equations["
+       << (system.equations.empty() ? 1 : system.equations.size())
+       << "] = {\n";
+    if (system.equations.empty()) {
+      os << "  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}\n";
+    } else {
+      for (std::size_t equationIndex = 0;
+           equationIndex < system.equations.size(); ++equationIndex) {
+        const auto &equation = system.equations[equationIndex];
+        const std::string eqPrefix =
+            prefix + "_equation_" + std::to_string(equationIndex);
+        const std::int64_t pointIndex = spectralResidualKernelDescriptorIndex(
+            abi, equation.pointKernelSymbol, false);
+        const std::int64_t gridIndex = equation.gridKernelSymbol.empty()
+                                           ? -1
+                                           : spectralResidualKernelDescriptorIndex(
+                                                 abi, equation.gridKernelSymbol,
+                                                 true);
+        os << "  {" << cStringLiteral(equation.residualName) << ", "
+           << cStringLiteral(equation.unknownName) << ", "
+           << equation.unknownIndex << ", " << pointIndex << ", "
+           << gridIndex << ", "
+           << (equation.params.empty() ? "0"
+                                       : eqPrefix + "_param_names")
+           << ", " << static_cast<std::int64_t>(equation.params.size())
+           << ", "
+           << (equation.auxiliaryNames.empty()
+                   ? "0"
+                   : eqPrefix + "_auxiliary_names")
+           << ", "
+           << (equation.auxiliaryUnknownIndices.empty()
+                   ? "0"
+                   : eqPrefix + "_auxiliary_unknown_indices")
+           << ", "
+           << static_cast<std::int64_t>(equation.auxiliaryNames.size())
+           << "}"
+           << (equationIndex + 1 == system.equations.size() ? "\n" : ",\n");
+      }
+    }
+    os << "};\n\n";
+  }
+
+  os << "static const tensorium_spectral_residual_system_desc "
+        "tensorium_spectral_residual_systems["
+     << (count == 0 ? 1 : count) << "] = {\n";
+  if (count == 0) {
+    os << "  {0, 0, 0, 0, 0}\n";
+  } else {
+    for (std::size_t systemIndex = 0; systemIndex < count; ++systemIndex) {
+      const auto &system = abi.spectralResidualSystems[systemIndex];
+      const std::string prefix =
+          "tensorium_spectral_residual_system_" +
+          std::to_string(systemIndex);
+      os << "  {" << cStringLiteral(system.name) << ", "
+         << (system.unknownNames.empty() ? "0" : prefix + "_unknown_names")
+         << ", " << static_cast<std::int64_t>(system.unknownNames.size())
+         << ", " << prefix << "_equations, "
+         << static_cast<std::int64_t>(system.equations.size()) << "}"
+         << (systemIndex + 1 == count ? "\n" : ",\n");
+    }
+  }
+  os << "};\n\n";
+}
+
 void emitPrinterFlatHelper(std::ostringstream &os) {
   os << "static inline void tensorium_print_tensor_flat(\n"
      << "    const char *name, const double *data, int64_t point_index,\n"
@@ -982,6 +1138,7 @@ std::string renderHostHeader(const HostModuleABI &abi) {
 
   emitSpectralResidualDescriptors(os, abi);
   emitSpectralResidualGridDescriptors(os, abi);
+  emitSpectralResidualSystemDescriptors(os, abi);
   emitRuntimeInvokeAdapters(os, abi);
 
   emitPrintRequestHelper(os, abi);

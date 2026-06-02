@@ -22,41 +22,11 @@ using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralJacobianVectorProductOptions;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
-using tensorium_mlir::runtime::SpectralResidualProblem;
-using tensorium_mlir::runtime::SpectralResidualSystemEquation;
-using tensorium_mlir::runtime::SpectralResidualSystemProblem;
+using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
 using tensorium_mlir::runtime::evaluateSpectralResidualSystemJacobianVectorProduct;
-using tensorium_mlir::runtime::kSpectralStaticAuxiliary;
+using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
 using tensorium_mlir::runtime::solveSpectralNewton;
-using tensorium_mlir::runtime::spectralResidualGridKernelFromDesc;
-using tensorium_mlir::runtime::spectralResidualKernelFromDesc;
-
-const tensorium_spectral_residual_kernel_desc &
-findPointKernel(const char *symbol) {
-  for (int i = 0; i < TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT; ++i) {
-    if (tensorium_spectral_residual_kernels[i].symbol_name &&
-        std::strcmp(tensorium_spectral_residual_kernels[i].symbol_name,
-                    symbol) == 0) {
-      return tensorium_spectral_residual_kernels[i];
-    }
-  }
-  throw std::runtime_error(std::string("missing spectral point kernel: ") +
-                           symbol);
-}
-
-const tensorium_spectral_residual_grid_kernel_desc &
-findGridKernel(const char *symbol) {
-  for (int i = 0; i < TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT; ++i) {
-    if (tensorium_spectral_residual_grid_kernels[i].symbol_name &&
-        std::strcmp(tensorium_spectral_residual_grid_kernels[i].symbol_name,
-                    symbol) == 0) {
-      return tensorium_spectral_residual_grid_kernels[i];
-    }
-  }
-  throw std::runtime_error(std::string("missing spectral grid kernel: ") +
-                           symbol);
-}
 
 double exactU(double x, double y, double z) {
   return (4.0 * x * x * x - 3.0 * x) + 0.5 * y * y +
@@ -109,15 +79,15 @@ int main() {
                   "expected at least two generated spectral point kernels");
     static_assert(TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT >= 2,
                   "expected at least two generated spectral grid kernels");
+    static_assert(TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT >= 1,
+                  "expected at least one generated spectral residual system");
 
-    const auto huPoint =
-        spectralResidualKernelFromDesc(findPointKernel("tensorium_spectral_residual_Hu"));
-    const auto hvPoint =
-        spectralResidualKernelFromDesc(findPointKernel("tensorium_spectral_residual_Hv"));
-    const auto huGrid = spectralResidualGridKernelFromDesc(
-        findGridKernel("tensorium_spectral_residual_grid_Hu"));
-    const auto hvGrid = spectralResidualGridKernelFromDesc(
-        findGridKernel("tensorium_spectral_residual_grid_Hv"));
+    const auto &systemDesc = tensorium_spectral_residual_systems[0];
+    if (!systemDesc.symbol_name ||
+        std::strcmp(systemDesc.symbol_name, "SpectralTwoFieldSystem3D") != 0 ||
+        systemDesc.unknown_count != 2 || systemDesc.equation_count != 2) {
+      throw std::runtime_error("unexpected generated spectral system metadata");
+    }
 
     const double alpha = 0.5;
     const double beta = -0.35;
@@ -156,40 +126,33 @@ int main() {
     const std::array<std::vector<double>, 2> directionFields{du, dv};
     const std::array<std::vector<double>, 2> huAuxiliaryFields{sourceU, v};
     const std::array<std::vector<double>, 2> hvAuxiliaryFields{sourceV, u};
+    const std::array<SpectralGeneratedResidualSystemEquationInputs, 2>
+        systemInputs{{
+            SpectralGeneratedResidualSystemEquationInputs{
+                std::span<const double>(huParams, 2),
+                std::span<const std::vector<double>>(huAuxiliaryFields.data(),
+                                                     huAuxiliaryFields.size())},
+            SpectralGeneratedResidualSystemEquationInputs{
+                std::span<const double>(hvParams, 2),
+                std::span<const std::vector<double>>(hvAuxiliaryFields.data(),
+                                                     hvAuxiliaryFields.size())},
+        }};
+    const auto generatedSystem = makeSpectralResidualSystemFromDesc(
+        systemDesc, grid, tensorium_spectral_residual_kernels,
+        TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
+        tensorium_spectral_residual_grid_kernels,
+        TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT,
+        std::span<const SpectralGeneratedResidualSystemEquationInputs>(
+            systemInputs.data(), systemInputs.size()));
+    const auto system = generatedSystem.view();
 
-    SpectralResidualProblem huProblem{
-        &grid,
-        huPoint,
-        std::span<const double>(huParams, 2),
-        std::span<const std::vector<double>>(huAuxiliaryFields.data(),
-                                             huAuxiliaryFields.size())};
-    huProblem.gridKernel = huGrid;
-
-    SpectralResidualProblem hvProblem{
-        &grid,
-        hvPoint,
-        std::span<const double>(hvParams, 2),
-        std::span<const std::vector<double>>(hvAuxiliaryFields.data(),
-                                             hvAuxiliaryFields.size())};
-    hvProblem.gridKernel = hvGrid;
-
-    const std::array<std::size_t, 2> huAuxiliaryMap{
-        kSpectralStaticAuxiliary, 1};
-    const std::array<std::size_t, 2> hvAuxiliaryMap{
-        kSpectralStaticAuxiliary, 0};
-    const std::array<SpectralResidualSystemEquation, 2> equations{{
-        SpectralResidualSystemEquation{
-            huProblem, 0, "Hu",
-            std::span<const std::size_t>(huAuxiliaryMap.data(),
-                                         huAuxiliaryMap.size())},
-        SpectralResidualSystemEquation{
-            hvProblem, 1, "Hv",
-            std::span<const std::size_t>(hvAuxiliaryMap.data(),
-                                         hvAuxiliaryMap.size())},
-    }};
-    const SpectralResidualSystemProblem system{
-        &grid, std::span<const SpectralResidualSystemEquation>(
-                   equations.data(), equations.size())};
+    if (generatedSystem.equations.size() != 2 ||
+        generatedSystem.equations[0].residualName != "Hu" ||
+        generatedSystem.equations[1].residualName != "Hv" ||
+        generatedSystem.equations[0].unknownIndex != 0 ||
+        generatedSystem.equations[1].unknownIndex != 1) {
+      throw std::runtime_error("unexpected generated spectral equation mapping");
+    }
 
     const auto result = assembleSpectralResidualSystem(
         system, std::span<const std::vector<double>>(unknownFields.data(),

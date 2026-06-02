@@ -397,6 +397,88 @@ bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
   return true;
 }
 
+const HostKernelABI *findSpectralResidualKernel(
+    const std::vector<HostKernelABI> &kernels, llvm::StringRef kind,
+    llvm::StringRef residualName) {
+  for (const auto &kernel : kernels) {
+    if (kernel.kind == kind && kernel.outputs.size() == 1 &&
+        kernel.outputs[0] == residualName)
+      return &kernel;
+  }
+  return nullptr;
+}
+
+std::int64_t appendOrFindUnknown(std::vector<std::string> &unknowns,
+                                 llvm::StringRef name) {
+  for (std::size_t i = 0; i < unknowns.size(); ++i) {
+    if (unknowns[i] == name)
+      return static_cast<std::int64_t>(i);
+  }
+  unknowns.push_back(name.str());
+  return static_cast<std::int64_t>(unknowns.size() - 1);
+}
+
+std::int64_t findUnknownIndex(const std::vector<std::string> &unknowns,
+                              llvm::StringRef name) {
+  for (std::size_t i = 0; i < unknowns.size(); ++i) {
+    if (unknowns[i] == name)
+      return static_cast<std::int64_t>(i);
+  }
+  return -1;
+}
+
+std::vector<HostSpectralResidualSystemABI> hostSpectralResidualSystems(
+    const tensorium::backend::ModuleIR &module,
+    const std::vector<HostKernelABI> &kernels) {
+  std::vector<HostSpectralResidualSystemABI> systems;
+  if (!module.hasResidualConstraints)
+    return systems;
+
+  for (const auto &evo : module.evolutions) {
+    HostSpectralResidualSystemABI system;
+    system.name = evo.name;
+    bool complete = true;
+    for (const auto &eq : evo.equations) {
+      const HostKernelABI *pointKernel = findSpectralResidualKernel(
+          kernels, tensorium_mlir::abi::kKindSpectralResidualPoint,
+          eq.fieldName);
+      if (!pointKernel || pointKernel->fields.empty()) {
+        complete = false;
+        break;
+      }
+      const HostKernelABI *gridKernel = findSpectralResidualKernel(
+          kernels, tensorium_mlir::abi::kKindSpectralResidualGrid,
+          eq.fieldName);
+
+      HostSpectralResidualSystemEquationABI equation;
+      equation.residualName = eq.fieldName;
+      equation.unknownName = pointKernel->fields.front();
+      equation.unknownIndex =
+          appendOrFindUnknown(system.unknownNames, equation.unknownName);
+      equation.pointKernelSymbol = pointKernel->symbolName;
+      if (gridKernel)
+        equation.gridKernelSymbol = gridKernel->symbolName;
+      equation.params = pointKernel->params;
+      if (pointKernel->fields.size() > 1) {
+        equation.auxiliaryNames.assign(pointKernel->fields.begin() + 1,
+                                       pointKernel->fields.end());
+      }
+      system.equations.push_back(std::move(equation));
+    }
+    if (!complete || system.equations.empty())
+      continue;
+
+    for (auto &equation : system.equations) {
+      equation.auxiliaryUnknownIndices.reserve(equation.auxiliaryNames.size());
+      for (const auto &auxiliary : equation.auxiliaryNames)
+        equation.auxiliaryUnknownIndices.push_back(
+            findUnknownIndex(system.unknownNames, auxiliary));
+    }
+    systems.push_back(std::move(system));
+  }
+  return systems;
+}
+
 } // namespace
 
 std::string makeHostCIdentifier(std::string_view input,
@@ -548,6 +630,8 @@ HostModuleABI buildHostModuleABI(const tensorium::backend::ModuleIR &module,
   abi.fields = hostFields(module, abi.componentCounts);
 
   moduleOp.walk([&](mlir::func::FuncOp fn) { appendHostKernelABI(abi, fn); });
+  abi.spectralResidualSystems =
+      hostSpectralResidualSystems(module, abi.kernels);
 
   for (const auto &print : module.prints) {
     HostPrintABI out;
