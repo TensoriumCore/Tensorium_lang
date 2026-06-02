@@ -16,6 +16,8 @@ namespace tensorium_mlir {
 
 enum class HostArgKind { F64, Index, Memref1DF64 };
 
+enum class HostReturnKind { Void, F64 };
+
 enum class HostBufferRole { Coordinate, Field, Output };
 
 enum class HostArgAccess { None, Read, Write, ReadWrite };
@@ -49,6 +51,7 @@ struct HostKernelABI {
   std::string symbolName;
   std::string wrapperName;
   std::string kind;
+  HostReturnKind returnKind = HostReturnKind::Void;
   std::vector<HostArgABI> rawArgs;
   std::vector<HostBufferABI> buffers;
   std::vector<std::string> params;
@@ -66,6 +69,23 @@ struct HostPrintABI {
   int rank = 0;
 };
 
+struct HostSpectralResidualSystemEquationABI {
+  std::string residualName;
+  std::string unknownName;
+  std::int64_t unknownIndex = -1;
+  std::string pointKernelSymbol;
+  std::string gridKernelSymbol;
+  std::vector<std::string> params;
+  std::vector<std::string> auxiliaryNames;
+  std::vector<std::int64_t> auxiliaryUnknownIndices;
+};
+
+struct HostSpectralResidualSystemABI {
+  std::string name;
+  std::vector<std::string> unknownNames;
+  std::vector<HostSpectralResidualSystemEquationABI> equations;
+};
+
 struct HostModuleABI {
   int dimension = 3;
   std::string coordSystem;
@@ -76,6 +96,7 @@ struct HostModuleABI {
   std::unordered_map<std::string, std::int64_t> componentCounts;
   std::vector<HostFieldABI> fields;
   std::vector<HostKernelABI> kernels;
+  std::vector<HostSpectralResidualSystemABI> spectralResidualSystems;
   std::vector<HostPrintABI> prints;
   std::vector<std::string> printFields;
 };

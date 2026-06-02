@@ -1,0 +1,41 @@
+# Spectral two-field system fixture.
+#
+# The generated point kernels evaluate:
+#   F_u = laplacian(u) + alpha * u + coupling * v + source_u
+#   F_v = laplacian(v) + beta * v + coupling * u + source_v
+#
+# Runtime tests assemble both scalar residuals into one equation-major system
+# vector with manufactured sources.
+field scalar u
+field scalar v
+field scalar source_u
+field scalar source_v
+field scalar Hu
+field scalar Hv
+
+params { alpha, beta, coupling }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [7,6,10]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralTwoFieldSystem3D {
+  Hulocal = laplacian(u) + alpha * u + coupling * v + source_u
+  Hvlocal = laplacian(v) + beta * v + coupling * u + source_v
+
+  residual Hu = Hulocal
+  residual Hv = Hvlocal
+}

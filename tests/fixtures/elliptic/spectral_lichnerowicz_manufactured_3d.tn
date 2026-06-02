@@ -1,0 +1,41 @@
+# Manufactured spectral Lichnerowicz Hamiltonian fixture.
+#
+# The generated kernel evaluates:
+#   H = laplacian(u) + 1/8 * A2 * (background + u)^(-7) + source
+#
+# Runtime tests manufacture source from an analytic positive conformal factor
+# psi = background + u and solve from a non-exact initial guess.
+field scalar u
+field scalar A2
+field scalar source
+field scalar H
+
+params { background }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [128,128,128]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralLichnerowiczManufactured3D {
+  psi = background + u
+  psi2 = psi * psi
+  psi4 = psi2 * psi2
+  psi7 = psi4 * psi2 * psi
+
+  Hlocal = laplacian(u) + 0.125 * A2 / psi7 + source
+
+  residual H = Hlocal
+}

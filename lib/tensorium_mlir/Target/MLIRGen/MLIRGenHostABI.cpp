@@ -69,6 +69,12 @@ bool isSupportedHostType(mlir::Type type) {
   return isSupportedHostScalarType(type) || isSupportedHostMemrefType(type);
 }
 
+bool hasSupportedHostResults(mlir::func::FuncOp fn) {
+  if (fn.getNumResults() == 0)
+    return true;
+  return fn.getNumResults() == 1 && fn.getResultTypes()[0].isF64();
+}
+
 bool hasOnlySupportedHostTypes(mlir::func::FuncOp fn) {
   for (unsigned i = 0; i < fn.getNumArguments(); ++i) {
     if (!isSupportedHostType(fn.getArgument(i).getType()))
@@ -86,7 +92,9 @@ bool isHostCallableKind(llvm::StringRef kind) {
          kind == tensorium_mlir::abi::kKindRhsGridParallel ||
          kind == tensorium_mlir::abi::kKindResidualGridScf ||
          kind == tensorium_mlir::abi::kKindResidualGridAffine ||
-         kind == tensorium_mlir::abi::kKindResidualGridParallel;
+         kind == tensorium_mlir::abi::kKindResidualGridParallel ||
+         kind == tensorium_mlir::abi::kKindSpectralResidualPoint ||
+         kind == tensorium_mlir::abi::kKindSpectralResidualGrid;
 }
 
 bool isFieldGridKind(llvm::StringRef kind) {
@@ -133,6 +141,24 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
     names = {"nx", "ny", "nz", "dx", "dy", "dz"};
     append(params);
     append(fields);
+  } else if (kind == tensorium_mlir::abi::kKindSpectralResidualPoint) {
+    names = {"value", "d1", "d2", "d3",  "d11", "d12", "d13",
+             "d22",   "d23", "d33"};
+    for (std::size_t i = 1; i < fields.size(); ++i)
+      names.push_back(fields[i]);
+    append(coords);
+    append(params);
+  } else if (kind == tensorium_mlir::abi::kKindSpectralResidualGrid) {
+    names = {"n_points"};
+    append(params);
+    const char *derivatives[] = {"value", "d1",  "d2",  "d3",  "d11",
+                                 "d12",   "d13", "d22", "d23", "d33"};
+    for (const char *name : derivatives)
+      names.push_back(name);
+    for (std::size_t i = 1; i < fields.size(); ++i)
+      names.push_back(fields[i]);
+    append(coords);
+    append(outputs);
   }
 
   while (names.size() < fn.getNumArguments())
@@ -336,8 +362,11 @@ bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
   kernel.wrapperName = hostWrapperName(fn);
   kernel.kind =
       getStringAttr(fn.getOperation(), tensorium_mlir::abi::kAttrABIKind);
-  if (!isHostCallableKind(kernel.kind) || !hasOnlySupportedHostTypes(fn))
+  if (!isHostCallableKind(kernel.kind) || !hasOnlySupportedHostTypes(fn) ||
+      !hasSupportedHostResults(fn))
     return false;
+  if (fn.getNumResults() == 1)
+    kernel.returnKind = HostReturnKind::F64;
 
   kernel.params =
       getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrParamNames);
@@ -366,6 +395,88 @@ bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
 
   abi.kernels.push_back(std::move(kernel));
   return true;
+}
+
+const HostKernelABI *findSpectralResidualKernel(
+    const std::vector<HostKernelABI> &kernels, llvm::StringRef kind,
+    llvm::StringRef residualName) {
+  for (const auto &kernel : kernels) {
+    if (kernel.kind == kind && kernel.outputs.size() == 1 &&
+        kernel.outputs[0] == residualName)
+      return &kernel;
+  }
+  return nullptr;
+}
+
+std::int64_t appendOrFindUnknown(std::vector<std::string> &unknowns,
+                                 llvm::StringRef name) {
+  for (std::size_t i = 0; i < unknowns.size(); ++i) {
+    if (unknowns[i] == name)
+      return static_cast<std::int64_t>(i);
+  }
+  unknowns.push_back(name.str());
+  return static_cast<std::int64_t>(unknowns.size() - 1);
+}
+
+std::int64_t findUnknownIndex(const std::vector<std::string> &unknowns,
+                              llvm::StringRef name) {
+  for (std::size_t i = 0; i < unknowns.size(); ++i) {
+    if (unknowns[i] == name)
+      return static_cast<std::int64_t>(i);
+  }
+  return -1;
+}
+
+std::vector<HostSpectralResidualSystemABI> hostSpectralResidualSystems(
+    const tensorium::backend::ModuleIR &module,
+    const std::vector<HostKernelABI> &kernels) {
+  std::vector<HostSpectralResidualSystemABI> systems;
+  if (!module.hasResidualConstraints)
+    return systems;
+
+  for (const auto &evo : module.evolutions) {
+    HostSpectralResidualSystemABI system;
+    system.name = evo.name;
+    bool complete = true;
+    for (const auto &eq : evo.equations) {
+      const HostKernelABI *pointKernel = findSpectralResidualKernel(
+          kernels, tensorium_mlir::abi::kKindSpectralResidualPoint,
+          eq.fieldName);
+      if (!pointKernel || pointKernel->fields.empty()) {
+        complete = false;
+        break;
+      }
+      const HostKernelABI *gridKernel = findSpectralResidualKernel(
+          kernels, tensorium_mlir::abi::kKindSpectralResidualGrid,
+          eq.fieldName);
+
+      HostSpectralResidualSystemEquationABI equation;
+      equation.residualName = eq.fieldName;
+      equation.unknownName = pointKernel->fields.front();
+      equation.unknownIndex =
+          appendOrFindUnknown(system.unknownNames, equation.unknownName);
+      equation.pointKernelSymbol = pointKernel->symbolName;
+      if (gridKernel)
+        equation.gridKernelSymbol = gridKernel->symbolName;
+      equation.params = pointKernel->params;
+      if (pointKernel->fields.size() > 1) {
+        equation.auxiliaryNames.assign(pointKernel->fields.begin() + 1,
+                                       pointKernel->fields.end());
+      }
+      system.equations.push_back(std::move(equation));
+    }
+    if (!complete || system.equations.empty())
+      continue;
+
+    for (auto &equation : system.equations) {
+      equation.auxiliaryUnknownIndices.reserve(equation.auxiliaryNames.size());
+      for (const auto &auxiliary : equation.auxiliaryNames)
+        equation.auxiliaryUnknownIndices.push_back(
+            findUnknownIndex(system.unknownNames, auxiliary));
+    }
+    systems.push_back(std::move(system));
+  }
+  return systems;
 }
 
 } // namespace
@@ -519,6 +630,8 @@ HostModuleABI buildHostModuleABI(const tensorium::backend::ModuleIR &module,
   abi.fields = hostFields(module, abi.componentCounts);
 
   moduleOp.walk([&](mlir::func::FuncOp fn) { appendHostKernelABI(abi, fn); });
+  abi.spectralResidualSystems =
+      hostSpectralResidualSystems(module, abi.kernels);
 
   for (const auto &print : module.prints) {
     HostPrintABI out;

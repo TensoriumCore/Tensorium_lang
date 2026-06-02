@@ -1,0 +1,35 @@
+# Spectral point-residual smoke fixture with one auxiliary scalar field.
+#
+# The generated point kernel evaluates:
+#   F(u, source) = laplacian(u) + alpha * u + source
+#
+# The runtime supplies derivatives for u and point values for source through
+# tensorium_spectral_residual_point::aux_values.
+field scalar u
+field scalar source
+field scalar H
+
+params { alpha }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [8,7,12]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralPoissonSourcePoint3D {
+  Hlocal = laplacian(u) + alpha * u + source
+
+  residual H = Hlocal
+}
