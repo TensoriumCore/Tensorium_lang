@@ -23,6 +23,8 @@ using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralJacobianVectorProductOptions;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
 using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
+using tensorium_mlir::runtime::SpectralResidualSystemEquation;
+using tensorium_mlir::runtime::SpectralResidualSystemProblem;
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
 using tensorium_mlir::runtime::evaluateSpectralResidualSystemJacobianVectorProduct;
 using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
@@ -270,6 +272,109 @@ int main() {
         solutionError > 8e-8) {
       std::fprintf(stderr, "generated spectral system solve mismatch\n");
       return 5;
+    }
+
+    const std::array<SpectralResidualSystemEquation, 2> permutedEquations{
+        generatedSystem.equations[1], generatedSystem.equations[0]};
+    const SpectralResidualSystemProblem permutedSystem{
+        &grid, std::span<const SpectralResidualSystemEquation>(
+                   permutedEquations.data(), permutedEquations.size())};
+    const auto permutedResult = assembleSpectralResidualSystem(
+        permutedSystem,
+        std::span<const std::vector<double>>(unknownFields.data(),
+                                             unknownFields.size()));
+    const double permutedHvMax =
+        permutedResult.equationResults.empty()
+            ? std::numeric_limits<double>::infinity()
+            : permutedResult.equationResults[0].maxAbs;
+    const double permutedHuMax =
+        permutedResult.equationResults.size() < 2
+            ? std::numeric_limits<double>::infinity()
+            : permutedResult.equationResults[1].maxAbs;
+    std::printf("[generated-spectral-system] permuted Hv max = %.17g\n",
+                permutedHvMax);
+    std::printf("[generated-spectral-system] permuted Hu max = %.17g\n",
+                permutedHuMax);
+    if (!permutedResult.finite || !permutedResult.usedGeneratedGridKernels ||
+        permutedHvMax > 6e-10 || permutedHuMax > 6e-10 ||
+        permutedResult.maxAbs > 6e-10) {
+      std::fprintf(stderr, "generated permuted spectral system mismatch\n");
+      return 6;
+    }
+
+    const auto permutedJvp = evaluateSpectralResidualSystemJacobianVectorProduct(
+        permutedSystem,
+        std::span<const std::vector<double>>(unknownFields.data(),
+                                             unknownFields.size()),
+        std::span<const std::vector<double>>(directionFields.data(),
+                                             directionFields.size()),
+        jvpOptions);
+    std::vector<double> permutedJvpErrors(2 * grid.size(), 0.0);
+    for (std::size_t k = 0; k < grid.n3(); ++k) {
+      const double z = grid.axis(2).points[k];
+      for (std::size_t j = 0; j < grid.n2(); ++j) {
+        const double y = grid.axis(1).points[j];
+        for (std::size_t i = 0; i < grid.n1(); ++i) {
+          const double x = grid.axis(0).points[i];
+          const std::size_t p = grid.index(i, j, k);
+          const double expectedHu =
+              lapDirU(x, y, z) + alpha * du[p] + coupling * dv[p];
+          const double expectedHv =
+              lapDirV(x, y, z) + beta * dv[p] + coupling * du[p];
+          permutedJvpErrors[p] = permutedJvp.values[p] - expectedHv;
+          permutedJvpErrors[grid.size() + p] =
+              permutedJvp.values[grid.size() + p] - expectedHu;
+        }
+      }
+    }
+    const double permutedJvpError = maxAbs(permutedJvpErrors);
+    std::printf(
+        "[generated-spectral-system] permuted jvp max error = %.17g\n",
+        permutedJvpError);
+    if (!permutedJvp.finite || !permutedJvp.usedGeneratedGridKernels ||
+        permutedJvp.size() != 2 * grid.size() || permutedJvpError > 2e-8) {
+      std::fprintf(stderr, "generated permuted spectral system JVP mismatch\n");
+      return 7;
+    }
+
+    std::array<std::vector<double>, 2> permutedSolutionFields{
+        std::vector<double>(grid.size(), 0.0),
+        std::vector<double>(grid.size(), 0.0)};
+    const auto permutedSolveResult = solveSpectralNewton(
+        permutedSystem,
+        std::span<std::vector<double>>(permutedSolutionFields.data(),
+                                       permutedSolutionFields.size()),
+        solveOptions);
+    const auto permutedFinalResidual = assembleSpectralResidualSystem(
+        permutedSystem, std::span<const std::vector<double>>(
+                            permutedSolutionFields.data(),
+                            permutedSolutionFields.size()));
+    std::vector<double> permutedSolutionErrors(2 * grid.size(), 0.0);
+    for (std::size_t p = 0; p < grid.size(); ++p) {
+      permutedSolutionErrors[p] = permutedSolutionFields[0][p] - u[p];
+      permutedSolutionErrors[grid.size() + p] =
+          permutedSolutionFields[1][p] - v[p];
+    }
+    const double permutedSolutionError = maxAbs(permutedSolutionErrors);
+    std::printf(
+        "[generated-spectral-system] permuted solve steps = %d status = %d\n",
+        permutedSolveResult.steps,
+        static_cast<int>(permutedSolveResult.status));
+    std::printf(
+        "[generated-spectral-system] permuted solve final l2 = %.17g\n",
+        permutedSolveResult.finalResidualL2);
+    std::printf(
+        "[generated-spectral-system] permuted solve max error = %.17g\n",
+        permutedSolutionError);
+    if (!permutedSolveResult.converged() ||
+        !permutedSolveResult.usedGeneratedGridKernel ||
+        !permutedSolveResult.usedMatrixFreeGMRES ||
+        !permutedFinalResidual.usedGeneratedGridKernels ||
+        permutedSolveResult.finalResidualL2 > 1e-9 ||
+        permutedFinalResidual.maxAbs > 8e-9 ||
+        permutedSolutionError > 8e-8) {
+      std::fprintf(stderr, "generated permuted spectral system solve mismatch\n");
+      return 8;
     }
   } catch (const std::exception &ex) {
     std::fprintf(stderr,

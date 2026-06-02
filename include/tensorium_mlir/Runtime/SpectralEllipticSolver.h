@@ -378,17 +378,62 @@ inline bool buildDenseSpectralJacobianByJVP(
   return true;
 }
 
-inline std::vector<std::vector<double>> unflattenSpectralSystemVector(
+inline bool validateSpectralSystemSolveLayout(
+    const SpectralResidualSystemProblem &system,
+    std::span<const std::vector<double>> values,
+    std::size_t pointsPerField) {
+  if (values.empty() || system.equations.size() != values.size())
+    return false;
+  for (const auto &field : values) {
+    if (field.size() != pointsPerField)
+      return false;
+  }
+  std::vector<bool> seenUnknown(values.size(), false);
+  for (const auto &equation : system.equations) {
+    if (equation.unknownIndex >= values.size() ||
+        seenUnknown[equation.unknownIndex]) {
+      return false;
+    }
+    seenUnknown[equation.unknownIndex] = true;
+  }
+  return true;
+}
+
+inline std::vector<std::vector<double>>
+unflattenSpectralSystemUnknownVectorToFields(
     std::span<const double> values, std::size_t fieldCount,
     std::size_t pointsPerField) {
-  if (values.size() != fieldCount * pointsPerField)
+  if (values.size() != fieldCount * pointsPerField) {
     throw std::runtime_error("spectral residual system vector size mismatch");
+  }
   std::vector<std::vector<double>> out(
       fieldCount, std::vector<double>(pointsPerField, 0.0));
   for (std::size_t field = 0; field < fieldCount; ++field) {
     const std::size_t offset = field * pointsPerField;
     for (std::size_t p = 0; p < pointsPerField; ++p)
       out[field][p] = values[offset + p];
+  }
+  return out;
+}
+
+inline std::vector<double> mapSpectralSystemEquationVectorToUnknownOrder(
+    const SpectralResidualSystemProblem &system, std::span<const double> values,
+    std::size_t fieldCount, std::size_t pointsPerField) {
+  if (system.equations.size() != fieldCount ||
+      values.size() != system.equations.size() * pointsPerField) {
+    throw std::runtime_error("spectral residual system vector size mismatch");
+  }
+  std::vector<double> out(fieldCount * pointsPerField, 0.0);
+  for (std::size_t equation = 0; equation < system.equations.size();
+       ++equation) {
+    const std::size_t unknown = system.equations[equation].unknownIndex;
+    if (unknown >= fieldCount)
+      throw std::runtime_error(
+          "spectral residual system equation unknown index out of range");
+    const std::size_t srcOffset = equation * pointsPerField;
+    const std::size_t dstOffset = unknown * pointsPerField;
+    for (std::size_t p = 0; p < pointsPerField; ++p)
+      out[dstOffset + p] = values[srcOffset + p];
   }
   return out;
 }
@@ -405,16 +450,12 @@ inline bool buildSpectralSystemDiagonalPreconditionerByJVP(
     return false;
 
   const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+  const std::size_t pointsPerField = grid.size();
+  if (!validateSpectralSystemSolveLayout(system, values, pointsPerField))
+    return false;
+
   const std::size_t fieldCount = values.size();
   const std::size_t equationCount = system.equations.size();
-  const std::size_t pointsPerField = grid.size();
-  if (fieldCount == 0 || equationCount != fieldCount)
-    return false;
-  for (const auto &field : values) {
-    if (field.size() != pointsPerField)
-      return false;
-  }
-
   const std::size_t n = equationCount * pointsPerField;
   preconditioner.kind = SpectralPreconditionerKind::DiagonalJVP;
   preconditioner.inverseDiagonal.assign(n, 1.0);
@@ -434,11 +475,12 @@ inline bool buildSpectralSystemDiagonalPreconditionerByJVP(
       directionFields[unknown][p] = 0.0;
       if (!jvp.finite || jvp.values.size() != n)
         return false;
-      const std::size_t row = equation * pointsPerField + p;
-      const double diagonal = jvp.values[row];
+      const std::size_t equationRow = equation * pointsPerField + p;
+      const std::size_t unknownRow = unknown * pointsPerField + p;
+      const double diagonal = jvp.values[equationRow];
       if (std::isfinite(diagonal) &&
           std::fabs(diagonal) > options.preconditionerPivotTolerance) {
-        preconditioner.inverseDiagonal[row] = 1.0 / diagonal;
+        preconditioner.inverseDiagonal[unknownRow] = 1.0 / diagonal;
       }
     }
   }
@@ -468,12 +510,8 @@ inline bool buildSpectralSystemPreconditioner(
       SpectralPreconditionerKind::DenseLaplacianShift) {
     const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
     const std::size_t fieldCount = values.size();
-    if (fieldCount == 0 || system.equations.size() != fieldCount)
+    if (!validateSpectralSystemSolveLayout(system, values, grid.size()))
       return false;
-    for (const auto &field : values) {
-      if (field.size() != grid.size())
-        return false;
-    }
     preconditioner.kind = SpectralPreconditionerKind::DenseLaplacianShift;
     preconditioner.blockSize = grid.size();
     preconditioner.denseBlocks.reserve(fieldCount);
@@ -495,12 +533,9 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
   const std::size_t n = fieldCount * grid.size();
   SpectralGMRESResult result;
   result.solution.assign(n, 0.0);
-  if (fieldCount == 0 || system.equations.size() != fieldCount ||
-      rhs.size() != n || options.gmresMaxIterations < 0)
+  if (rhs.size() != n || options.gmresMaxIterations < 0 ||
+      !validateSpectralSystemSolveLayout(system, values, grid.size())) {
     return result;
-  for (const auto &field : values) {
-    if (field.size() != grid.size())
-      return result;
   }
 
   SpectralLinearPreconditioner preconditioner;
@@ -510,7 +545,9 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
   result.usedPreconditioner =
       preconditioner.kind != SpectralPreconditionerKind::None;
 
-  const double rhsEuclidean = spectralVectorEuclideanNorm(rhs);
+  const auto rhsUnknownOrder = mapSpectralSystemEquationVectorToUnknownOrder(
+      system, rhs, fieldCount, grid.size());
+  const double rhsEuclidean = spectralVectorEuclideanNorm(rhsUnknownOrder);
   const double rhsL2 =
       rhsEuclidean / std::sqrt(static_cast<double>(std::max<std::size_t>(1, n)));
   const double target = std::max(options.gmresTolerance,
@@ -527,7 +564,7 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
 
   std::vector<double> basis((maxIterations + 1) * n, 0.0);
   for (std::size_t i = 0; i < n; ++i)
-    basis[i] = rhs[i] / rhsEuclidean;
+    basis[i] = rhsUnknownOrder[i] / rhsEuclidean;
 
   std::vector<double> hessenberg((maxIterations + 1) * maxIterations, 0.0);
   std::vector<double> arnoldiVector(n, 0.0);
@@ -541,8 +578,8 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
     if (!applySpectralPreconditioner(preconditioner, directionVector,
                                      options.preconditionerPivotTolerance))
       return result;
-    const auto directionFields =
-        unflattenSpectralSystemVector(directionVector, fieldCount, grid.size());
+    const auto directionFields = unflattenSpectralSystemUnknownVectorToFields(
+        directionVector, fieldCount, grid.size());
     const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
         system, values,
         std::span<const std::vector<double>>(directionFields.data(),
@@ -550,7 +587,8 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
         options.jvpOptions);
     if (!jvp.finite || jvp.values.size() != n)
       return result;
-    arnoldiVector = jvp.values;
+    arnoldiVector = mapSpectralSystemEquationVectorToUnknownOrder(
+        system, jvp.values, fieldCount, grid.size());
 
     for (std::size_t row = 0; row <= col; ++row) {
       std::span<const double> basisVector(&basis[row * n], n);
@@ -611,10 +649,8 @@ inline bool buildDenseSpectralSystemJacobianByJVP(
   const std::size_t n = fieldCount * grid.size();
   if (fieldCount == 0)
     throw std::runtime_error("spectral Newton system has no unknown fields");
-  for (const auto &field : values) {
-    if (field.size() != grid.size())
-      throw std::runtime_error("spectral Newton system state size mismatch");
-  }
+  if (!validateSpectralSystemSolveLayout(system, values, grid.size()))
+    throw std::runtime_error("spectral Newton system layout mismatch");
   if (n > options.denseJacobianMaxUnknowns)
     return false;
 
@@ -817,6 +853,14 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       result.status = SpectralEllipticSolveStatus::InvalidInput;
       return result;
     }
+  }
+  if (!validateSpectralSystemSolveLayout(
+          system,
+          std::span<const std::vector<double>>(unknownFields.data(),
+                                               unknownFields.size()),
+          grid.size())) {
+    result.status = SpectralEllipticSolveStatus::InvalidInput;
+    return result;
   }
 
   auto residual = assembleSpectralResidualSystem(system, unknownFields);
