@@ -18,9 +18,12 @@ using tensorium_mlir::runtime::SpectralAxis;
 using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
+using tensorium_mlir::runtime::SpectralLinearPreconditioner;
 using tensorium_mlir::runtime::SpectralPreconditionerKind;
 using tensorium_mlir::runtime::SpectralResidualProblem;
+using tensorium_mlir::runtime::applySpectralPreconditioner;
 using tensorium_mlir::runtime::assembleSpectralResidual;
+using tensorium_mlir::runtime::buildSpectralScalarPreconditioner;
 using tensorium_mlir::runtime::solveSpectralNewton;
 using tensorium_mlir::runtime::spectralResidualGridKernelFromDesc;
 using tensorium_mlir::runtime::spectralResidualKernelFromDesc;
@@ -96,11 +99,51 @@ int main() {
     options.gmresTolerance = 1e-12;
     options.gmresRelativeTolerance = 1e-13;
     options.gmresPreconditioner =
-        SpectralPreconditionerKind::DenseLaplacianShift;
+        SpectralPreconditionerKind::ModalLaplacianShift;
     options.preconditionerLaplacianShift = alpha;
     options.jvpOptions.relativeStep = 1e-6;
     options.linearPivotTolerance = 1e-13;
     options.preconditionerPivotTolerance = 1e-13;
+
+    std::vector<double> modalProbe(grid.size(), 0.0);
+    for (std::size_t k = 0; k < grid.n3(); ++k) {
+      const double z = grid.axis(2).points[k];
+      for (std::size_t j = 0; j < grid.n2(); ++j) {
+        for (std::size_t i = 0; i < grid.n1(); ++i)
+          modalProbe[grid.index(i, j, k)] = std::cos(2.0 * z);
+      }
+    }
+    std::vector<double> denseApplied = modalProbe;
+    std::vector<double> modalApplied = modalProbe;
+    SpectralEllipticSolveOptions denseOptions = options;
+    denseOptions.gmresPreconditioner =
+        SpectralPreconditionerKind::DenseLaplacianShift;
+    SpectralLinearPreconditioner densePreconditioner;
+    SpectralLinearPreconditioner modalPreconditioner;
+    if (!buildSpectralScalarPreconditioner(problem, solution, denseOptions,
+                                           densePreconditioner) ||
+        !buildSpectralScalarPreconditioner(problem, solution, options,
+                                           modalPreconditioner) ||
+        !applySpectralPreconditioner(
+            densePreconditioner, denseApplied,
+            denseOptions.preconditionerPivotTolerance) ||
+        !applySpectralPreconditioner(
+            modalPreconditioner, modalApplied,
+            options.preconditionerPivotTolerance)) {
+      std::fprintf(stderr, "spectral preconditioner comparison setup failed\n");
+      return 3;
+    }
+    std::vector<double> preconditionerDelta(grid.size(), 0.0);
+    for (std::size_t p = 0; p < grid.size(); ++p)
+      preconditionerDelta[p] = modalApplied[p] - denseApplied[p];
+    const double modalDenseDelta = maxAbs(preconditionerDelta);
+    std::printf(
+        "[generated-spectral-newton] modal/dense preconditioner delta = %.17g\n",
+        modalDenseDelta);
+    if (modalDenseDelta > 5e-11) {
+      std::fprintf(stderr, "modal spectral preconditioner differs from dense\n");
+      return 4;
+    }
 
     const auto solveResult = solveSpectralNewton(problem, solution, options);
     const auto finalResidual = assembleSpectralResidual(problem, solution);
@@ -133,7 +176,7 @@ int main() {
         solveResult.finalResidualL2 > 2e-10 || finalResidual.maxAbs > 2e-9 ||
         solutionError > 3e-8) {
       std::fprintf(stderr, "generated spectral Newton solve failed\n");
-      return 3;
+      return 5;
     }
   } catch (const std::exception &ex) {
     std::fprintf(stderr, "generated spectral Newton runner failed: %s\n",

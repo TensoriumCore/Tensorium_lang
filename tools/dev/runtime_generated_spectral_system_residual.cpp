@@ -22,6 +22,7 @@ using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralJacobianVectorProductOptions;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
+using tensorium_mlir::runtime::SpectralPreconditionerKind;
 using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
 using tensorium_mlir::runtime::SpectralResidualSystemEquation;
 using tensorium_mlir::runtime::SpectralResidualSystemProblem;
@@ -234,6 +235,9 @@ int main() {
     solveOptions.gmresMaxIterations = 512;
     solveOptions.gmresTolerance = 2e-12;
     solveOptions.gmresRelativeTolerance = 1e-13;
+    solveOptions.gmresPreconditioner =
+        SpectralPreconditionerKind::ModalLaplacianShift;
+    solveOptions.preconditionerLaplacianShifts = {alpha, beta};
     solveOptions.jvpOptions.relativeStep = 1e-6;
     solveOptions.linearPivotTolerance = 1e-13;
 

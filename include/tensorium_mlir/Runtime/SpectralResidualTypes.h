@@ -225,6 +225,7 @@ enum class SpectralPreconditionerKind {
   None,
   DiagonalJVP,
   DenseLaplacianShift,
+  ModalLaplacianShift,
 };
 
 struct SpectralEllipticSolveOptions {

@@ -172,9 +172,10 @@ consume directly:
   Newton system with pivoting, and performs a damped residual-decreasing line
   search. In `SpectralLinearSolveKind::Auto`, small problems use the dense
   Jacobian path and grids above `denseJacobianMaxUnknowns` use matrix-free GMRES
-  over the same JVP interface. The current GMRES path is unpreconditioned and is
-  intended as the scalable solve interface; production physical grids still need
-  preconditioning and richer boundary/domain handling.
+  over the same JVP interface. GMRES supports right preconditioning through
+  Jacobi JVP diagonals, a dense collocation inverse-Laplacian oracle, and a
+  modal `laplacian + shift` inverse approximation intended as the scalable
+  runtime path.
 - `SpectralResidualSystemProblem` is the first multi-residual assembly surface.
   It combines several scalar `SpectralResidualProblem` equations into one
   equation-major vector `[F0(points), F1(points), ...]`. Each equation still has
@@ -196,7 +197,12 @@ consume directly:
   `SpectralPreconditionerKind::DenseLaplacianShift` applies a right
   preconditioner by solving dense collocation systems for
   `laplacian + shift`, giving the first runtime inverse-Laplacian path on the
-  existing spectral derivative matrices.
+  existing spectral derivative matrices. It is kept as a small-grid oracle.
+  `SpectralPreconditionerKind::ModalLaplacianShift` applies the same
+  `laplacian + shift` idea in spectral coefficient space using Chebyshev/Fourier
+  modal transforms. For the current Chebyshev/Chebyshev/Fourier layout it
+  solves dense Chebyshev 2D modal blocks per Fourier mode and per field; current
+  nonlinear and system runtime solve tests use this path.
 - `tests/fixtures/elliptic/spectral_hamiltonian_toy_nonlinear_3d.tn` is a
   manufactured nonlinear spectral constraint. Its runtime test solves
   `laplacian(psi) + mass * psi + alpha * psi^5 + source = 0` from a non-exact

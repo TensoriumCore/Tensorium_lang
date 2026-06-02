@@ -2,6 +2,8 @@
 
 #include "tensorium_mlir/Runtime/SpectralResidualJVP.h"
 
+#include <complex>
+
 namespace tensorium_mlir::runtime {
 
 inline bool solveDenseLinearSystem(std::vector<double> matrix,
@@ -87,8 +89,335 @@ struct SpectralLinearPreconditioner {
   SpectralPreconditionerKind kind = SpectralPreconditionerKind::None;
   std::vector<double> inverseDiagonal;
   std::vector<std::vector<double>> denseBlocks;
+  std::vector<std::vector<double>> modalBlocks;
   std::size_t blockSize = 0;
+  std::size_t modalBlockSize = 0;
+  std::array<std::size_t, 3> modalExtents{0, 0, 0};
+  std::array<SpectralBasis, 3> modalBases{
+      SpectralBasis::ChebyshevZeros, SpectralBasis::ChebyshevZeros,
+      SpectralBasis::ChebyshevZeros};
 };
+
+inline double spectralChebyshevAxisLength(const SpectralAxis &axis) {
+  const std::size_t n = axis.size();
+  if (n <= 1)
+    return 1.0;
+  double minPoint = axis.points.front();
+  double maxPoint = axis.points.front();
+  for (double point : axis.points) {
+    minPoint = std::min(minPoint, point);
+    maxPoint = std::max(maxPoint, point);
+  }
+  const double edgeCos =
+      std::cos(0.5 * kSpectralPi / static_cast<double>(n));
+  if (!(edgeCos > 0.0))
+    return maxPoint - minPoint;
+  return (maxPoint - minPoint) / edgeCos;
+}
+
+inline double spectralAxisModalLaplacianEigenvalue(const SpectralAxis &axis,
+                                                   std::size_t mode) {
+  if (mode == 0)
+    return 0.0;
+  if (axis.basis == SpectralBasis::FourierPeriodic) {
+    const std::size_t n = axis.size();
+    const int waveNumber =
+        mode <= n / 2 ? static_cast<int>(mode)
+                      : static_cast<int>(mode) - static_cast<int>(n);
+    const double angularWave =
+        2.0 * kSpectralPi * static_cast<double>(waveNumber) / axis.period;
+    return -(angularWave * angularWave);
+  }
+
+  const double length = spectralChebyshevAxisLength(axis);
+  const double angularWave =
+      kSpectralPi * static_cast<double>(mode) / std::max(length, 1.0e-15);
+  return -(angularWave * angularWave);
+}
+
+inline std::vector<double>
+buildSpectralModalLaplacianShiftInverseDiagonal(const SpectralGrid3D &grid,
+                                                double shift,
+                                                double pivotTolerance) {
+  const std::size_t n = grid.size();
+  std::vector<double> inverse(n, 0.0);
+  std::vector<double> lambda1(grid.n1(), 0.0);
+  std::vector<double> lambda2(grid.n2(), 0.0);
+  std::vector<double> lambda3(grid.n3(), 0.0);
+  for (std::size_t i = 0; i < grid.n1(); ++i)
+    lambda1[i] = spectralAxisModalLaplacianEigenvalue(grid.axis(0), i);
+  for (std::size_t j = 0; j < grid.n2(); ++j)
+    lambda2[j] = spectralAxisModalLaplacianEigenvalue(grid.axis(1), j);
+  for (std::size_t k = 0; k < grid.n3(); ++k)
+    lambda3[k] = spectralAxisModalLaplacianEigenvalue(grid.axis(2), k);
+
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double diagonal = lambda1[i] + lambda2[j] + lambda3[k] + shift;
+        if (!(std::fabs(diagonal) > pivotTolerance) ||
+            !std::isfinite(diagonal)) {
+          throw std::runtime_error(
+              "spectral modal Laplacian preconditioner diagonal is singular");
+        }
+        inverse[grid.index(i, j, k)] = 1.0 / diagonal;
+      }
+    }
+  }
+  return inverse;
+}
+
+inline void transformSpectralModalLine(
+    std::vector<std::complex<double>> &line, SpectralBasis basis,
+    bool inverse) {
+  const std::size_t n = line.size();
+  std::vector<std::complex<double>> out(n);
+  const std::complex<double> imaginary(0.0, 1.0);
+
+  if (basis == SpectralBasis::ChebyshevZeros) {
+    if (!inverse) {
+      for (std::size_t mode = 0; mode < n; ++mode) {
+        std::complex<double> sum(0.0, 0.0);
+        for (std::size_t point = 0; point < n; ++point) {
+          const double theta =
+              kSpectralPi * (static_cast<double>(point) + 0.5) /
+              static_cast<double>(n);
+          sum += line[point] *
+                 std::cos(static_cast<double>(mode) * theta);
+        }
+        out[mode] =
+            sum * (mode == 0 ? 1.0 / static_cast<double>(n)
+                             : 2.0 / static_cast<double>(n));
+      }
+    } else {
+      for (std::size_t point = 0; point < n; ++point) {
+        const double theta =
+            kSpectralPi * (static_cast<double>(point) + 0.5) /
+            static_cast<double>(n);
+        std::complex<double> sum = line[0];
+        for (std::size_t mode = 1; mode < n; ++mode)
+          sum += line[mode] * std::cos(static_cast<double>(mode) * theta);
+        out[point] = sum;
+      }
+    }
+    line = std::move(out);
+    return;
+  }
+
+  for (std::size_t dst = 0; dst < n; ++dst) {
+    std::complex<double> sum(0.0, 0.0);
+    for (std::size_t src = 0; src < n; ++src) {
+      const double sign = inverse ? 1.0 : -1.0;
+      const double phase =
+          sign * 2.0 * kSpectralPi * static_cast<double>(dst * src) /
+          static_cast<double>(n);
+      sum += line[src] * std::exp(imaginary * phase);
+    }
+    out[dst] = inverse ? sum : sum / static_cast<double>(n);
+  }
+  line = std::move(out);
+}
+
+inline std::vector<double>
+buildSpectralAxisSecondDerivativeModalMatrix(const SpectralAxis &axis) {
+  const std::size_t n = axis.size();
+  std::vector<double> matrix(n * n, 0.0);
+  for (std::size_t col = 0; col < n; ++col) {
+    std::vector<std::complex<double>> modalLine(n);
+    modalLine[col] = 1.0;
+    transformSpectralModalLine(modalLine, axis.basis, true);
+
+    std::vector<double> physical(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+      if (std::fabs(modalLine[i].imag()) > 1.0e-10)
+        throw std::runtime_error("spectral modal transform produced complex data");
+      physical[i] = modalLine[i].real();
+    }
+
+    const auto secondDerivative = axis.differentiate(physical, 2);
+    for (std::size_t i = 0; i < n; ++i)
+      modalLine[i] = secondDerivative[i];
+    transformSpectralModalLine(modalLine, axis.basis, false);
+
+    for (std::size_t row = 0; row < n; ++row) {
+      if (std::fabs(modalLine[row].imag()) > 1.0e-8)
+        throw std::runtime_error("spectral modal D2 projection is complex");
+      matrix[row * n + col] = modalLine[row].real();
+    }
+  }
+  return matrix;
+}
+
+inline bool supportsSpectralModalChebyshevFourierBlocks(
+    const SpectralGrid3D &grid) {
+  return grid.axis(0).basis == SpectralBasis::ChebyshevZeros &&
+         grid.axis(1).basis == SpectralBasis::ChebyshevZeros &&
+         grid.axis(2).basis == SpectralBasis::FourierPeriodic;
+}
+
+inline std::vector<std::vector<double>>
+buildSpectralModalChebyshevFourierLaplacianShiftBlocks(
+    const SpectralGrid3D &grid, double shift) {
+  if (!supportsSpectralModalChebyshevFourierBlocks(grid))
+    return {};
+
+  const auto dxx = buildSpectralAxisSecondDerivativeModalMatrix(grid.axis(0));
+  const auto dyy = buildSpectralAxisSecondDerivativeModalMatrix(grid.axis(1));
+  const std::size_t n1 = grid.n1();
+  const std::size_t n2 = grid.n2();
+  const std::size_t blockSize = n1 * n2;
+  std::vector<std::vector<double>> blocks;
+  blocks.reserve(grid.n3());
+
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double lambda =
+        spectralAxisModalLaplacianEigenvalue(grid.axis(2), k) + shift;
+    std::vector<double> block(blockSize * blockSize, 0.0);
+    for (std::size_t colJ = 0; colJ < n2; ++colJ) {
+      for (std::size_t colI = 0; colI < n1; ++colI) {
+        const std::size_t col = colI + n1 * colJ;
+        for (std::size_t rowI = 0; rowI < n1; ++rowI) {
+          const std::size_t row = rowI + n1 * colJ;
+          block[row * blockSize + col] += dxx[rowI * n1 + colI];
+        }
+        for (std::size_t rowJ = 0; rowJ < n2; ++rowJ) {
+          const std::size_t row = colI + n1 * rowJ;
+          block[row * blockSize + col] += dyy[rowJ * n2 + colJ];
+        }
+        block[col * blockSize + col] += lambda;
+      }
+    }
+    blocks.push_back(std::move(block));
+  }
+  return blocks;
+}
+
+inline void transformSpectralModalAxis(
+    std::vector<std::complex<double>> &values,
+    const SpectralLinearPreconditioner &preconditioner, std::size_t dim,
+    bool inverse) {
+  const std::size_t n1 = preconditioner.modalExtents[0];
+  const std::size_t n2 = preconditioner.modalExtents[1];
+  const std::size_t n3 = preconditioner.modalExtents[2];
+  const auto index = [n1, n2](std::size_t i, std::size_t j, std::size_t k) {
+    return i + n1 * (j + n2 * k);
+  };
+
+  if (dim == 0) {
+    std::vector<std::complex<double>> line(n1);
+    for (std::size_t k = 0; k < n3; ++k) {
+      for (std::size_t j = 0; j < n2; ++j) {
+        for (std::size_t i = 0; i < n1; ++i)
+          line[i] = values[index(i, j, k)];
+        transformSpectralModalLine(line, preconditioner.modalBases[0], inverse);
+        for (std::size_t i = 0; i < n1; ++i)
+          values[index(i, j, k)] = line[i];
+      }
+    }
+    return;
+  }
+
+  if (dim == 1) {
+    std::vector<std::complex<double>> line(n2);
+    for (std::size_t k = 0; k < n3; ++k) {
+      for (std::size_t i = 0; i < n1; ++i) {
+        for (std::size_t j = 0; j < n2; ++j)
+          line[j] = values[index(i, j, k)];
+        transformSpectralModalLine(line, preconditioner.modalBases[1], inverse);
+        for (std::size_t j = 0; j < n2; ++j)
+          values[index(i, j, k)] = line[j];
+      }
+    }
+    return;
+  }
+
+  std::vector<std::complex<double>> line(n3);
+  for (std::size_t j = 0; j < n2; ++j) {
+    for (std::size_t i = 0; i < n1; ++i) {
+      for (std::size_t k = 0; k < n3; ++k)
+        line[k] = values[index(i, j, k)];
+      transformSpectralModalLine(line, preconditioner.modalBases[2], inverse);
+      for (std::size_t k = 0; k < n3; ++k)
+        values[index(i, j, k)] = line[k];
+    }
+  }
+}
+
+inline bool applySpectralModalPreconditionerBlock(
+    const SpectralLinearPreconditioner &preconditioner,
+    std::span<const std::vector<double>> modalBlocks,
+    std::span<const double> inverseDiagonal, std::span<double> values,
+    double pivotTolerance) {
+  if (values.size() != preconditioner.blockSize) {
+    return false;
+  }
+
+  std::vector<std::complex<double>> modal(values.size());
+  for (std::size_t i = 0; i < values.size(); ++i)
+    modal[i] = values[i];
+  transformSpectralModalAxis(modal, preconditioner, 0, false);
+  transformSpectralModalAxis(modal, preconditioner, 1, false);
+  transformSpectralModalAxis(modal, preconditioner, 2, false);
+
+  if (!modalBlocks.empty()) {
+    const std::size_t n1 = preconditioner.modalExtents[0];
+    const std::size_t n2 = preconditioner.modalExtents[1];
+    const std::size_t n3 = preconditioner.modalExtents[2];
+    const std::size_t blockSize = n1 * n2;
+    if (modalBlocks.size() != n3 ||
+        preconditioner.modalBlockSize != blockSize) {
+      return false;
+    }
+
+    for (std::size_t k = 0; k < n3; ++k) {
+      if (modalBlocks[k].size() != blockSize * blockSize)
+        return false;
+      std::vector<double> rhsReal(blockSize, 0.0);
+      std::vector<double> rhsImag(blockSize, 0.0);
+      for (std::size_t j = 0; j < n2; ++j) {
+        for (std::size_t i = 0; i < n1; ++i) {
+          const std::size_t row = i + n1 * j;
+          const std::size_t p = i + n1 * (j + n2 * k);
+          rhsReal[row] = modal[p].real();
+          rhsImag[row] = modal[p].imag();
+        }
+      }
+
+      std::vector<double> solReal;
+      std::vector<double> solImag;
+      if (!solveDenseLinearSystem(modalBlocks[k], std::move(rhsReal), solReal,
+                                  pivotTolerance) ||
+          !solveDenseLinearSystem(modalBlocks[k], std::move(rhsImag), solImag,
+                                  pivotTolerance)) {
+        return false;
+      }
+
+      for (std::size_t j = 0; j < n2; ++j) {
+        for (std::size_t i = 0; i < n1; ++i) {
+          const std::size_t row = i + n1 * j;
+          const std::size_t p = i + n1 * (j + n2 * k);
+          modal[p] = std::complex<double>(solReal[row], solImag[row]);
+        }
+      }
+    }
+  } else {
+    if (inverseDiagonal.size() != values.size())
+      return false;
+    for (std::size_t i = 0; i < modal.size(); ++i)
+      modal[i] *= inverseDiagonal[i];
+  }
+
+  transformSpectralModalAxis(modal, preconditioner, 2, true);
+  transformSpectralModalAxis(modal, preconditioner, 1, true);
+  transformSpectralModalAxis(modal, preconditioner, 0, true);
+
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = modal[i].real();
+    if (!std::isfinite(values[i]) || std::fabs(modal[i].imag()) > 1.0e-9)
+      return false;
+  }
+  return true;
+}
 
 inline bool applySpectralPreconditioner(
     const SpectralLinearPreconditioner &preconditioner,
@@ -133,6 +462,57 @@ inline bool applySpectralPreconditioner(
     return spectralVectorIsFinite(values);
   }
 
+  if (preconditioner.kind == SpectralPreconditionerKind::ModalLaplacianShift) {
+    if (preconditioner.blockSize == 0)
+      return false;
+
+    std::size_t blockCount = 0;
+    if (!preconditioner.modalBlocks.empty()) {
+      if (preconditioner.modalExtents[2] == 0 ||
+          preconditioner.modalBlocks.size() % preconditioner.modalExtents[2] !=
+              0) {
+        return false;
+      }
+      blockCount =
+          preconditioner.modalBlocks.size() / preconditioner.modalExtents[2];
+    } else {
+      if (preconditioner.inverseDiagonal.size() %
+              preconditioner.blockSize !=
+          0) {
+        return false;
+      }
+      blockCount =
+          preconditioner.inverseDiagonal.size() / preconditioner.blockSize;
+    }
+    if (values.size() != blockCount * preconditioner.blockSize)
+      return false;
+
+    for (std::size_t block = 0; block < blockCount; ++block) {
+      const std::size_t offset = block * preconditioner.blockSize;
+      const std::size_t modalBlockOffset =
+          block * preconditioner.modalExtents[2];
+      const bool hasModalBlocks = !preconditioner.modalBlocks.empty();
+      if (!applySpectralModalPreconditionerBlock(
+              preconditioner,
+              hasModalBlocks
+                  ? std::span<const std::vector<double>>(
+                        &preconditioner.modalBlocks[modalBlockOffset],
+                        preconditioner.modalExtents[2])
+                  : std::span<const std::vector<double>>(),
+              preconditioner.inverseDiagonal.empty()
+                  ? std::span<const double>()
+                  : std::span<const double>(
+                        &preconditioner.inverseDiagonal[offset],
+                        preconditioner.blockSize),
+              std::span<double>(&values[offset],
+                                preconditioner.blockSize),
+              pivotTolerance)) {
+        return false;
+      }
+    }
+    return spectralVectorIsFinite(values);
+  }
+
   return false;
 }
 
@@ -150,6 +530,35 @@ inline std::vector<double> buildSpectralLaplacianShiftMatrix(
     matrix[col * n + col] += shift;
   }
   return matrix;
+}
+
+inline void populateSpectralModalPreconditionerMetadata(
+    const SpectralGrid3D &grid, SpectralLinearPreconditioner &preconditioner) {
+  preconditioner.blockSize = grid.size();
+  preconditioner.modalExtents = {grid.n1(), grid.n2(), grid.n3()};
+  for (std::size_t dim = 0; dim < 3; ++dim) {
+    const auto &axis = grid.axis(dim);
+    preconditioner.modalBases[dim] = axis.basis;
+  }
+}
+
+inline void appendSpectralModalLaplacianShiftBlock(
+    const SpectralGrid3D &grid, double shift,
+    const SpectralEllipticSolveOptions &options,
+    SpectralLinearPreconditioner &preconditioner) {
+  if (supportsSpectralModalChebyshevFourierBlocks(grid)) {
+    const auto blocks =
+        buildSpectralModalChebyshevFourierLaplacianShiftBlocks(grid, shift);
+    preconditioner.modalBlockSize = grid.n1() * grid.n2();
+    preconditioner.modalBlocks.insert(preconditioner.modalBlocks.end(),
+                                      blocks.begin(), blocks.end());
+    return;
+  }
+
+  const auto inverse = buildSpectralModalLaplacianShiftInverseDiagonal(
+      grid, shift, options.preconditionerPivotTolerance);
+  preconditioner.inverseDiagonal.insert(preconditioner.inverseDiagonal.end(),
+                                        inverse.begin(), inverse.end());
 }
 
 inline bool buildSpectralDiagonalPreconditionerByJVP(
@@ -206,6 +615,17 @@ inline bool buildSpectralScalarPreconditioner(
     preconditioner.blockSize = grid.size();
     preconditioner.denseBlocks.push_back(buildSpectralLaplacianShiftMatrix(
         grid, options.preconditionerLaplacianShift));
+    return true;
+  }
+  if (options.gmresPreconditioner ==
+      SpectralPreconditionerKind::ModalLaplacianShift) {
+    const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+    if (values.size() != grid.size())
+      return false;
+    preconditioner.kind = SpectralPreconditionerKind::ModalLaplacianShift;
+    populateSpectralModalPreconditionerMetadata(grid, preconditioner);
+    appendSpectralModalLaplacianShiftBlock(
+        grid, options.preconditionerLaplacianShift, options, preconditioner);
     return true;
   }
   return false;
@@ -518,6 +938,22 @@ inline bool buildSpectralSystemPreconditioner(
     for (std::size_t block = 0; block < fieldCount; ++block) {
       preconditioner.denseBlocks.push_back(buildSpectralLaplacianShiftMatrix(
           grid, spectralPreconditionerShiftForBlock(options, block)));
+    }
+    return true;
+  }
+  if (options.gmresPreconditioner ==
+      SpectralPreconditionerKind::ModalLaplacianShift) {
+    const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+    const std::size_t fieldCount = values.size();
+    if (!validateSpectralSystemSolveLayout(system, values, grid.size()))
+      return false;
+    preconditioner.kind = SpectralPreconditionerKind::ModalLaplacianShift;
+    populateSpectralModalPreconditionerMetadata(grid, preconditioner);
+    preconditioner.inverseDiagonal.reserve(fieldCount * grid.size());
+    for (std::size_t block = 0; block < fieldCount; ++block) {
+      appendSpectralModalLaplacianShiftBlock(
+          grid, spectralPreconditionerShiftForBlock(options, block), options,
+          preconditioner);
     }
     return true;
   }

@@ -127,7 +127,7 @@ int main() {
     options.gmresTolerance = 8e-12;
     options.gmresRelativeTolerance = 1e-13;
     options.gmresPreconditioner =
-        SpectralPreconditionerKind::DenseLaplacianShift;
+        SpectralPreconditionerKind::ModalLaplacianShift;
     options.preconditionerLaplacianShift = mass;
     options.jvpOptions.relativeStep = 1e-6;
     options.linearPivotTolerance = 1e-13;
