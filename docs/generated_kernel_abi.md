@@ -188,14 +188,17 @@ consume directly:
   `solveSpectralNewton(...)` also accepts a system problem plus a mutable
   field-major unknown bundle; it solves the square multi-residual system with
   either dense JVP assembly or matrix-free GMRES over the same system JVP.
-  `SpectralPreconditionerKind::DiagonalJVP` adds a first left-preconditioned
-  GMRES path by estimating the residual/Jacobian diagonal from JVP columns. This
-  is a Jacobi smoke preconditioner, not yet a spectral Laplacian inverse.
+  `SpectralPreconditionerKind::DiagonalJVP` adds a Jacobi smoke
+  preconditioner by estimating the residual/Jacobian diagonal from JVP columns.
+  `SpectralPreconditionerKind::DenseLaplacianShift` applies a right
+  preconditioner by solving dense collocation systems for
+  `laplacian + shift`, giving the first runtime inverse-Laplacian path on the
+  existing spectral derivative matrices.
 - `tests/fixtures/elliptic/spectral_hamiltonian_toy_nonlinear_3d.tn` is a
   manufactured nonlinear spectral constraint. Its runtime test solves
   `laplacian(psi) + mass * psi + alpha * psi^5 + source = 0` from a non-exact
-  local guess with matrix-free preconditioned GMRES, validating nonlinear
-  Newton/JVP behavior against an analytic solution.
+  local guess with matrix-free GMRES preconditioned by `laplacian + mass`,
+  validating nonlinear Newton/JVP behavior against an analytic solution.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

@@ -18,6 +18,7 @@ using tensorium_mlir::runtime::SpectralAxis;
 using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
+using tensorium_mlir::runtime::SpectralPreconditionerKind;
 using tensorium_mlir::runtime::SpectralResidualProblem;
 using tensorium_mlir::runtime::assembleSpectralResidual;
 using tensorium_mlir::runtime::solveSpectralNewton;
@@ -94,8 +95,12 @@ int main() {
     options.gmresMaxIterations = 128;
     options.gmresTolerance = 1e-12;
     options.gmresRelativeTolerance = 1e-13;
+    options.gmresPreconditioner =
+        SpectralPreconditionerKind::DenseLaplacianShift;
+    options.preconditionerLaplacianShift = alpha;
     options.jvpOptions.relativeStep = 1e-6;
     options.linearPivotTolerance = 1e-13;
+    options.preconditionerPivotTolerance = 1e-13;
 
     const auto solveResult = solveSpectralNewton(problem, solution, options);
     const auto finalResidual = assembleSpectralResidual(problem, solution);
@@ -115,13 +120,15 @@ int main() {
                 solveResult.linearIterations);
     std::printf("[generated-spectral-newton] linear residual l2 = %.17g\n",
                 solveResult.finalLinearResidualL2);
+    std::printf("[generated-spectral-newton] used preconditioner = %d\n",
+                solveResult.usedPreconditioner ? 1 : 0);
     std::printf("[generated-spectral-newton] final residual max = %.17g\n",
                 finalResidual.maxAbs);
     std::printf("[generated-spectral-newton] solution max error = %.17g\n",
                 solutionError);
 
     if (!solveResult.converged() || !solveResult.usedGeneratedGridKernel ||
-        !solveResult.usedMatrixFreeGMRES ||
+        !solveResult.usedMatrixFreeGMRES || !solveResult.usedPreconditioner ||
         !finalResidual.usedGeneratedGridKernel ||
         solveResult.finalResidualL2 > 2e-10 || finalResidual.maxAbs > 2e-9 ||
         solutionError > 3e-8) {

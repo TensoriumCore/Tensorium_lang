@@ -224,6 +224,7 @@ enum class SpectralLinearSolveKind {
 enum class SpectralPreconditionerKind {
   None,
   DiagonalJVP,
+  DenseLaplacianShift,
 };
 
 struct SpectralEllipticSolveOptions {
@@ -243,6 +244,8 @@ struct SpectralEllipticSolveOptions {
   SpectralPreconditionerKind gmresPreconditioner =
       SpectralPreconditionerKind::None;
   double preconditionerPivotTolerance = 1.0e-12;
+  double preconditionerLaplacianShift = 0.0;
+  std::vector<double> preconditionerLaplacianShifts{};
   SpectralJacobianVectorProductOptions jvpOptions{};
 };
 
@@ -1051,25 +1054,80 @@ inline bool spectralPreconditionerRequested(
   return options.gmresPreconditioner != SpectralPreconditionerKind::None;
 }
 
-inline bool applySpectralDiagonalPreconditioner(
-    std::span<const double> inverseDiagonal, std::vector<double> &values) {
-  if (inverseDiagonal.empty())
+struct SpectralLinearPreconditioner {
+  SpectralPreconditionerKind kind = SpectralPreconditionerKind::None;
+  std::vector<double> inverseDiagonal;
+  std::vector<std::vector<double>> denseBlocks;
+  std::size_t blockSize = 0;
+};
+
+inline bool applySpectralPreconditioner(
+    const SpectralLinearPreconditioner &preconditioner,
+    std::vector<double> &values,
+    double pivotTolerance) {
+  if (preconditioner.kind == SpectralPreconditionerKind::None)
     return true;
-  if (inverseDiagonal.size() != values.size())
-    return false;
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    values[i] *= inverseDiagonal[i];
-    if (!std::isfinite(values[i]))
+
+  if (preconditioner.kind == SpectralPreconditionerKind::DiagonalJVP) {
+    if (preconditioner.inverseDiagonal.size() != values.size())
       return false;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      values[i] *= preconditioner.inverseDiagonal[i];
+      if (!std::isfinite(values[i]))
+        return false;
+    }
+    return true;
   }
-  return true;
+
+  if (preconditioner.kind == SpectralPreconditionerKind::DenseLaplacianShift) {
+    if (preconditioner.blockSize == 0 ||
+        values.size() != preconditioner.blockSize *
+                             preconditioner.denseBlocks.size())
+      return false;
+    std::vector<double> out(values.size(), 0.0);
+    for (std::size_t block = 0; block < preconditioner.denseBlocks.size();
+         ++block) {
+      const std::size_t offset = block * preconditioner.blockSize;
+      std::vector<double> rhs(preconditioner.blockSize, 0.0);
+      for (std::size_t i = 0; i < preconditioner.blockSize; ++i)
+        rhs[i] = values[offset + i];
+      std::vector<double> blockSolution;
+      if (!solveDenseLinearSystem(preconditioner.denseBlocks[block],
+                                  std::move(rhs), blockSolution,
+                                  pivotTolerance)) {
+        return false;
+      }
+      for (std::size_t i = 0; i < preconditioner.blockSize; ++i)
+        out[offset + i] = blockSolution[i];
+    }
+    values = std::move(out);
+    return spectralVectorIsFinite(values);
+  }
+
+  return false;
+}
+
+inline std::vector<double> buildSpectralLaplacianShiftMatrix(
+    const SpectralGrid3D &grid, double shift) {
+  const std::size_t n = grid.size();
+  std::vector<double> matrix(n * n, 0.0);
+  std::vector<double> basis(n, 0.0);
+  for (std::size_t col = 0; col < n; ++col) {
+    basis[col] = 1.0;
+    const auto laplacian = grid.laplacian(basis);
+    basis[col] = 0.0;
+    for (std::size_t row = 0; row < n; ++row)
+      matrix[row * n + col] = laplacian[row];
+    matrix[col * n + col] += shift;
+  }
+  return matrix;
 }
 
 inline bool buildSpectralDiagonalPreconditionerByJVP(
     const SpectralResidualProblem &problem, const std::vector<double> &values,
     const SpectralEllipticSolveOptions &options,
-    std::vector<double> &inverseDiagonal) {
-  inverseDiagonal.clear();
+    SpectralLinearPreconditioner &preconditioner) {
+  preconditioner = {};
   if (!spectralPreconditionerRequested(options))
     return true;
   if (options.gmresPreconditioner != SpectralPreconditionerKind::DiagonalJVP)
@@ -1079,7 +1137,8 @@ inline bool buildSpectralDiagonalPreconditionerByJVP(
   const std::size_t n = grid.size();
   if (values.size() != n)
     return false;
-  inverseDiagonal.assign(n, 1.0);
+  preconditioner.kind = SpectralPreconditionerKind::DiagonalJVP;
+  preconditioner.inverseDiagonal.assign(n, 1.0);
   std::vector<double> direction(n, 0.0);
   for (std::size_t i = 0; i < n; ++i) {
     direction[i] = 1.0;
@@ -1092,10 +1151,35 @@ inline bool buildSpectralDiagonalPreconditionerByJVP(
     const double diagonal = jvp.values[i];
     if (std::isfinite(diagonal) &&
         std::fabs(diagonal) > options.preconditionerPivotTolerance) {
-      inverseDiagonal[i] = 1.0 / diagonal;
+      preconditioner.inverseDiagonal[i] = 1.0 / diagonal;
     }
   }
   return true;
+}
+
+inline bool buildSpectralScalarPreconditioner(
+    const SpectralResidualProblem &problem, const std::vector<double> &values,
+    const SpectralEllipticSolveOptions &options,
+    SpectralLinearPreconditioner &preconditioner) {
+  preconditioner = {};
+  if (!spectralPreconditionerRequested(options))
+    return true;
+  if (options.gmresPreconditioner == SpectralPreconditionerKind::DiagonalJVP) {
+    return buildSpectralDiagonalPreconditionerByJVP(problem, values, options,
+                                                   preconditioner);
+  }
+  if (options.gmresPreconditioner ==
+      SpectralPreconditionerKind::DenseLaplacianShift) {
+    const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+    if (values.size() != grid.size())
+      return false;
+    preconditioner.kind = SpectralPreconditionerKind::DenseLaplacianShift;
+    preconditioner.blockSize = grid.size();
+    preconditioner.denseBlocks.push_back(buildSpectralLaplacianShiftMatrix(
+        grid, options.preconditionerLaplacianShift));
+    return true;
+  }
+  return false;
 }
 
 inline bool solveSpectralLeastSquaresNormalEquations(
@@ -1144,18 +1228,14 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
   if (rhs.size() != n || values.size() != n || options.gmresMaxIterations < 0)
     return result;
 
-  std::vector<double> inverseDiagonal;
-  if (!buildSpectralDiagonalPreconditionerByJVP(problem, values, options,
-                                                inverseDiagonal))
+  SpectralLinearPreconditioner preconditioner;
+  if (!buildSpectralScalarPreconditioner(problem, values, options,
+                                         preconditioner))
     return result;
-  result.usedPreconditioner = !inverseDiagonal.empty();
+  result.usedPreconditioner =
+      preconditioner.kind != SpectralPreconditionerKind::None;
 
-  std::vector<double> preconditionedRhs(rhs.begin(), rhs.end());
-  if (!applySpectralDiagonalPreconditioner(inverseDiagonal,
-                                           preconditionedRhs))
-    return result;
-
-  const double rhsEuclidean = spectralVectorEuclideanNorm(preconditionedRhs);
+  const double rhsEuclidean = spectralVectorEuclideanNorm(rhs);
   const double rhsL2 =
       rhsEuclidean / std::sqrt(static_cast<double>(std::max<std::size_t>(1, n)));
   const double target = std::max(options.gmresTolerance,
@@ -1172,7 +1252,7 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
 
   std::vector<double> basis((maxIterations + 1) * n, 0.0);
   for (std::size_t i = 0; i < n; ++i)
-    basis[i] = preconditionedRhs[i] / rhsEuclidean;
+    basis[i] = rhs[i] / rhsEuclidean;
 
   std::vector<double> hessenberg((maxIterations + 1) * maxIterations, 0.0);
   std::vector<double> arnoldiVector(n, 0.0);
@@ -1183,14 +1263,15 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
   for (std::size_t col = 0; col < maxIterations; ++col) {
     std::span<const double> direction(&basis[col * n], n);
     std::vector<double> directionVector(direction.begin(), direction.end());
+    if (!applySpectralPreconditioner(preconditioner, directionVector,
+                                     options.preconditionerPivotTolerance))
+      return result;
     const auto jvp =
         evaluateSpectralJacobianVectorProduct(problem, values, directionVector,
                                               options.jvpOptions);
     if (!jvp.finite || jvp.values.size() != n)
       return result;
     arnoldiVector = jvp.values;
-    if (!applySpectralDiagonalPreconditioner(inverseDiagonal, arnoldiVector))
-      return result;
 
     for (std::size_t row = 0; row <= col; ++row) {
       std::span<const double> basisVector(&basis[row * n], n);
@@ -1235,6 +1316,9 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
     for (std::size_t i = 0; i < n; ++i)
       result.solution[i] += bestY[col] * basis[col * n + i];
   }
+  if (!applySpectralPreconditioner(preconditioner, result.solution,
+                                   options.preconditionerPivotTolerance))
+    return SpectralGMRESResult{};
   return result;
 }
 
@@ -1284,8 +1368,8 @@ inline bool buildSpectralSystemDiagonalPreconditionerByJVP(
     const SpectralResidualSystemProblem &system,
     std::span<const std::vector<double>> values,
     const SpectralEllipticSolveOptions &options,
-    std::vector<double> &inverseDiagonal) {
-  inverseDiagonal.clear();
+    SpectralLinearPreconditioner &preconditioner) {
+  preconditioner = {};
   if (!spectralPreconditionerRequested(options))
     return true;
   if (options.gmresPreconditioner != SpectralPreconditionerKind::DiagonalJVP)
@@ -1303,7 +1387,8 @@ inline bool buildSpectralSystemDiagonalPreconditionerByJVP(
   }
 
   const std::size_t n = equationCount * pointsPerField;
-  inverseDiagonal.assign(n, 1.0);
+  preconditioner.kind = SpectralPreconditionerKind::DiagonalJVP;
+  preconditioner.inverseDiagonal.assign(n, 1.0);
   std::vector<std::vector<double>> directionFields(
       fieldCount, std::vector<double>(pointsPerField, 0.0));
   for (std::size_t equation = 0; equation < equationCount; ++equation) {
@@ -1324,11 +1409,52 @@ inline bool buildSpectralSystemDiagonalPreconditionerByJVP(
       const double diagonal = jvp.values[row];
       if (std::isfinite(diagonal) &&
           std::fabs(diagonal) > options.preconditionerPivotTolerance) {
-        inverseDiagonal[row] = 1.0 / diagonal;
+        preconditioner.inverseDiagonal[row] = 1.0 / diagonal;
       }
     }
   }
   return true;
+}
+
+inline double spectralPreconditionerShiftForBlock(
+    const SpectralEllipticSolveOptions &options, std::size_t block) {
+  if (block < options.preconditionerLaplacianShifts.size())
+    return options.preconditionerLaplacianShifts[block];
+  return options.preconditionerLaplacianShift;
+}
+
+inline bool buildSpectralSystemPreconditioner(
+    const SpectralResidualSystemProblem &system,
+    std::span<const std::vector<double>> values,
+    const SpectralEllipticSolveOptions &options,
+    SpectralLinearPreconditioner &preconditioner) {
+  preconditioner = {};
+  if (!spectralPreconditionerRequested(options))
+    return true;
+  if (options.gmresPreconditioner == SpectralPreconditionerKind::DiagonalJVP) {
+    return buildSpectralSystemDiagonalPreconditionerByJVP(
+        system, values, options, preconditioner);
+  }
+  if (options.gmresPreconditioner ==
+      SpectralPreconditionerKind::DenseLaplacianShift) {
+    const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+    const std::size_t fieldCount = values.size();
+    if (fieldCount == 0 || system.equations.size() != fieldCount)
+      return false;
+    for (const auto &field : values) {
+      if (field.size() != grid.size())
+        return false;
+    }
+    preconditioner.kind = SpectralPreconditionerKind::DenseLaplacianShift;
+    preconditioner.blockSize = grid.size();
+    preconditioner.denseBlocks.reserve(fieldCount);
+    for (std::size_t block = 0; block < fieldCount; ++block) {
+      preconditioner.denseBlocks.push_back(buildSpectralLaplacianShiftMatrix(
+          grid, spectralPreconditionerShiftForBlock(options, block)));
+    }
+    return true;
+  }
+  return false;
 }
 
 inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
@@ -1348,18 +1474,14 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
       return result;
   }
 
-  std::vector<double> inverseDiagonal;
-  if (!buildSpectralSystemDiagonalPreconditionerByJVP(
-          system, values, options, inverseDiagonal))
+  SpectralLinearPreconditioner preconditioner;
+  if (!buildSpectralSystemPreconditioner(system, values, options,
+                                         preconditioner))
     return result;
-  result.usedPreconditioner = !inverseDiagonal.empty();
+  result.usedPreconditioner =
+      preconditioner.kind != SpectralPreconditionerKind::None;
 
-  std::vector<double> preconditionedRhs(rhs.begin(), rhs.end());
-  if (!applySpectralDiagonalPreconditioner(inverseDiagonal,
-                                           preconditionedRhs))
-    return result;
-
-  const double rhsEuclidean = spectralVectorEuclideanNorm(preconditionedRhs);
+  const double rhsEuclidean = spectralVectorEuclideanNorm(rhs);
   const double rhsL2 =
       rhsEuclidean / std::sqrt(static_cast<double>(std::max<std::size_t>(1, n)));
   const double target = std::max(options.gmresTolerance,
@@ -1376,7 +1498,7 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
 
   std::vector<double> basis((maxIterations + 1) * n, 0.0);
   for (std::size_t i = 0; i < n; ++i)
-    basis[i] = preconditionedRhs[i] / rhsEuclidean;
+    basis[i] = rhs[i] / rhsEuclidean;
 
   std::vector<double> hessenberg((maxIterations + 1) * maxIterations, 0.0);
   std::vector<double> arnoldiVector(n, 0.0);
@@ -1386,8 +1508,12 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
 
   for (std::size_t col = 0; col < maxIterations; ++col) {
     std::span<const double> direction(&basis[col * n], n);
+    std::vector<double> directionVector(direction.begin(), direction.end());
+    if (!applySpectralPreconditioner(preconditioner, directionVector,
+                                     options.preconditionerPivotTolerance))
+      return result;
     const auto directionFields =
-        unflattenSpectralSystemVector(direction, fieldCount, grid.size());
+        unflattenSpectralSystemVector(directionVector, fieldCount, grid.size());
     const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
         system, values,
         std::span<const std::vector<double>>(directionFields.data(),
@@ -1396,8 +1522,6 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
     if (!jvp.finite || jvp.values.size() != n)
       return result;
     arnoldiVector = jvp.values;
-    if (!applySpectralDiagonalPreconditioner(inverseDiagonal, arnoldiVector))
-      return result;
 
     for (std::size_t row = 0; row <= col; ++row) {
       std::span<const double> basisVector(&basis[row * n], n);
@@ -1442,6 +1566,9 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
     for (std::size_t i = 0; i < n; ++i)
       result.solution[i] += bestY[col] * basis[col * n + i];
   }
+  if (!applySpectralPreconditioner(preconditioner, result.solution,
+                                   options.preconditionerPivotTolerance))
+    return SpectralGMRESResult{};
   return result;
 }
 
