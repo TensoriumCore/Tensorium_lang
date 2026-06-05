@@ -176,6 +176,15 @@ consume directly:
   Jacobi JVP diagonals, a dense collocation inverse-Laplacian oracle, and a
   modal `laplacian + shift` inverse approximation intended as the scalable
   runtime path.
+- Bounded spectral elliptic solves can attach runtime boundary conditions to a
+  `SpectralResidualProblem`. `SpectralBoundaryCondition` currently supports
+  Dirichlet and face-normal Robin rows on non-periodic faces. During residual
+  assembly, boundary collocation rows replace the generated interior residual,
+  so finite-difference JVPs, Newton, and GMRES all solve the same bounded
+  system. The dense `laplacian + shift` preconditioner mirrors these boundary
+  rows in its operator matrix. Chebyshev-Lobatto axes expose endpoint
+  collocation points for strong face conditions; Chebyshev-zero axes remain
+  available for interior-only and smoke fixtures.
 - `SpectralResidualSystemProblem` is the first multi-residual assembly surface.
   It combines several scalar `SpectralResidualProblem` equations into one
   equation-major vector `[F0(points), F1(points), ...]`. Each equation still has
@@ -216,6 +225,12 @@ consume directly:
   manufactured solution. A companion convergence runner evaluates the exact
   manufactured solution on increasingly fine Chebyshev/Chebyshev/Fourier grids
   and checks that the generated spectral residual decreases under refinement.
+- `tests/fixtures/elliptic/spectral_poisson_dirichlet_3d.tn` is the first
+  generated bounded elliptic solve fixture. The `.tn` file describes the
+  interior Poisson residual, while the runtime runner uses Chebyshev-Lobatto
+  x/y axes and injects homogeneous Dirichlet rows on the x/y faces before
+  solving with matrix-free GMRES and a boundary-aware dense Laplacian
+  preconditioner.
 - `tests/fixtures/elliptic/spectral_bowen_york_regularized_puncture_3d.tn` is
   the first non-manufactured puncture-like spectral Hamiltonian fixture. It uses
   a regularized single-puncture conformal factor
@@ -224,8 +239,12 @@ consume directly:
   it checks residual reduction and positive conformal factor rather than an
   analytic solution. The companion continuation runner reuses each stage's
   solution as the initial guess for the next regularization/momentum step,
-  making the current solve limitation explicit before adding real
-  asymptotic/puncture boundary conditions.
+  estimating the modal Laplacian shift from the local Bowen-York
+  Lichnerowicz Jacobian term `-7/8 A2 / psi^8`. It deliberately stays on an
+  easy/wide continuation where the current matrix-free GMRES path performs a
+  real Newton update; harder regularization/momentum stages are not treated as
+  passing tests until the runtime has a stronger elliptic preconditioner and
+  real asymptotic/puncture boundary conditions.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

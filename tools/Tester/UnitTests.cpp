@@ -5400,6 +5400,36 @@ static bool testSpectralGridManufacturedPoisson() {
   return true;
 }
 
+static bool testSpectralChebyshevLobattoAxisHasBoundaryPoints() {
+  using tensorium_mlir::runtime::SpectralAxis;
+
+  const SpectralAxis axis = SpectralAxis::chebyshevLobatto(6, -2.0, 3.0);
+  if (axis.points.size() != 6 || std::abs(axis.points.front() - 3.0) > 1e-14 ||
+      std::abs(axis.points.back() + 2.0) > 1e-14) {
+    std::cerr << "FAIL: Chebyshev-Lobatto axis endpoints are wrong\n";
+    return false;
+  }
+
+  std::vector<double> values(axis.size(), 0.0);
+  std::vector<double> expectedD1(axis.size(), 0.0);
+  for (std::size_t i = 0; i < axis.size(); ++i) {
+    const double x = axis.points[i];
+    values[i] = x * x * x - 2.0 * x;
+    expectedD1[i] = 3.0 * x * x - 2.0;
+  }
+  const auto d1 = axis.differentiate(values, 1);
+
+  double maxErr = 0.0;
+  for (std::size_t i = 0; i < axis.size(); ++i)
+    maxErr = std::max(maxErr, std::abs(d1[i] - expectedD1[i]));
+  if (maxErr > 3e-12) {
+    std::cerr << "FAIL: Chebyshev-Lobatto derivative max error=" << maxErr
+              << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSpectralDerivativeBundleAnalyticMixedTerms() {
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralGrid3D;
@@ -5610,6 +5640,8 @@ int main() {
        &testGeneratedHostStorageEulerUpdatePairs},
       {"testSpectralGridManufacturedPoisson",
        &testSpectralGridManufacturedPoisson},
+      {"testSpectralChebyshevLobattoAxisHasBoundaryPoints",
+       &testSpectralChebyshevLobattoAxisHasBoundaryPoints},
       {"testSpectralDerivativeBundleAnalyticMixedTerms",
        &testSpectralDerivativeBundleAnalyticMixedTerms},
       {"testSpectralPointwisePoissonResidualIsAnalyticallyZero",

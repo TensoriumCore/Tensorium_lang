@@ -117,6 +117,28 @@ struct SpectralCoordinateMap {
   void *userData = nullptr;
 };
 
+enum class SpectralBoundaryFace {
+  LowerX1,
+  UpperX1,
+  LowerX2,
+  UpperX2,
+  LowerX3,
+  UpperX3,
+};
+
+enum class SpectralBoundaryConditionKind {
+  Dirichlet,
+  Robin,
+};
+
+struct SpectralBoundaryCondition {
+  SpectralBoundaryFace face = SpectralBoundaryFace::LowerX1;
+  SpectralBoundaryConditionKind kind = SpectralBoundaryConditionKind::Dirichlet;
+  double valueCoefficient = 1.0;
+  double normalDerivativeCoefficient = 0.0;
+  double targetValue = 0.0;
+};
+
 struct SpectralResidualProblem {
   const SpectralGrid3D *grid = nullptr;
   SpectralResidualKernel kernel;
@@ -125,6 +147,7 @@ struct SpectralResidualProblem {
   SpectralCoordinateMap coordinateMap{};
   std::span<const double> coordinateParams{};
   SpectralResidualGridKernel gridKernel{};
+  std::span<const SpectralBoundaryCondition> boundaryConditions{};
 };
 
 struct SpectralResidualAssemblyResult {

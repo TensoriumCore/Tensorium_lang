@@ -517,17 +517,23 @@ inline bool applySpectralPreconditioner(
 }
 
 inline std::vector<double> buildSpectralLaplacianShiftMatrix(
-    const SpectralGrid3D &grid, double shift) {
+    const SpectralGrid3D &grid, double shift,
+    std::span<const SpectralBoundaryCondition> boundaryConditions = {}) {
   const std::size_t n = grid.size();
   std::vector<double> matrix(n * n, 0.0);
   std::vector<double> basis(n, 0.0);
   for (std::size_t col = 0; col < n; ++col) {
     basis[col] = 1.0;
-    const auto laplacian = grid.laplacian(basis);
+    const auto derivs = grid.derivatives(basis);
+    std::vector<double> column(n, 0.0);
     basis[col] = 0.0;
     for (std::size_t row = 0; row < n; ++row)
-      matrix[row * n + col] = laplacian[row];
-    matrix[col * n + col] += shift;
+      column[row] = derivs.d11[row] + derivs.d22[row] + derivs.d33[row];
+    column[col] += shift;
+    applySpectralBoundaryConditionLinearizations(grid, derivs,
+                                                 boundaryConditions, column);
+    for (std::size_t row = 0; row < n; ++row)
+      matrix[row * n + col] = column[row];
   }
   return matrix;
 }
@@ -614,7 +620,8 @@ inline bool buildSpectralScalarPreconditioner(
     preconditioner.kind = SpectralPreconditionerKind::DenseLaplacianShift;
     preconditioner.blockSize = grid.size();
     preconditioner.denseBlocks.push_back(buildSpectralLaplacianShiftMatrix(
-        grid, options.preconditionerLaplacianShift));
+        grid, options.preconditionerLaplacianShift,
+        problem.boundaryConditions));
     return true;
   }
   if (options.gmresPreconditioner ==
@@ -914,6 +921,16 @@ inline double spectralPreconditionerShiftForBlock(
   return options.preconditionerLaplacianShift;
 }
 
+inline std::span<const SpectralBoundaryCondition>
+spectralBoundaryConditionsForUnknownBlock(
+    const SpectralResidualSystemProblem &system, std::size_t unknownBlock) {
+  for (const auto &equation : system.equations) {
+    if (equation.unknownIndex == unknownBlock)
+      return equation.problem.boundaryConditions;
+  }
+  return {};
+}
+
 inline bool buildSpectralSystemPreconditioner(
     const SpectralResidualSystemProblem &system,
     std::span<const std::vector<double>> values,
@@ -937,7 +954,8 @@ inline bool buildSpectralSystemPreconditioner(
     preconditioner.denseBlocks.reserve(fieldCount);
     for (std::size_t block = 0; block < fieldCount; ++block) {
       preconditioner.denseBlocks.push_back(buildSpectralLaplacianShiftMatrix(
-          grid, spectralPreconditionerShiftForBlock(options, block)));
+          grid, spectralPreconditionerShiftForBlock(options, block),
+          spectralBoundaryConditionsForUnknownBlock(system, block)));
     }
     return true;
   }

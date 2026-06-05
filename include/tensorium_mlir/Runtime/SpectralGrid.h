@@ -15,6 +15,7 @@ inline constexpr double kSpectralPi = 3.14159265358979323846264338327950288;
 
 enum class SpectralBasis {
   ChebyshevZeros,
+  ChebyshevLobatto,
   FourierPeriodic,
 };
 
@@ -38,6 +39,28 @@ struct SpectralAxis {
     for (std::size_t i = 0; i < n; ++i) {
       const double theta =
           kSpectralPi * (static_cast<double>(i) + 0.5) / static_cast<double>(n);
+      axis.points[i] = center + scale * std::cos(theta);
+    }
+    return axis;
+  }
+
+  static SpectralAxis chebyshevLobatto(std::size_t n, double lower = -1.0,
+                                       double upper = 1.0) {
+    if (n < 2)
+      throw std::runtime_error(
+          "spectral Chebyshev-Lobatto axis needs at least 2 points");
+    if (!(upper > lower))
+      throw std::runtime_error(
+          "spectral Chebyshev-Lobatto axis bounds are invalid");
+
+    SpectralAxis axis;
+    axis.basis = SpectralBasis::ChebyshevLobatto;
+    axis.points.resize(n);
+    const double center = 0.5 * (lower + upper);
+    const double scale = 0.5 * (upper - lower);
+    for (std::size_t i = 0; i < n; ++i) {
+      const double theta =
+          kSpectralPi * static_cast<double>(i) / static_cast<double>(n - 1);
       axis.points[i] = center + scale * std::cos(theta);
     }
     return axis;

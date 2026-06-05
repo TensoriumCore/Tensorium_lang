@@ -41,7 +41,21 @@ struct ContinuationStage {
   PunctureParams params{};
   double residualTolerance = 0.0;
   double requiredRatio = 1.0;
+  double minimumShiftMagnitude = 0.0;
+  bool requiresNewtonUpdate = false;
 };
+
+double bowenYorkA2(double x, double y, double z, const PunctureParams &params) {
+  const double dx = x - params.x0;
+  const double dy = y - params.y0;
+  const double dz = z - params.z0;
+  const double r2 = dx * dx + dy * dy + dz * dz + params.eps2;
+  const double invR2 = 1.0 / r2;
+  const double invR4 = invR2 * invR2;
+  const double p2 = params.px * params.px;
+  const double pn2 = p2 * dx * dx * invR2;
+  return 4.5 * (p2 + 2.0 * pn2) * invR4;
+}
 
 double psiSingular(double x, double y, double z, const PunctureParams &params) {
   const double dx = x - params.x0;
@@ -68,9 +82,41 @@ double minPsi(const SpectralGrid3D &grid, std::span<const double> u,
   return out;
 }
 
+double estimateBowenYorkJacobianShift(const SpectralGrid3D &grid,
+                                      std::span<const double> u,
+                                      const PunctureParams &params) {
+  double sum = 0.0;
+  double maxAbs = 0.0;
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double z = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double x = grid.axis(0).points[i];
+        const std::size_t p = grid.index(i, j, k);
+        const double psi = psiSingular(x, y, z, params) + u[p];
+        if (!(psi > 0.0) || !std::isfinite(psi))
+          continue;
+        const double psi2 = psi * psi;
+        const double psi4 = psi2 * psi2;
+        const double psi8 = psi4 * psi4;
+        const double reaction = -0.875 * bowenYorkA2(x, y, z, params) / psi8;
+        if (std::isfinite(reaction)) {
+          sum += reaction;
+          maxAbs = std::max(maxAbs, std::abs(reaction));
+        }
+      }
+    }
+  }
+  const double mean = sum / static_cast<double>(grid.size());
+  const double biased = mean - 0.25 * maxAbs;
+  return std::clamp(biased, -1.0, -1.0e-4);
+}
+
 SpectralEllipticSolveOptions makeOptions(double ratioTarget,
                                          double residualTolerance,
-                                         double initialResidualL2) {
+                                         double initialResidualL2,
+                                         double preconditionerShift) {
   SpectralEllipticSolveOptions options;
   options.maxNewtonSteps = 8;
   options.residualTolerance = residualTolerance;
@@ -83,7 +129,7 @@ SpectralEllipticSolveOptions makeOptions(double ratioTarget,
   options.gmresRelativeTolerance = 0.0;
   options.gmresPreconditioner =
       SpectralPreconditionerKind::ModalLaplacianShift;
-  options.preconditionerLaplacianShift = -0.02;
+  options.preconditionerLaplacianShift = preconditionerShift;
   options.jvpOptions.relativeStep = 1e-6;
   options.linearPivotTolerance = 1e-13;
   options.preconditionerPivotTolerance = 1e-12;
@@ -114,11 +160,15 @@ int main() {
         ContinuationStage{"wide-easy",
                           PunctureParams{0.22, 0.30, 0.02, 0.12, -0.08, 0.0},
                           2e-4,
-                          0.999},
+                          0.999,
+                          0.0,
+                          false},
         ContinuationStage{"wide",
                           PunctureParams{0.16, 0.32, 0.04, 0.12, -0.08, 0.0},
                           0.0,
-                          0.999},
+                          0.999,
+                          0.02,
+                          true},
     }};
 
     SpectralGrid3D grid(SpectralAxis::chebyshevZeros(5, -1.0, 1.0),
@@ -162,9 +212,13 @@ int main() {
       if (stageIndex == 0)
         firstResidualL2 = initialResidual.l2Norm;
 
+      const double estimatedShift = estimateBowenYorkJacobianShift(
+          grid, solutionFields[0], stage.params);
+      const double preconditionerShift =
+          std::min(estimatedShift, -stage.minimumShiftMagnitude);
       const auto options =
           makeOptions(stage.requiredRatio, stage.residualTolerance,
-                      initialResidual.l2Norm);
+                      initialResidual.l2Norm, preconditionerShift);
       const auto solveResult = solveSpectralNewton(
           system, std::span<std::vector<double>>(solutionFields.data(),
                                                  solutionFields.size()),
@@ -185,6 +239,8 @@ int main() {
 
       std::printf("[generated-spectral-bowen-york-puncture-continuation] stage %s initial l2 = %.17g max = %.17g\n",
                   stage.name, initialResidual.l2Norm, initialResidual.maxAbs);
+      std::printf("[generated-spectral-bowen-york-puncture-continuation] stage %s estimated shift = %.17g preconditioner shift = %.17g\n",
+                  stage.name, estimatedShift, preconditionerShift);
       std::printf("[generated-spectral-bowen-york-puncture-continuation] stage %s steps = %d status = %d\n",
                   stage.name, solveResult.steps,
                   static_cast<int>(solveResult.status));
@@ -208,6 +264,7 @@ int main() {
           solveResult.linearIterations > 0 &&
           solveResult.finalLinearResidualL2 < initialResidual.l2Norm;
       if (!initialResidual.finite || !initialResidual.usedGeneratedGridKernels ||
+          (stage.requiresNewtonUpdate && !solvedByNewton) ||
           !(solvedByInitialTolerance || solvedByNewton || madeLinearProgress) ||
           !finalResidual.finite || !finalResidual.usedGeneratedGridKernels ||
           !(lastMinPsi > 0.0)) {

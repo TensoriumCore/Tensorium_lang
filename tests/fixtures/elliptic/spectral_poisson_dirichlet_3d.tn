@@ -1,0 +1,33 @@
+# Manufactured spectral Poisson fixture with runtime Dirichlet boundaries.
+#
+# The generated kernel evaluates the interior equation:
+#   H = laplacian(u) + source
+#
+# Runtime tests replace boundary rows with Dirichlet conditions on Lobatto
+# x/y faces, which is the first bounded elliptic solve path from a .tn residual.
+field scalar u
+field scalar source
+field scalar H
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [5,5,8]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralPoissonDirichlet3D {
+  Hlocal = laplacian(u) + source
+
+  residual H = Hlocal
+}
