@@ -216,6 +216,16 @@ consume directly:
   manufactured solution. A companion convergence runner evaluates the exact
   manufactured solution on increasingly fine Chebyshev/Chebyshev/Fourier grids
   and checks that the generated spectral residual decreases under refinement.
+- `tests/fixtures/elliptic/spectral_bowen_york_regularized_puncture_3d.tn` is
+  the first non-manufactured puncture-like spectral Hamiltonian fixture. It uses
+  a regularized single-puncture conformal factor
+  `psi = 1 + mass/(2*r_eps) + u` and the flat-space Bowen-York momentum
+  contraction as `A2`. The short runtime test is a generated-kernel smoke test:
+  it checks residual reduction and positive conformal factor rather than an
+  analytic solution. The companion continuation runner reuses each stage's
+  solution as the initial guess for the next regularization/momentum step,
+  making the current solve limitation explicit before adding real
+  asymptotic/puncture boundary conditions.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

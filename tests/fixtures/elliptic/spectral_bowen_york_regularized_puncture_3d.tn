@@ -1,0 +1,57 @@
+# Spectral regularized single-puncture Bowen-York Hamiltonian fixture.
+#
+# This is a first non-manufactured puncture-like initial-data residual:
+#   psi = 1 + mass/(2*r_eps) + u
+#   H = laplacian(u) + 1/8 * Atilde_ij Atilde^ij * psi^(-7)
+#
+# The puncture radius is regularized with eps2 so the current global spectral
+# grid can exercise the nonlinear residual before exact puncture/domain
+# treatment exists.
+extern scalar sqrt(scalar)
+
+field scalar u
+field scalar H
+
+params { eps2, mass, px, x0, y0, z0 }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [128,128,128]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralBowenYorkRegularizedPuncture3D {
+  X = x - x0
+  Y = y - y0
+  Z = z - z0
+
+  r2 = X*X + Y*Y + Z*Z + eps2
+  invR = 1.0 / sqrt(r2)
+  invR2 = 1.0 / r2
+  invR4 = invR2 * invR2
+
+  P2 = px * px
+  Pn2 = P2 * X * X * invR2
+  A2 = 4.5 * (P2 + 2.0 * Pn2) * invR4
+
+  psiSingular = 1.0 + 0.5 * mass * invR
+  psi = psiSingular + u
+  psi2 = psi * psi
+  psi4 = psi2 * psi2
+  psi7 = psi4 * psi2 * psi
+
+  Hlocal = laplacian(u) + 0.125 * A2 / psi7
+
+  residual H = Hlocal
+}
