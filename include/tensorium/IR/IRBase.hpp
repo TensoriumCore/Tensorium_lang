@@ -120,6 +120,15 @@ struct EquationIR {
   std::unique_ptr<ExprIR> rhs;
 };
 
+struct BoundaryConditionIR {
+  std::string residualName;
+  std::string face;
+  std::string kind;
+  double valueCoefficient = 1.0;
+  double normalDerivativeCoefficient = 0.0;
+  double targetValue = 0.0;
+};
+
 struct TempAssignIR {
   std::string name;
   std::vector<std::string> indices;
@@ -131,6 +140,7 @@ struct EvolutionIR {
   std::string name;
   std::vector<EquationIR> equations;
   std::vector<TempAssignIR> temporaries;
+  std::vector<BoundaryConditionIR> boundaryConditions;
 };
 
 struct PrintIR {

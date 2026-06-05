@@ -463,6 +463,18 @@ std::vector<HostSpectralResidualSystemABI> hostSpectralResidualSystems(
         equation.auxiliaryNames.assign(pointKernel->fields.begin() + 1,
                                        pointKernel->fields.end());
       }
+      for (const auto &boundary : evo.boundaryConditions) {
+        if (boundary.residualName != equation.residualName)
+          continue;
+        HostSpectralBoundaryConditionABI condition;
+        condition.face = boundary.face;
+        condition.kind = boundary.kind;
+        condition.valueCoefficient = boundary.valueCoefficient;
+        condition.normalDerivativeCoefficient =
+            boundary.normalDerivativeCoefficient;
+        condition.targetValue = boundary.targetValue;
+        equation.boundaryConditions.push_back(std::move(condition));
+      }
       system.equations.push_back(std::move(equation));
     }
     if (!complete || system.equations.empty())

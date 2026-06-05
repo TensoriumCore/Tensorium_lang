@@ -17,9 +17,6 @@
 namespace {
 
 using tensorium_mlir::runtime::SpectralAxis;
-using tensorium_mlir::runtime::SpectralBoundaryCondition;
-using tensorium_mlir::runtime::SpectralBoundaryConditionKind;
-using tensorium_mlir::runtime::SpectralBoundaryFace;
 using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
 using tensorium_mlir::runtime::SpectralGrid3D;
@@ -67,6 +64,10 @@ int main() {
       throw std::runtime_error(
           "unexpected generated Poisson Dirichlet spectral system metadata");
     }
+    if (systemDesc.equations[0].boundary_condition_count != 4) {
+      throw std::runtime_error(
+          "expected generated Poisson Dirichlet boundary metadata");
+    }
 
     SpectralGrid3D grid(SpectralAxis::chebyshevLobatto(6, -1.0, 1.0),
                         SpectralAxis::chebyshevLobatto(6, -1.0, 1.0),
@@ -100,31 +101,13 @@ int main() {
                 std::span<const std::vector<double>>(auxiliaryFields.data(),
                                                      auxiliaryFields.size())},
         }};
-    auto generatedSystem = makeSpectralResidualSystemFromDesc(
+    const auto generatedSystem = makeSpectralResidualSystemFromDesc(
         systemDesc, grid, tensorium_spectral_residual_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
         tensorium_spectral_residual_grid_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT,
         std::span<const SpectralGeneratedResidualSystemEquationInputs>(
             systemInputs.data(), systemInputs.size()));
-
-    const std::array<SpectralBoundaryCondition, 4> boundaryConditions{{
-        SpectralBoundaryCondition{
-            SpectralBoundaryFace::LowerX1,
-            SpectralBoundaryConditionKind::Dirichlet, 1.0, 0.0, 0.0},
-        SpectralBoundaryCondition{
-            SpectralBoundaryFace::UpperX1,
-            SpectralBoundaryConditionKind::Dirichlet, 1.0, 0.0, 0.0},
-        SpectralBoundaryCondition{
-            SpectralBoundaryFace::LowerX2,
-            SpectralBoundaryConditionKind::Dirichlet, 1.0, 0.0, 0.0},
-        SpectralBoundaryCondition{
-            SpectralBoundaryFace::UpperX2,
-            SpectralBoundaryConditionKind::Dirichlet, 1.0, 0.0, 0.0},
-    }};
-    generatedSystem.equations[0].problem.boundaryConditions =
-        std::span<const SpectralBoundaryCondition>(boundaryConditions.data(),
-                                                   boundaryConditions.size());
     const auto system = generatedSystem.view();
 
     const auto initialResidual = assembleSpectralResidualSystem(

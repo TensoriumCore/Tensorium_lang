@@ -146,10 +146,20 @@ struct ConstraintEq {
   std::unique_ptr<Expr> rhs;
 };
 
+struct BoundaryConditionDecl {
+  std::string residualName;
+  std::string face;
+  std::string kind;
+  double valueCoefficient = 1.0;
+  double normalDerivativeCoefficient = 0.0;
+  double targetValue = 0.0;
+};
+
 struct ConstraintDecl {
   std::string name;
   std::vector<ConstraintEq> residuals;
   std::vector<Assignment> tempAssignments;
+  std::vector<BoundaryConditionDecl> boundaryConditions;
 };
 
 struct PrintDecl {

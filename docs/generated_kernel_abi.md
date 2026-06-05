@@ -185,6 +185,17 @@ consume directly:
   rows in its operator matrix. Chebyshev-Lobatto axes expose endpoint
   collocation points for strong face conditions; Chebyshev-zero axes remain
   available for interior-only and smoke fixtures.
+  Constraint blocks can declare generated boundary metadata with:
+  `boundary <residual> <face> dirichlet = <target>` or
+  `boundary <residual> <face> robin(value=<a>, normal=<b>, target=<c>)`.
+  Faces are `lower_x1`, `upper_x1`, `lower_x2`, `upper_x2`, `lower_x3`, and
+  `upper_x3`. Generated host headers expose these rows on the matching
+  `tensorium_spectral_residual_system_equation_desc`, so runtimes can attach
+  them without reconstructing conditions from runner code.
+  This v1 boundary surface intentionally supports constant coefficients only;
+  puncture-style asymptotic Robin rows such as `u + r d_r u = 0` need the next
+  descriptor step for coordinate-dependent coefficients or a compactified radial
+  coordinate map.
 - `SpectralResidualSystemProblem` is the first multi-residual assembly surface.
   It combines several scalar `SpectralResidualProblem` equations into one
   equation-major vector `[F0(points), F1(points), ...]`. Each equation still has
@@ -227,10 +238,10 @@ consume directly:
   and checks that the generated spectral residual decreases under refinement.
 - `tests/fixtures/elliptic/spectral_poisson_dirichlet_3d.tn` is the first
   generated bounded elliptic solve fixture. The `.tn` file describes the
-  interior Poisson residual, while the runtime runner uses Chebyshev-Lobatto
-  x/y axes and injects homogeneous Dirichlet rows on the x/y faces before
-  solving with matrix-free GMRES and a boundary-aware dense Laplacian
-  preconditioner.
+  interior Poisson residual and homogeneous Dirichlet rows on the x/y faces.
+  The runtime runner uses Chebyshev-Lobatto x/y axes, consumes the generated
+  boundary descriptors, and solves with matrix-free GMRES plus a
+  boundary-aware dense Laplacian preconditioner.
 - `tests/fixtures/elliptic/spectral_bowen_york_regularized_puncture_3d.tn` is
   the first non-manufactured puncture-like spectral Hamiltonian fixture. It uses
   a regularized single-puncture conformal factor

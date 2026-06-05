@@ -606,6 +606,13 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "  tensorium_spectral_coordinate_map_fn map;\n"
      << "  void *user_data;\n"
      << "} tensorium_spectral_coordinate_map_desc;\n\n"
+     << "typedef struct tensorium_spectral_boundary_condition_desc {\n"
+     << "  const char *face;\n"
+     << "  const char *kind;\n"
+     << "  double value_coefficient;\n"
+     << "  double normal_derivative_coefficient;\n"
+     << "  double target_value;\n"
+     << "} tensorium_spectral_boundary_condition_desc;\n\n"
      << "typedef struct tensorium_spectral_residual_system_equation_desc {\n"
      << "  const char *residual_name;\n"
      << "  const char *unknown_name;\n"
@@ -617,6 +624,8 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "  const char *const *auxiliary_names;\n"
      << "  const int64_t *auxiliary_unknown_indices;\n"
      << "  int64_t auxiliary_count;\n"
+     << "  const tensorium_spectral_boundary_condition_desc *boundary_conditions;\n"
+     << "  int64_t boundary_condition_count;\n"
      << "} tensorium_spectral_residual_system_equation_desc;\n\n"
      << "typedef struct tensorium_spectral_residual_system_desc {\n"
      << "  const char *symbol_name;\n"
@@ -932,6 +941,30 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
                              equation.auxiliaryNames);
       emitI64Array(os, eqPrefix + "_auxiliary_unknown_indices",
                    equation.auxiliaryUnknownIndices);
+      os << "static const tensorium_spectral_boundary_condition_desc "
+         << eqPrefix << "_boundary_conditions["
+         << (equation.boundaryConditions.empty()
+                 ? 1
+                 : equation.boundaryConditions.size())
+         << "] = {\n";
+      if (equation.boundaryConditions.empty()) {
+        os << "  {0, 0, 0.0, 0.0, 0.0}\n";
+      } else {
+        for (std::size_t boundaryIndex = 0;
+             boundaryIndex < equation.boundaryConditions.size();
+             ++boundaryIndex) {
+          const auto &boundary = equation.boundaryConditions[boundaryIndex];
+          os << "  {" << cStringLiteral(boundary.face) << ", "
+             << cStringLiteral(boundary.kind) << ", "
+             << boundary.valueCoefficient << ", "
+             << boundary.normalDerivativeCoefficient << ", "
+             << boundary.targetValue << "}"
+             << (boundaryIndex + 1 == equation.boundaryConditions.size()
+                     ? "\n"
+                     : ",\n");
+        }
+      }
+      os << "};\n\n";
     }
 
     os << "static const tensorium_spectral_residual_system_equation_desc "
@@ -939,7 +972,7 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
        << (system.equations.empty() ? 1 : system.equations.size())
        << "] = {\n";
     if (system.equations.empty()) {
-      os << "  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}\n";
+      os << "  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}\n";
     } else {
       for (std::size_t equationIndex = 0;
            equationIndex < system.equations.size(); ++equationIndex) {
@@ -970,6 +1003,13 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
                    : eqPrefix + "_auxiliary_unknown_indices")
            << ", "
            << static_cast<std::int64_t>(equation.auxiliaryNames.size())
+           << ", "
+           << (equation.boundaryConditions.empty()
+                   ? "0"
+                   : eqPrefix + "_boundary_conditions")
+           << ", "
+           << static_cast<std::int64_t>(
+                  equation.boundaryConditions.size())
            << "}"
            << (equationIndex + 1 == system.equations.size() ? "\n" : ",\n");
       }

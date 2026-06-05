@@ -240,6 +240,24 @@ SemanticAnalyzer::analyzeConstraint(const ConstraintDecl &decl) {
       coordIndex[idx] = -1;
     }
 
+  std::unordered_set<std::string> residualNames;
+  for (const auto &eq : decl.residuals)
+    residualNames.insert(eq.fieldName);
+  for (const auto &boundary : decl.boundaryConditions) {
+    if (!residualNames.count(boundary.residualName)) {
+      throw std::runtime_error("boundary condition references unknown residual '" +
+                               boundary.residualName + "'");
+    }
+    if (boundary.face != "lower_x1" && boundary.face != "upper_x1" &&
+        boundary.face != "lower_x2" && boundary.face != "upper_x2" &&
+        boundary.face != "lower_x3" && boundary.face != "upper_x3") {
+      throw std::runtime_error("unknown boundary face '" + boundary.face + "'");
+    }
+    if (boundary.kind != "dirichlet" && boundary.kind != "robin") {
+      throw std::runtime_error("unknown boundary kind '" + boundary.kind + "'");
+    }
+  }
+
   TensorTypeChecker checker(hasConnectionTensor);
   std::unordered_set<std::string> tempNames;
 

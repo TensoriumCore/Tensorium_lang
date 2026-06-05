@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifndef TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H
@@ -70,6 +71,14 @@ typedef struct tensorium_spectral_coordinate_map_desc {
   void *user_data;
 } tensorium_spectral_coordinate_map_desc;
 
+typedef struct tensorium_spectral_boundary_condition_desc {
+  const char *face;
+  const char *kind;
+  double value_coefficient;
+  double normal_derivative_coefficient;
+  double target_value;
+} tensorium_spectral_boundary_condition_desc;
+
 typedef struct tensorium_spectral_residual_system_equation_desc {
   const char *residual_name;
   const char *unknown_name;
@@ -81,6 +90,8 @@ typedef struct tensorium_spectral_residual_system_equation_desc {
   const char *const *auxiliary_names;
   const std::int64_t *auxiliary_unknown_indices;
   std::int64_t auxiliary_count;
+  const tensorium_spectral_boundary_condition_desc *boundary_conditions;
+  std::int64_t boundary_condition_count;
 } tensorium_spectral_residual_system_equation_desc;
 
 typedef struct tensorium_spectral_residual_system_desc {
@@ -205,6 +216,7 @@ struct SpectralGeneratedResidualSystem {
   const SpectralGrid3D *grid = nullptr;
   std::string symbolName;
   std::vector<SpectralResidualSystemEquation> equations;
+  std::vector<std::vector<SpectralBoundaryCondition>> boundaryConditions;
 
   SpectralResidualSystemProblem view() const {
     return SpectralResidualSystemProblem{

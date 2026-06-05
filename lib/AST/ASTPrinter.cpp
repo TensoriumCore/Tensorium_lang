@@ -325,6 +325,18 @@ void printProgram(const Program &prog) {
       printExpr(eq.rhs.get());
       std::cout << "\n";
     }
+    for (const auto &boundary : constraints.boundaryConditions) {
+      std::cout << "  boundary " << boundary.residualName << " "
+                << boundary.face << " " << boundary.kind;
+      if (boundary.kind == "dirichlet") {
+        std::cout << " = " << boundary.targetValue;
+      } else {
+        std::cout << "(value=" << boundary.valueCoefficient
+                  << ", normal=" << boundary.normalDerivativeCoefficient
+                  << ", target=" << boundary.targetValue << ")";
+      }
+      std::cout << "\n";
+    }
     std::cout << "}\n";
   }
 }

@@ -69,6 +69,14 @@ struct HostPrintABI {
   int rank = 0;
 };
 
+struct HostSpectralBoundaryConditionABI {
+  std::string face;
+  std::string kind;
+  double valueCoefficient = 1.0;
+  double normalDerivativeCoefficient = 0.0;
+  double targetValue = 0.0;
+};
+
 struct HostSpectralResidualSystemEquationABI {
   std::string residualName;
   std::string unknownName;
@@ -78,6 +86,7 @@ struct HostSpectralResidualSystemEquationABI {
   std::vector<std::string> params;
   std::vector<std::string> auxiliaryNames;
   std::vector<std::int64_t> auxiliaryUnknownIndices;
+  std::vector<HostSpectralBoundaryConditionABI> boundaryConditions;
 };
 
 struct HostSpectralResidualSystemABI {

@@ -363,6 +363,94 @@ ConstraintEq Parser::parseConstraintEq() {
   return eq;
 }
 
+BoundaryConditionDecl Parser::parseBoundaryConditionDecl() {
+  if (cur.type != TokenType::Identifier || cur.text != "boundary")
+    syntaxError("Expected boundary declaration");
+  advance();
+
+  BoundaryConditionDecl boundary;
+  if (cur.type != TokenType::Identifier)
+    syntaxError("boundary declaration expects residual name");
+  boundary.residualName = cur.text;
+  advance();
+
+  if (cur.type != TokenType::Identifier)
+    syntaxError("boundary declaration expects face name");
+  boundary.face = cur.text;
+  advance();
+
+  if (cur.type != TokenType::Identifier)
+    syntaxError("boundary declaration expects condition kind");
+  boundary.kind = cur.text;
+  advance();
+
+  if (boundary.kind == "dirichlet") {
+    expect(TokenType::Equals);
+    double sign = 1.0;
+    if (cur.type == TokenType::Minus) {
+      sign = -1.0;
+      advance();
+    }
+    if (cur.type != TokenType::Number)
+      syntaxError("Dirichlet boundary expects numeric target");
+    boundary.valueCoefficient = 1.0;
+    boundary.normalDerivativeCoefficient = 0.0;
+    boundary.targetValue = sign * std::stod(cur.text);
+    advance();
+  } else if (boundary.kind == "robin") {
+    expect(TokenType::LParen);
+    bool haveValue = false;
+    bool haveNormal = false;
+    bool haveTarget = false;
+    while (cur.type != TokenType::RParen && cur.type != TokenType::End) {
+      if (cur.type != TokenType::Identifier)
+        syntaxError("Robin boundary expects named coefficients");
+      const std::string name = cur.text;
+      advance();
+      expect(TokenType::Equals);
+      double sign = 1.0;
+      if (cur.type == TokenType::Minus) {
+        sign = -1.0;
+        advance();
+      }
+      if (cur.type != TokenType::Number)
+        syntaxError("Robin boundary coefficient expects number");
+      const double value = sign * std::stod(cur.text);
+      advance();
+
+      if (name == "value") {
+        boundary.valueCoefficient = value;
+        haveValue = true;
+      } else if (name == "normal") {
+        boundary.normalDerivativeCoefficient = value;
+        haveNormal = true;
+      } else if (name == "target") {
+        boundary.targetValue = value;
+        haveTarget = true;
+      } else {
+        syntaxError("unknown Robin boundary coefficient");
+      }
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      if (cur.type != TokenType::RParen)
+        syntaxError("expected ',' or ')' in Robin boundary");
+    }
+    expect(TokenType::RParen);
+    if (!haveValue && !haveNormal)
+      syntaxError("Robin boundary requires value or normal coefficient");
+    if (!haveTarget)
+      boundary.targetValue = 0.0;
+  } else {
+    syntaxError("unknown boundary condition kind");
+  }
+
+  if (cur.type == TokenType::Semicolon)
+    advance();
+  return boundary;
+}
+
 ConstraintDecl Parser::parseConstraints() {
   expect(TokenType::KwConstraints);
   if (cur.type != TokenType::Identifier)
@@ -376,11 +464,15 @@ ConstraintDecl Parser::parseConstraints() {
       constraints.residuals.push_back(parseConstraintEq());
       continue;
     }
+    if (cur.type == TokenType::Identifier && cur.text == "boundary") {
+      constraints.boundaryConditions.push_back(parseBoundaryConditionDecl());
+      continue;
+    }
     if (cur.type == TokenType::Identifier) {
       constraints.tempAssignments.push_back(parseAssignment());
       continue;
     }
-    syntaxError("Expected residual or assign");
+    syntaxError("Expected residual, boundary, or assign");
   }
   expect(TokenType::RBrace);
   return constraints;

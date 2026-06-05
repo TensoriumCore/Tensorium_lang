@@ -33,6 +33,46 @@ spectralCoordinateMapFromDesc(const tensorium_spectral_coordinate_map_desc &desc
   return SpectralCoordinateMap{desc.symbol_name, desc.map, desc.user_data};
 }
 
+inline SpectralBoundaryFace
+spectralBoundaryFaceFromName(std::string_view name) {
+  if (name == "lower_x1")
+    return SpectralBoundaryFace::LowerX1;
+  if (name == "upper_x1")
+    return SpectralBoundaryFace::UpperX1;
+  if (name == "lower_x2")
+    return SpectralBoundaryFace::LowerX2;
+  if (name == "upper_x2")
+    return SpectralBoundaryFace::UpperX2;
+  if (name == "lower_x3")
+    return SpectralBoundaryFace::LowerX3;
+  if (name == "upper_x3")
+    return SpectralBoundaryFace::UpperX3;
+  throw std::runtime_error("unknown spectral boundary face: " +
+                           std::string(name));
+}
+
+inline SpectralBoundaryConditionKind
+spectralBoundaryConditionKindFromName(std::string_view name) {
+  if (name == "dirichlet")
+    return SpectralBoundaryConditionKind::Dirichlet;
+  if (name == "robin")
+    return SpectralBoundaryConditionKind::Robin;
+  throw std::runtime_error("unknown spectral boundary condition kind: " +
+                           std::string(name));
+}
+
+inline SpectralBoundaryCondition spectralBoundaryConditionFromDesc(
+    const tensorium_spectral_boundary_condition_desc &desc) {
+  if (!desc.face || !desc.kind)
+    throw std::runtime_error("spectral boundary condition descriptor is invalid");
+  return SpectralBoundaryCondition{
+      spectralBoundaryFaceFromName(desc.face),
+      spectralBoundaryConditionKindFromName(desc.kind),
+      desc.value_coefficient,
+      desc.normal_derivative_coefficient,
+      desc.target_value};
+}
+
 inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
     const tensorium_spectral_residual_system_desc &desc,
     const SpectralGrid3D &grid,
@@ -56,6 +96,7 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
   out.grid = &grid;
   out.symbolName = desc.symbol_name;
   out.equations.reserve(static_cast<std::size_t>(desc.equation_count));
+  out.boundaryConditions.resize(static_cast<std::size_t>(desc.equation_count));
 
   for (std::int64_t i = 0; i < desc.equation_count; ++i) {
     const auto &equationDesc = desc.equations[i];
@@ -71,6 +112,14 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
     if (equationDesc.param_count < 0 || equationDesc.auxiliary_count < 0)
       throw std::runtime_error(
           "spectral residual system equation descriptor count is invalid");
+    if (equationDesc.boundary_condition_count < 0)
+      throw std::runtime_error(
+          "spectral residual system boundary count is invalid");
+    if (equationDesc.boundary_condition_count > 0 &&
+        !equationDesc.boundary_conditions) {
+      throw std::runtime_error(
+          "spectral residual system boundary descriptor is null");
+    }
     const auto &input = inputs[static_cast<std::size_t>(i)];
     if (input.params.size() !=
         static_cast<std::size_t>(equationDesc.param_count)) {
@@ -104,6 +153,19 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
       problem.gridKernel = spectralResidualGridKernelFromDesc(
           gridKernelDescs[equationDesc.grid_kernel_index]);
     }
+    auto &equationBoundaries =
+        out.boundaryConditions[static_cast<std::size_t>(i)];
+    equationBoundaries.reserve(
+        static_cast<std::size_t>(equationDesc.boundary_condition_count));
+    for (std::int64_t boundaryIndex = 0;
+         boundaryIndex < equationDesc.boundary_condition_count;
+         ++boundaryIndex) {
+      equationBoundaries.push_back(spectralBoundaryConditionFromDesc(
+          equationDesc.boundary_conditions[boundaryIndex]));
+    }
+    problem.boundaryConditions =
+        std::span<const SpectralBoundaryCondition>(equationBoundaries.data(),
+                                                   equationBoundaries.size());
 
     out.equations.push_back(SpectralResidualSystemEquation{
         problem,

@@ -30,4 +30,8 @@ constraints SpectralPoissonDirichlet3D {
   Hlocal = laplacian(u) + source
 
   residual H = Hlocal
+  boundary H lower_x1 dirichlet = 0.0
+  boundary H upper_x1 dirichlet = 0.0
+  boundary H lower_x2 dirichlet = 0.0
+  boundary H upper_x2 dirichlet = 0.0
 }

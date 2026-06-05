@@ -213,9 +213,15 @@ constraints PoissonInitialData {
 Rules:
 
 * A `constraints Name { ... }` block accepts ordinary temporary assignments and
-  `residual` equations.
+  `residual` equations. Spectral elliptic constraints may also declare boundary
+  rows:
+  `boundary H lower_x1 dirichlet = 0.0` or
+  `boundary H upper_x1 robin(value=1.0, normal=1.0, target=0.0)`.
 * Residual targets must be declared fields, with the same rank/index rules as
   evolution targets.
+* Boundary declarations attach to a residual by name and are emitted in the
+  generated host descriptor. Runtime assembly replaces the generated interior
+  residual on the selected non-periodic face.
 * The current executable ABI does not mix `constraints` and `evolution` blocks
   in one module. A solver module is either residual-kernel oriented or
   evolution-kernel oriented.

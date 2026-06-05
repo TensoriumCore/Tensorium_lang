@@ -715,6 +715,19 @@ ModuleIR BackendBuilder::build(const Program &prog,
       out.temporaries.push_back(std::move(ot));
     }
 
+    out.boundaryConditions.reserve(constraints.boundaryConditions.size());
+    for (const auto &boundary : constraints.boundaryConditions) {
+      BoundaryConditionIR bc;
+      bc.residualName = boundary.residualName;
+      bc.face = boundary.face;
+      bc.kind = boundary.kind;
+      bc.valueCoefficient = boundary.valueCoefficient;
+      bc.normalDerivativeCoefficient =
+          boundary.normalDerivativeCoefficient;
+      bc.targetValue = boundary.targetValue;
+      out.boundaryConditions.push_back(std::move(bc));
+    }
+
     mod.evolutions.push_back(std::move(out));
   }
 

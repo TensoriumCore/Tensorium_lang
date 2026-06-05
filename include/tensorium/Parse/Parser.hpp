@@ -30,6 +30,7 @@ class Parser {
   EvolutionEq parseEvolutionEq();
   EvolutionDecl parseEvolution();
   ConstraintEq parseConstraintEq();
+  BoundaryConditionDecl parseBoundaryConditionDecl();
   ConstraintDecl parseConstraints();
   SimulationConfig parseSimulation();
   TimeConfig parseTimeBlock();

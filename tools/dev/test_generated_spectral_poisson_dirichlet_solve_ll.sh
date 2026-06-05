@@ -72,6 +72,14 @@ if ! grep -q "SpectralPoissonDirichlet3D" "$HOST_HEADER"; then
   echo "error: expected Poisson Dirichlet spectral system name" >&2
   exit 2
 fi
+if ! grep -q "tensorium_spectral_boundary_condition_desc" "$HOST_HEADER"; then
+  echo "error: expected spectral boundary descriptor type" >&2
+  exit 2
+fi
+if ! grep -q "lower_x1" "$HOST_HEADER"; then
+  echo "error: expected generated lower_x1 boundary metadata" >&2
+  exit 2
+fi
 if ! grep -q "define void @tensorium_spectral_residual_grid_H" "$LL_PATH"; then
   echo "error: expected Poisson spectral grid residual LLVM definition" >&2
   exit 2
