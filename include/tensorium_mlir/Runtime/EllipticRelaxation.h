@@ -89,17 +89,30 @@ inline double l2InteriorField(const double *values, GeneratedHostGridShape shape
                               std::int64_t radius) {
   double sum = 0.0;
   std::int64_t count = 0;
+  int invalid = 0;
+  double invalidValue = 0.0;
+#pragma omp parallel for collapse(3) schedule(static) reduction(+ : sum, count)
   for (std::int64_t i = radius; i < shape.nx - radius; ++i) {
     for (std::int64_t j = radius; j < shape.ny - radius; ++j) {
       for (std::int64_t k = radius; k < shape.nz - radius; ++k) {
         const double value = values[flatGridIndex(i, j, k, shape.ny, shape.nz)];
-        if (!std::isfinite(value))
-          return value;
+        if (!std::isfinite(value)) {
+#pragma omp critical(tensorium_l2_interior_invalid)
+          {
+            if (!invalid) {
+              invalid = 1;
+              invalidValue = value;
+            }
+          }
+          continue;
+        }
         sum += value * value;
         ++count;
       }
     }
   }
+  if (invalid)
+    return invalidValue;
   return count == 0 ? 0.0 : std::sqrt(sum / static_cast<double>(count));
 }
 
@@ -113,16 +126,29 @@ inline double maxAbsInteriorField(const double *values,
                                   GeneratedHostGridShape shape,
                                   std::int64_t radius) {
   double maxValue = 0.0;
+  int invalid = 0;
+  double invalidValue = 0.0;
+#pragma omp parallel for collapse(3) schedule(static) reduction(max : maxValue)
   for (std::int64_t i = radius; i < shape.nx - radius; ++i) {
     for (std::int64_t j = radius; j < shape.ny - radius; ++j) {
       for (std::int64_t k = radius; k < shape.nz - radius; ++k) {
         const double value = values[flatGridIndex(i, j, k, shape.ny, shape.nz)];
-        if (!std::isfinite(value))
-          return value;
+        if (!std::isfinite(value)) {
+#pragma omp critical(tensorium_max_abs_interior_invalid)
+          {
+            if (!invalid) {
+              invalid = 1;
+              invalidValue = value;
+            }
+          }
+          continue;
+        }
         maxValue = std::fmax(maxValue, std::fabs(value));
       }
     }
   }
+  if (invalid)
+    return invalidValue;
   return maxValue;
 }
 
@@ -192,6 +218,7 @@ inline void applyWeightedJacobiCorrection(double *unknownField,
         "weighted Jacobi diagonal must be finite and positive");
 
   const double scale = weight / diagonal;
+#pragma omp parallel for collapse(3) schedule(static)
   for (std::int64_t i = radius; i < shape.nx - radius; ++i) {
     for (std::int64_t j = radius; j < shape.ny - radius; ++j) {
       for (std::int64_t k = radius; k < shape.nz - radius; ++k) {

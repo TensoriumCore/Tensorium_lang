@@ -1,3 +1,3 @@
 #pragma once
 
-#include "tensorium_mlir/Runtime/SpectralEllipticSolver.h"
+#include "tensorium_mlir/Runtime/GeneratedSpectralResidualSystem.h"

@@ -612,6 +612,10 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "  double value_coefficient;\n"
      << "  double normal_derivative_coefficient;\n"
      << "  double target_value;\n"
+     << "  const char *derivative_kind;\n"
+     << "  const char *value_coefficient_coordinate;\n"
+     << "  const char *normal_derivative_coefficient_coordinate;\n"
+     << "  const char *target_value_coordinate;\n"
      << "} tensorium_spectral_boundary_condition_desc;\n\n"
      << "typedef struct tensorium_spectral_residual_system_equation_desc {\n"
      << "  const char *residual_name;\n"
@@ -948,7 +952,7 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
                  : equation.boundaryConditions.size())
          << "] = {\n";
       if (equation.boundaryConditions.empty()) {
-        os << "  {0, 0, 0.0, 0.0, 0.0}\n";
+        os << "  {0, 0, 0.0, 0.0, 0.0, 0, 0, 0, 0}\n";
       } else {
         for (std::size_t boundaryIndex = 0;
              boundaryIndex < equation.boundaryConditions.size();
@@ -958,7 +962,24 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
              << cStringLiteral(boundary.kind) << ", "
              << boundary.valueCoefficient << ", "
              << boundary.normalDerivativeCoefficient << ", "
-             << boundary.targetValue << "}"
+             << boundary.targetValue << ", "
+             << cStringLiteral(boundary.derivativeKind.empty()
+                                   ? "normal"
+                                   : boundary.derivativeKind)
+             << ", "
+             << (boundary.valueCoefficientCoordinate.empty()
+                     ? "0"
+                     : cStringLiteral(boundary.valueCoefficientCoordinate))
+             << ", "
+             << (boundary.normalDerivativeCoefficientCoordinate.empty()
+                     ? "0"
+                     : cStringLiteral(
+                           boundary.normalDerivativeCoefficientCoordinate))
+             << ", "
+             << (boundary.targetValueCoordinate.empty()
+                     ? "0"
+                     : cStringLiteral(boundary.targetValueCoordinate))
+             << "}"
              << (boundaryIndex + 1 == equation.boundaryConditions.size()
                      ? "\n"
                      : ",\n");

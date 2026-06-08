@@ -4,7 +4,6 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <exception>
 #include <limits>
 #include <span>
@@ -23,9 +22,8 @@ using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
 using tensorium_mlir::runtime::SpectralPreconditionerKind;
-using tensorium_mlir::runtime::assembleSpectralResidualSystem;
-using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
-using tensorium_mlir::runtime::solveSpectralNewton;
+using tensorium_mlir::runtime::makeGeneratedSpectralResidualSystem;
+using tensorium_mlir::runtime::solveGeneratedSpectralEllipticSystem;
 
 double exactPsi(double x, double y, double z) {
   return 1.0 + 0.08 * (4.0 * x * x * x - 3.0 * x) + 0.05 * y * y +
@@ -58,15 +56,6 @@ int main() {
                   "expected at least one generated spectral grid kernel");
     static_assert(TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT >= 1,
                   "expected at least one generated spectral residual system");
-
-    const auto &systemDesc = tensorium_spectral_residual_systems[0];
-    if (!systemDesc.symbol_name ||
-        std::strcmp(systemDesc.symbol_name,
-                    "SpectralHamiltonianToyNonlinear3D") != 0 ||
-        systemDesc.unknown_count != 1 || systemDesc.equation_count != 1) {
-      throw std::runtime_error(
-          "unexpected generated nonlinear spectral system metadata");
-    }
 
     const double alpha = 0.08;
     const double mass = 0.75;
@@ -104,18 +93,17 @@ int main() {
                 std::span<const std::vector<double>>(auxiliaryFields.data(),
                                                      auxiliaryFields.size())},
         }};
-    const auto generatedSystem = makeSpectralResidualSystemFromDesc(
-        systemDesc, grid, tensorium_spectral_residual_kernels,
+    const auto generatedSystem = makeGeneratedSpectralResidualSystem(
+        tensorium_spectral_residual_systems,
+        TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT,
+        "SpectralHamiltonianToyNonlinear3D", grid,
+        tensorium_spectral_residual_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
         tensorium_spectral_residual_grid_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT,
         std::span<const SpectralGeneratedResidualSystemEquationInputs>(
-            systemInputs.data(), systemInputs.size()));
-    const auto system = generatedSystem.view();
-
-    const auto initialResidual = assembleSpectralResidualSystem(
-        system, std::span<const std::vector<double>>(solutionFields.data(),
-                                                     solutionFields.size()));
+            systemInputs.data(), systemInputs.size()),
+        1, 1);
 
     SpectralEllipticSolveOptions options;
     options.maxNewtonSteps = 8;
@@ -133,13 +121,14 @@ int main() {
     options.linearPivotTolerance = 1e-13;
     options.preconditionerPivotTolerance = 1e-12;
 
-    const auto solveResult = solveSpectralNewton(
-        system, std::span<std::vector<double>>(solutionFields.data(),
-                                               solutionFields.size()),
+    const auto run = solveGeneratedSpectralEllipticSystem(
+        generatedSystem,
+        std::span<std::vector<double>>(solutionFields.data(),
+                                       solutionFields.size()),
         options);
-    const auto finalResidual = assembleSpectralResidualSystem(
-        system, std::span<const std::vector<double>>(solutionFields.data(),
-                                                     solutionFields.size()));
+    const auto &initialResidual = run.initialResidual;
+    const auto &solveResult = run.solveResult;
+    const auto &finalResidual = run.finalResidual;
 
     std::vector<double> errors(grid.size(), 0.0);
     for (std::size_t p = 0; p < grid.size(); ++p)

@@ -2,91 +2,26 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DRIVER="$ROOT_DIR/build/tools/driver/Tensorium_cc"
-FIXTURE="$ROOT_DIR/tests/fixtures/elliptic/spectral_bowen_york_regularized_puncture_3d.tn"
-RUNNER_SRC="$ROOT_DIR/tools/dev/runtime_generated_spectral_bowen_york_puncture_continuation.cpp"
+source "$ROOT_DIR/tools/dev/generated_spectral_smoke_common.sh"
 
-if [[ -n "${CLANG:-}" ]]; then
-  CLANG_BIN="$CLANG"
-elif [[ -x /opt/llvm-20/bin/clang ]]; then
-  CLANG_BIN="/opt/llvm-20/bin/clang"
-else
-  CLANG_BIN="clang"
-fi
-if [[ -n "${LLC:-}" ]]; then
-  LLC_BIN="$LLC"
-elif [[ -x /opt/llvm-20/bin/llc ]]; then
-  LLC_BIN="/opt/llvm-20/bin/llc"
-else
-  LLC_BIN="llc"
-fi
-CXX_BIN="${CXX:-c++}"
+export TENSORIUM_BY_CONTINUATION_STAGES="$ROOT_DIR/tools/dev/bowen_york_puncture_continuation_stages.txt"
 
-LL_PATH="/tmp/tensorium_generated_spectral_bowen_york_puncture_continuation.ll"
-OBJ_PATH="/tmp/tensorium_generated_spectral_bowen_york_puncture_continuation.o"
-HOST_HEADER="/tmp/tensorium_generated_spectral_bowen_york_puncture_continuation_host.h"
-EXE_PATH="/tmp/tensorium_generated_spectral_bowen_york_puncture_continuation_runner"
-
-if [[ ! -x "$DRIVER" ]]; then
-  echo "error: missing driver binary: $DRIVER" >&2
-  exit 2
-fi
-if [[ ! -f "$FIXTURE" ]]; then
-  echo "error: missing fixture: $FIXTURE" >&2
-  exit 2
-fi
-if [[ ! -f "$RUNNER_SRC" ]]; then
-  echo "error: missing runner source: $RUNNER_SRC" >&2
-  exit 2
-fi
-
-echo "[generated-spectral-bowen-york-puncture-continuation] generating LLVM IR and host header"
-"$DRIVER" \
-  --tensorium-rhs-grid-affine-lower \
-  --tensorium-strip-source-funcs \
-  --emit-llvm "$LL_PATH" \
-  --emit-host-header "$HOST_HEADER" \
-  "$FIXTURE" >/dev/null
-
-if [[ ! -s "$LL_PATH" ]]; then
-  echo "error: LLVM IR file is missing or empty: $LL_PATH" >&2
-  exit 2
-fi
-if [[ ! -s "$HOST_HEADER" ]]; then
-  echo "error: generated host header is missing or empty: $HOST_HEADER" >&2
-  exit 2
-fi
-if ! grep -q "tensorium_spectral_residual_H" "$HOST_HEADER"; then
-  echo "error: expected Bowen-York spectral residual symbol" >&2
-  exit 2
-fi
-if ! grep -q "tensorium_spectral_residual_grid_H" "$HOST_HEADER"; then
-  echo "error: expected Bowen-York spectral grid residual symbol" >&2
-  exit 2
-fi
-if ! grep -q "TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT 1" "$HOST_HEADER"; then
-  echo "error: expected one generated spectral residual system" >&2
-  exit 2
-fi
-if ! grep -q "SpectralBowenYorkRegularizedPuncture3D" "$HOST_HEADER"; then
-  echo "error: expected Bowen-York puncture spectral system name" >&2
-  exit 2
-fi
-if ! grep -q "define void @tensorium_spectral_residual_grid_H" "$LL_PATH"; then
-  echo "error: expected Bowen-York spectral grid residual LLVM definition" >&2
-  exit 2
-fi
-
-echo "[generated-spectral-bowen-york-puncture-continuation] compiling LLVM object"
-if command -v "$LLC_BIN" >/dev/null 2>&1; then
-  "$LLC_BIN" -filetype=obj "$LL_PATH" -o "$OBJ_PATH"
-else
-  "$CLANG_BIN" -c "$LL_PATH" -o "$OBJ_PATH"
-fi
-
-echo "[generated-spectral-bowen-york-puncture-continuation] compiling runtime runner"
-"$CXX_BIN" -O0 -std=c++20 -I "$ROOT_DIR/include" -include "$HOST_HEADER" \
-  "$RUNNER_SRC" "$OBJ_PATH" -lm -o "$EXE_PATH"
-
-echo "[generated-spectral-bowen-york-puncture-continuation] running runtime executable"
-"$EXE_PATH"
+tensorium_generated_spectral_smoke \
+  "generated-spectral-bowen-york-puncture-continuation" \
+  "$ROOT_DIR/tests/fixtures/elliptic/spectral_bowen_york_regularized_puncture_3d.tn" \
+  "$ROOT_DIR/tools/dev/runtime_generated_spectral_bowen_york_puncture_continuation.cpp" \
+  "tensorium_generated_spectral_bowen_york_puncture_continuation" \
+  header "tensorium_spectral_residual_H" \
+  "error: expected Bowen-York spectral residual symbol" \
+  header "tensorium_spectral_residual_grid_H" \
+  "error: expected Bowen-York spectral grid residual symbol" \
+  header "TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT 1" \
+  "error: expected one generated spectral residual system" \
+  header "SpectralBowenYorkRegularizedPuncture3D" \
+  "error: expected Bowen-York puncture spectral system name" \
+  header "radial" \
+  "error: expected Bowen-York radial Robin boundary descriptor" \
+  header "radius" \
+  "error: expected Bowen-York radius Robin coefficient descriptor" \
+  llvm "define void @tensorium_spectral_residual_grid_H" \
+  "error: expected Bowen-York spectral grid residual LLVM definition"

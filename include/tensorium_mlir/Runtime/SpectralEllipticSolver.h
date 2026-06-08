@@ -2,6 +2,7 @@
 
 #include "tensorium_mlir/Runtime/SpectralResidualJVP.h"
 
+#include <atomic>
 #include <complex>
 
 namespace tensorium_mlir::runtime {
@@ -518,20 +519,23 @@ inline bool applySpectralPreconditioner(
 
 inline std::vector<double> buildSpectralLaplacianShiftMatrix(
     const SpectralGrid3D &grid, double shift,
-    std::span<const SpectralBoundaryCondition> boundaryConditions = {}) {
+    std::span<const SpectralBoundaryCondition> boundaryConditions = {},
+    const SpectralCoordinateMap &coordinateMap = {},
+    std::span<const double> coordinateParams = {}) {
   const std::size_t n = grid.size();
   std::vector<double> matrix(n * n, 0.0);
-  std::vector<double> basis(n, 0.0);
+#pragma omp parallel for schedule(dynamic)
   for (std::size_t col = 0; col < n; ++col) {
+    std::vector<double> basis(n, 0.0);
     basis[col] = 1.0;
     const auto derivs = grid.derivatives(basis);
     std::vector<double> column(n, 0.0);
-    basis[col] = 0.0;
     for (std::size_t row = 0; row < n; ++row)
       column[row] = derivs.d11[row] + derivs.d22[row] + derivs.d33[row];
     column[col] += shift;
-    applySpectralBoundaryConditionLinearizations(grid, derivs,
-                                                 boundaryConditions, column);
+    applySpectralBoundaryConditionLinearizations(
+        grid, derivs, boundaryConditions, column, coordinateMap,
+        coordinateParams);
     for (std::size_t row = 0; row < n; ++row)
       matrix[row * n + col] = column[row];
   }
@@ -621,7 +625,8 @@ inline bool buildSpectralScalarPreconditioner(
     preconditioner.blockSize = grid.size();
     preconditioner.denseBlocks.push_back(buildSpectralLaplacianShiftMatrix(
         grid, options.preconditionerLaplacianShift,
-        problem.boundaryConditions));
+        problem.boundaryConditions, problem.coordinateMap,
+        problem.coordinateParams));
     return true;
   }
   if (options.gmresPreconditioner ==
@@ -790,19 +795,28 @@ inline bool buildDenseSpectralJacobianByJVP(
     return false;
 
   jacobian.assign(n * n, 0.0);
-  std::vector<double> direction(n, 0.0);
-  for (std::size_t col = 0; col < n; ++col) {
-    direction[col] = 1.0;
-    const auto jvp =
-        evaluateSpectralJacobianVectorProduct(problem, values, direction,
-                                              options.jvpOptions);
-    direction[col] = 0.0;
-    if (!jvp.finite || jvp.values.size() != n)
-      return false;
-    for (std::size_t row = 0; row < n; ++row)
-      jacobian[row * n + col] = jvp.values[row];
+  std::atomic<int> ok{1};
+#pragma omp parallel
+  {
+    std::vector<double> direction(n, 0.0);
+#pragma omp for schedule(dynamic)
+    for (std::size_t col = 0; col < n; ++col) {
+      if (!ok.load(std::memory_order_relaxed))
+        continue;
+      direction[col] = 1.0;
+      const auto jvp =
+          evaluateSpectralJacobianVectorProduct(problem, values, direction,
+                                                options.jvpOptions);
+      direction[col] = 0.0;
+      if (!jvp.finite || jvp.values.size() != n) {
+        ok.store(0, std::memory_order_relaxed);
+        continue;
+      }
+      for (std::size_t row = 0; row < n; ++row)
+        jacobian[row * n + col] = jvp.values[row];
+    }
   }
-  return true;
+  return ok.load(std::memory_order_relaxed) != 0;
 }
 
 inline bool validateSpectralSystemSolveLayout(
@@ -931,6 +945,15 @@ spectralBoundaryConditionsForUnknownBlock(
   return {};
 }
 
+inline const SpectralResidualProblem *spectralResidualProblemForUnknownBlock(
+    const SpectralResidualSystemProblem &system, std::size_t unknownBlock) {
+  for (const auto &equation : system.equations) {
+    if (equation.unknownIndex == unknownBlock)
+      return &equation.problem;
+  }
+  return nullptr;
+}
+
 inline bool buildSpectralSystemPreconditioner(
     const SpectralResidualSystemProblem &system,
     std::span<const std::vector<double>> values,
@@ -953,9 +976,15 @@ inline bool buildSpectralSystemPreconditioner(
     preconditioner.blockSize = grid.size();
     preconditioner.denseBlocks.reserve(fieldCount);
     for (std::size_t block = 0; block < fieldCount; ++block) {
+      const SpectralResidualProblem *blockProblem =
+          spectralResidualProblemForUnknownBlock(system, block);
       preconditioner.denseBlocks.push_back(buildSpectralLaplacianShiftMatrix(
           grid, spectralPreconditionerShiftForBlock(options, block),
-          spectralBoundaryConditionsForUnknownBlock(system, block)));
+          blockProblem ? blockProblem->boundaryConditions
+                       : std::span<const SpectralBoundaryCondition>(),
+          blockProblem ? blockProblem->coordinateMap : SpectralCoordinateMap{},
+          blockProblem ? blockProblem->coordinateParams
+                       : std::span<const double>()));
     }
     return true;
   }
@@ -1109,24 +1138,33 @@ inline bool buildDenseSpectralSystemJacobianByJVP(
     return false;
 
   jacobian.assign(n * n, 0.0);
-  std::vector<std::vector<double>> directionFields(
-      fieldCount, std::vector<double>(grid.size(), 0.0));
-  for (std::size_t col = 0; col < n; ++col) {
-    const std::size_t field = col / grid.size();
-    const std::size_t point = col % grid.size();
-    directionFields[field][point] = 1.0;
-    const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
-        system, values,
-        std::span<const std::vector<double>>(directionFields.data(),
-                                             directionFields.size()),
-        options.jvpOptions);
-    directionFields[field][point] = 0.0;
-    if (!jvp.finite || jvp.values.size() != n)
-      return false;
-    for (std::size_t row = 0; row < n; ++row)
-      jacobian[row * n + col] = jvp.values[row];
+  std::atomic<int> ok{1};
+#pragma omp parallel
+  {
+    std::vector<std::vector<double>> directionFields(
+        fieldCount, std::vector<double>(grid.size(), 0.0));
+#pragma omp for schedule(dynamic)
+    for (std::size_t col = 0; col < n; ++col) {
+      if (!ok.load(std::memory_order_relaxed))
+        continue;
+      const std::size_t field = col / grid.size();
+      const std::size_t point = col % grid.size();
+      directionFields[field][point] = 1.0;
+      const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
+          system, values,
+          std::span<const std::vector<double>>(directionFields.data(),
+                                               directionFields.size()),
+          options.jvpOptions);
+      directionFields[field][point] = 0.0;
+      if (!jvp.finite || jvp.values.size() != n) {
+        ok.store(0, std::memory_order_relaxed);
+        continue;
+      }
+      for (std::size_t row = 0; row < n; ++row)
+        jacobian[row * n + col] = jvp.values[row];
+    }
   }
-  return true;
+  return ok.load(std::memory_order_relaxed) != 0;
 }
 
 inline void updateSpectralSolveResidualState(

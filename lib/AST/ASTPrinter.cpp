@@ -331,9 +331,24 @@ void printProgram(const Program &prog) {
       if (boundary.kind == "dirichlet") {
         std::cout << " = " << boundary.targetValue;
       } else {
-        std::cout << "(value=" << boundary.valueCoefficient
-                  << ", normal=" << boundary.normalDerivativeCoefficient
-                  << ", target=" << boundary.targetValue << ")";
+        auto printCoefficient = [](double constant,
+                                   const std::string &coordinate) {
+          if (!coordinate.empty())
+            std::cout << coordinate;
+          else
+            std::cout << constant;
+        };
+        std::cout << "(value=";
+        printCoefficient(boundary.valueCoefficient,
+                         boundary.valueCoefficientCoordinate);
+        std::cout << ", normal=";
+        printCoefficient(boundary.normalDerivativeCoefficient,
+                         boundary.normalDerivativeCoefficientCoordinate);
+        std::cout << ", target=";
+        printCoefficient(boundary.targetValue,
+                         boundary.targetValueCoordinate);
+        std::cout << ", derivative=" << boundary.derivativeKind;
+        std::cout << ")";
       }
       std::cout << "\n";
     }

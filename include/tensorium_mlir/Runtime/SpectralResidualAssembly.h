@@ -70,7 +70,13 @@ inline SpectralBoundaryCondition spectralBoundaryConditionFromDesc(
       spectralBoundaryConditionKindFromName(desc.kind),
       desc.value_coefficient,
       desc.normal_derivative_coefficient,
-      desc.target_value};
+      desc.target_value,
+      desc.derivative_kind ? desc.derivative_kind : "normal",
+      desc.value_coefficient_coordinate ? desc.value_coefficient_coordinate : "",
+      desc.normal_derivative_coefficient_coordinate
+          ? desc.normal_derivative_coefficient_coordinate
+          : "",
+      desc.target_value_coordinate ? desc.target_value_coordinate : ""};
 }
 
 inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
@@ -306,33 +312,116 @@ inline double spectralBoundaryNormalDerivative(
   return spectralBoundaryFaceIsLower(face) ? -derivative : derivative;
 }
 
+inline double spectralBoundaryRadialDerivative(
+    const SpectralDerivatives3D &derivs, std::size_t pointIndex,
+    const std::array<double, 3> &physical) {
+  const double radius =
+      std::sqrt(physical[0] * physical[0] + physical[1] * physical[1] +
+                physical[2] * physical[2]);
+  if (!(radius > 0.0) || !std::isfinite(radius))
+    throw std::runtime_error(
+        "radial spectral boundary derivative is undefined at radius zero");
+  return (physical[0] * derivs.d1[pointIndex] +
+          physical[1] * derivs.d2[pointIndex] +
+          physical[2] * derivs.d3[pointIndex]) /
+         radius;
+}
+
+inline std::array<double, 3> spectralBoundaryPhysicalCoordinates(
+    const SpectralGrid3D &grid, std::size_t i, std::size_t j, std::size_t k,
+    const SpectralCoordinateMap &coordinateMap,
+    std::span<const double> coordinateParams) {
+  const SpectralPoint3D point = grid.point(i, j, k);
+  std::array<double, 3> logical{point.x1, point.x2, point.x3};
+  std::array<double, 3> physical = logical;
+  if (coordinateMap.map) {
+    coordinateMap.map(logical.data(), physical.data(), coordinateParams.data(),
+                      static_cast<std::int64_t>(coordinateParams.size()),
+                      coordinateMap.userData);
+  }
+  return physical;
+}
+
+inline double spectralBoundaryCoordinateValue(
+    std::string_view coordinate, const std::array<double, 3> &physical) {
+  if (coordinate == "x1" || coordinate == "x")
+    return physical[0];
+  if (coordinate == "x2" || coordinate == "y")
+    return physical[1];
+  if (coordinate == "x3" || coordinate == "z")
+    return physical[2];
+  if (coordinate == "r" || coordinate == "radius") {
+    return std::sqrt(physical[0] * physical[0] + physical[1] * physical[1] +
+                     physical[2] * physical[2]);
+  }
+  throw std::runtime_error("unknown spectral boundary coordinate: " +
+                           std::string(coordinate));
+}
+
+inline double spectralBoundaryCoefficient(
+    double constant, const std::string &coordinate,
+    const std::array<double, 3> &physical) {
+  if (coordinate.empty())
+    return constant;
+  return spectralBoundaryCoordinateValue(coordinate, physical);
+}
+
+inline double spectralBoundarySelectedDerivative(
+    const SpectralBoundaryCondition &condition,
+    const SpectralDerivatives3D &derivs, std::size_t pointIndex,
+    const std::array<double, 3> &physical) {
+  if (condition.derivativeKind.empty() || condition.derivativeKind == "normal")
+    return spectralBoundaryNormalDerivative(derivs, condition.face, pointIndex);
+  if (condition.derivativeKind == "radial")
+    return spectralBoundaryRadialDerivative(derivs, pointIndex, physical);
+  throw std::runtime_error("unknown spectral boundary derivative kind: " +
+                           condition.derivativeKind);
+}
+
 inline double evaluateSpectralBoundaryCondition(
     const SpectralBoundaryCondition &condition,
-    const SpectralDerivatives3D &derivs, std::size_t pointIndex) {
+    const SpectralDerivatives3D &derivs, std::size_t pointIndex,
+    const std::array<double, 3> &physical) {
   if (condition.kind == SpectralBoundaryConditionKind::Dirichlet) {
-    return derivs.value[pointIndex] - condition.targetValue;
+    return derivs.value[pointIndex] -
+           spectralBoundaryCoefficient(condition.targetValue,
+                                       condition.targetValueCoordinate,
+                                       physical);
   }
   if (condition.kind == SpectralBoundaryConditionKind::Robin) {
-    return condition.valueCoefficient * derivs.value[pointIndex] +
-           condition.normalDerivativeCoefficient *
-               spectralBoundaryNormalDerivative(derivs, condition.face,
-                                                pointIndex) -
-           condition.targetValue;
+    return spectralBoundaryCoefficient(condition.valueCoefficient,
+                                       condition.valueCoefficientCoordinate,
+                                       physical) *
+               derivs.value[pointIndex] +
+           spectralBoundaryCoefficient(
+               condition.normalDerivativeCoefficient,
+               condition.normalDerivativeCoefficientCoordinate, physical) *
+               spectralBoundarySelectedDerivative(condition, derivs, pointIndex,
+                                                  physical) -
+           spectralBoundaryCoefficient(condition.targetValue,
+                                       condition.targetValueCoordinate,
+                                       physical);
   }
   throw std::runtime_error("unknown spectral boundary condition kind");
 }
 
 inline double evaluateSpectralBoundaryConditionLinearization(
     const SpectralBoundaryCondition &condition,
-    const SpectralDerivatives3D &derivs, std::size_t pointIndex) {
+    const SpectralDerivatives3D &derivs, std::size_t pointIndex,
+    const std::array<double, 3> &physical) {
   if (condition.kind == SpectralBoundaryConditionKind::Dirichlet) {
     return derivs.value[pointIndex];
   }
   if (condition.kind == SpectralBoundaryConditionKind::Robin) {
-    return condition.valueCoefficient * derivs.value[pointIndex] +
-           condition.normalDerivativeCoefficient *
-               spectralBoundaryNormalDerivative(derivs, condition.face,
-                                                pointIndex);
+    return spectralBoundaryCoefficient(condition.valueCoefficient,
+                                       condition.valueCoefficientCoordinate,
+                                       physical) *
+               derivs.value[pointIndex] +
+           spectralBoundaryCoefficient(
+               condition.normalDerivativeCoefficient,
+               condition.normalDerivativeCoefficientCoordinate, physical) *
+               spectralBoundarySelectedDerivative(condition, derivs, pointIndex,
+                                                  physical);
   }
   throw std::runtime_error("unknown spectral boundary condition kind");
 }
@@ -340,7 +429,9 @@ inline double evaluateSpectralBoundaryConditionLinearization(
 inline void applySpectralBoundaryConditions(
     const SpectralGrid3D &grid, const SpectralDerivatives3D &derivs,
     std::span<const SpectralBoundaryCondition> conditions,
-    std::vector<double> &residual) {
+    std::vector<double> &residual,
+    const SpectralCoordinateMap &coordinateMap = {},
+    std::span<const double> coordinateParams = {}) {
   if (conditions.empty())
     return;
   validateSpectralDerivativeBundle(grid, derivs);
@@ -353,14 +444,17 @@ inline void applySpectralBoundaryConditions(
       throw std::runtime_error(
           "cannot impose a boundary condition on a periodic spectral axis");
 
+#pragma omp parallel for collapse(3) schedule(static)
     for (std::size_t k = 0; k < grid.n3(); ++k) {
       for (std::size_t j = 0; j < grid.n2(); ++j) {
         for (std::size_t i = 0; i < grid.n1(); ++i) {
           if (!spectralPointIsOnBoundaryFace(grid, condition.face, i, j, k))
             continue;
           const std::size_t pointIndex = grid.index(i, j, k);
-          residual[pointIndex] =
-              evaluateSpectralBoundaryCondition(condition, derivs, pointIndex);
+          const auto physical = spectralBoundaryPhysicalCoordinates(
+              grid, i, j, k, coordinateMap, coordinateParams);
+          residual[pointIndex] = evaluateSpectralBoundaryCondition(
+              condition, derivs, pointIndex, physical);
         }
       }
     }
@@ -370,7 +464,9 @@ inline void applySpectralBoundaryConditions(
 inline void applySpectralBoundaryConditionLinearizations(
     const SpectralGrid3D &grid, const SpectralDerivatives3D &derivs,
     std::span<const SpectralBoundaryCondition> conditions,
-    std::vector<double> &residualColumn) {
+    std::vector<double> &residualColumn,
+    const SpectralCoordinateMap &coordinateMap = {},
+    std::span<const double> coordinateParams = {}) {
   if (conditions.empty())
     return;
   validateSpectralDerivativeBundle(grid, derivs);
@@ -384,15 +480,19 @@ inline void applySpectralBoundaryConditionLinearizations(
       throw std::runtime_error(
           "cannot impose a boundary condition on a periodic spectral axis");
 
+#pragma omp parallel for collapse(3) schedule(static)
     for (std::size_t k = 0; k < grid.n3(); ++k) {
       for (std::size_t j = 0; j < grid.n2(); ++j) {
         for (std::size_t i = 0; i < grid.n1(); ++i) {
           if (!spectralPointIsOnBoundaryFace(grid, condition.face, i, j, k))
             continue;
           const std::size_t pointIndex = grid.index(i, j, k);
+          const auto physical = spectralBoundaryPhysicalCoordinates(
+              grid, i, j, k, coordinateMap, coordinateParams);
           residualColumn[pointIndex] =
               evaluateSpectralBoundaryConditionLinearization(condition, derivs,
-                                                             pointIndex);
+                                                             pointIndex,
+                                                             physical);
         }
       }
     }
@@ -462,19 +562,23 @@ inline std::vector<double> evaluateSpectralResidualWithAuxFields(
   }
 
   std::vector<double> out(grid.size(), 0.0);
-  std::vector<double> pointAux(auxiliaryFields.size(), 0.0);
-  for (std::size_t k = 0; k < grid.n3(); ++k) {
-    for (std::size_t j = 0; j < grid.n2(); ++j) {
-      for (std::size_t i = 0; i < grid.n1(); ++i) {
-        const std::size_t pointIndex = grid.index(i, j, k);
-        for (std::size_t aux = 0; aux < auxiliaryFields.size(); ++aux)
-          pointAux[aux] = auxiliaryFields[aux][pointIndex];
-        const auto point = makeSpectralResidualPoint(
-            grid, derivs, i, j, k, coordinateMap, coordinateParams, pointAux);
-        out[static_cast<std::size_t>(point.index)] =
-            kernel.evaluate(&point, params.data(),
-                            static_cast<std::int64_t>(params.size()),
-                            kernel.userData);
+#pragma omp parallel
+  {
+    std::vector<double> pointAux(auxiliaryFields.size(), 0.0);
+#pragma omp for collapse(3) schedule(static)
+    for (std::size_t k = 0; k < grid.n3(); ++k) {
+      for (std::size_t j = 0; j < grid.n2(); ++j) {
+        for (std::size_t i = 0; i < grid.n1(); ++i) {
+          const std::size_t pointIndex = grid.index(i, j, k);
+          for (std::size_t aux = 0; aux < auxiliaryFields.size(); ++aux)
+            pointAux[aux] = auxiliaryFields[aux][pointIndex];
+          const auto point = makeSpectralResidualPoint(
+              grid, derivs, i, j, k, coordinateMap, coordinateParams, pointAux);
+          out[static_cast<std::size_t>(point.index)] =
+              kernel.evaluate(&point, params.data(),
+                              static_cast<std::int64_t>(params.size()),
+                              kernel.userData);
+        }
       }
     }
   }
@@ -518,18 +622,13 @@ inline std::array<std::vector<double>, 3> makeSpectralPhysicalCoordinateBuffers(
       std::vector<double>(grid.size(), 0.0),
       std::vector<double>(grid.size(), 0.0)};
 
-  double logical[3] = {0.0, 0.0, 0.0};
-  double physical[3] = {0.0, 0.0, 0.0};
+#pragma omp parallel for collapse(3) schedule(static)
   for (std::size_t k = 0; k < grid.n3(); ++k) {
     for (std::size_t j = 0; j < grid.n2(); ++j) {
       for (std::size_t i = 0; i < grid.n1(); ++i) {
         const SpectralPoint3D point = grid.point(i, j, k);
-        logical[0] = point.x1;
-        logical[1] = point.x2;
-        logical[2] = point.x3;
-        physical[0] = point.x1;
-        physical[1] = point.x2;
-        physical[2] = point.x3;
+        double logical[3] = {point.x1, point.x2, point.x3};
+        double physical[3] = {point.x1, point.x2, point.x3};
         if (coordinateMap.map) {
           coordinateMap.map(logical, physical, coordinateParams.data(),
                             static_cast<std::int64_t>(
@@ -601,7 +700,8 @@ inline SpectralResidualAssemblyResult assembleSpectralResidual(
         problem.coordinateMap, problem.coordinateParams);
   }
   applySpectralBoundaryConditions(grid, derivs, problem.boundaryConditions,
-                                  values);
+                                  values, problem.coordinateMap,
+                                  problem.coordinateParams);
   return makeSpectralResidualAssemblyResult(std::move(values),
                                             usedGeneratedGridKernel);
 }

@@ -822,29 +822,36 @@ void emitOneSpectralResidualGrid(mlir::OpBuilder &b, mlir::Location loc,
 
   mlir::Value c0 = b.create<mlir::arith::ConstantIndexOp>(loc, 0);
   mlir::Value c1 = b.create<mlir::arith::ConstantIndexOp>(loc, 1);
-  auto loop = b.create<mlir::scf::ForOp>(loc, c0, nPoints, c1);
-  b.setInsertionPointToStart(loop.getBody());
-  mlir::Value p = loop.getInductionVar();
+  auto parallel = b.create<mlir::scf::ParallelOp>(
+      loc, llvm::SmallVector<mlir::Value, 1>{c0},
+      llvm::SmallVector<mlir::Value, 1>{nPoints},
+      llvm::SmallVector<mlir::Value, 1>{c1},
+      [&](mlir::OpBuilder &ib, mlir::Location nestedLoc,
+          mlir::ValueRange ivs) {
+        mlir::Value p = ivs.front();
 
-  llvm::SmallVector<mlir::Value, 24> callArgs;
-  for (mlir::Value buffer : derivativeBuffers)
-    callArgs.push_back(
-        b.create<mlir::memref::LoadOp>(loc, buffer, mlir::ValueRange{p}));
-  for (mlir::Value buffer : auxiliaryBuffers)
-    callArgs.push_back(
-        b.create<mlir::memref::LoadOp>(loc, buffer, mlir::ValueRange{p}));
-  for (std::size_t i = 0; i < 3; ++i)
-    callArgs.push_back(
-        b.create<mlir::memref::LoadOp>(loc, coordBuffers[i],
-                                       mlir::ValueRange{p}));
-  callArgs.append(paramValues.begin(), paramValues.end());
+        llvm::SmallVector<mlir::Value, 24> callArgs;
+        for (mlir::Value buffer : derivativeBuffers) {
+          callArgs.push_back(ib.create<mlir::memref::LoadOp>(
+              nestedLoc, buffer, mlir::ValueRange{p}));
+        }
+        for (mlir::Value buffer : auxiliaryBuffers) {
+          callArgs.push_back(ib.create<mlir::memref::LoadOp>(
+              nestedLoc, buffer, mlir::ValueRange{p}));
+        }
+        for (std::size_t i = 0; i < 3; ++i) {
+          callArgs.push_back(ib.create<mlir::memref::LoadOp>(
+              nestedLoc, coordBuffers[i], mlir::ValueRange{p}));
+        }
+        callArgs.append(paramValues.begin(), paramValues.end());
 
-  auto result = b.create<mlir::func::CallOp>(
-      loc, pointSymbol, mlir::TypeRange{f64}, callArgs);
-  b.create<mlir::memref::StoreOp>(loc, result.getResult(0), outputBuffer,
-                                  mlir::ValueRange{p});
+        auto result = ib.create<mlir::func::CallOp>(
+            nestedLoc, pointSymbol, mlir::TypeRange{f64}, callArgs);
+        ib.create<mlir::memref::StoreOp>(nestedLoc, result.getResult(0),
+                                         outputBuffer, mlir::ValueRange{p});
+      });
 
-  b.setInsertionPointAfter(loop);
+  b.setInsertionPointAfter(parallel);
   b.create<mlir::func::ReturnOp>(loc);
   moduleOp.push_back(fn);
 }

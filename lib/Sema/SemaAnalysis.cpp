@@ -256,6 +256,30 @@ SemanticAnalyzer::analyzeConstraint(const ConstraintDecl &decl) {
     if (boundary.kind != "dirichlet" && boundary.kind != "robin") {
       throw std::runtime_error("unknown boundary kind '" + boundary.kind + "'");
     }
+    if (boundary.derivativeKind != "normal" &&
+        boundary.derivativeKind != "radial") {
+      throw std::runtime_error("unknown boundary derivative kind '" +
+                               boundary.derivativeKind + "'");
+    }
+    auto validateBoundaryCoordinate = [](const std::string &coordinate) {
+      return coordinate.empty() || coordinate == "x1" || coordinate == "x2" ||
+             coordinate == "x3" || coordinate == "x" || coordinate == "y" ||
+             coordinate == "z" || coordinate == "r" || coordinate == "radius";
+    };
+    if (!validateBoundaryCoordinate(boundary.valueCoefficientCoordinate)) {
+      throw std::runtime_error("unknown boundary coordinate '" +
+                               boundary.valueCoefficientCoordinate + "'");
+    }
+    if (!validateBoundaryCoordinate(
+            boundary.normalDerivativeCoefficientCoordinate)) {
+      throw std::runtime_error(
+          "unknown boundary coordinate '" +
+          boundary.normalDerivativeCoefficientCoordinate + "'");
+    }
+    if (!validateBoundaryCoordinate(boundary.targetValueCoordinate)) {
+      throw std::runtime_error("unknown boundary coordinate '" +
+                               boundary.targetValueCoordinate + "'");
+    }
   }
 
   TensorTypeChecker checker(hasConnectionTensor);

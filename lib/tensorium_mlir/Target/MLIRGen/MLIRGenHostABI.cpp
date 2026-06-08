@@ -473,6 +473,12 @@ std::vector<HostSpectralResidualSystemABI> hostSpectralResidualSystems(
         condition.normalDerivativeCoefficient =
             boundary.normalDerivativeCoefficient;
         condition.targetValue = boundary.targetValue;
+        condition.derivativeKind = boundary.derivativeKind;
+        condition.valueCoefficientCoordinate =
+            boundary.valueCoefficientCoordinate;
+        condition.normalDerivativeCoefficientCoordinate =
+            boundary.normalDerivativeCoefficientCoordinate;
+        condition.targetValueCoordinate = boundary.targetValueCoordinate;
         equation.boundaryConditions.push_back(std::move(condition));
       }
       system.equations.push_back(std::move(equation));

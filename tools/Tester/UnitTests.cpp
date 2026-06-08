@@ -11,6 +11,7 @@
 #include "tensorium_mlir/Runtime/GeneratedHostStorage.h"
 #include "tensorium_mlir/Runtime/HostBuffers.h"
 #include "tensorium_mlir/Runtime/SpectralGrid.h"
+#include "tensorium_mlir/Runtime/SpectralResidualAssembly.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
@@ -3493,6 +3494,86 @@ static bool testLoweredGridHostABIDescriptor() {
   return true;
 }
 
+static bool testSpectralRobinCoordinateBoundaryHostABI() {
+  const char *source = R"tn(
+field scalar u
+field scalar H
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [5,5,8]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralRobinCoordinate3D {
+  residual H = laplacian(u)
+  boundary H upper_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+}
+)tn";
+
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+
+  backend::ModuleIR mod =
+      buildModuleFromSource(source, CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  if (!verifyCanonicalIR(mod, "spectral robin coordinate boundary"))
+    return false;
+
+  ::mlir::MLIRContext ctx;
+  bool pipelineOk = true;
+  auto module = tensorium_mlir::buildMLIRModule(mod, ctx, opts, &pipelineOk);
+  if (!pipelineOk) {
+    std::cerr << "FAIL: MLIR pipeline failed for coordinate Robin boundary\n";
+    return false;
+  }
+
+  const auto abi = tensorium_mlir::buildHostModuleABI(mod, *module);
+  if (abi.spectralResidualSystems.size() != 1 ||
+      abi.spectralResidualSystems[0].equations.size() != 1 ||
+      abi.spectralResidualSystems[0].equations[0].boundaryConditions.size() !=
+          1) {
+    std::cerr << "FAIL: coordinate Robin boundary descriptor count mismatch\n";
+    return false;
+  }
+
+  const auto &boundary =
+      abi.spectralResidualSystems[0].equations[0].boundaryConditions[0];
+  if (boundary.face != "upper_x1" || boundary.kind != "robin" ||
+      boundary.valueCoefficient != 1.0 ||
+      boundary.normalDerivativeCoefficient != 0.0 ||
+      boundary.targetValue != 0.0 ||
+      boundary.derivativeKind != "radial" ||
+      !boundary.valueCoefficientCoordinate.empty() ||
+      boundary.normalDerivativeCoefficientCoordinate != "radius" ||
+      !boundary.targetValueCoordinate.empty()) {
+    std::cerr << "FAIL: coordinate Robin boundary descriptor mismatch\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testHostFieldStoragePlanDeduplicatesBuffers() {
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableMetricLoweringPass = true;
@@ -5430,6 +5511,64 @@ static bool testSpectralChebyshevLobattoAxisHasBoundaryPoints() {
   return true;
 }
 
+static bool testSpectralRadialRobinBoundaryResidual() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralBoundaryCondition;
+  using tensorium_mlir::runtime::SpectralBoundaryConditionKind;
+  using tensorium_mlir::runtime::SpectralBoundaryFace;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::applySpectralBoundaryConditions;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevLobatto(3, -1.0, 1.0),
+                      SpectralAxis::chebyshevLobatto(3, -1.0, 1.0),
+                      SpectralAxis::chebyshevLobatto(3, -1.0, 1.0));
+  std::vector<double> values(grid.size(), 0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double z = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double x = grid.axis(0).points[i];
+        values[grid.index(i, j, k)] = x * x + y * y + z * z;
+      }
+    }
+  }
+
+  SpectralBoundaryCondition condition;
+  condition.face = SpectralBoundaryFace::UpperX1;
+  condition.kind = SpectralBoundaryConditionKind::Robin;
+  condition.valueCoefficient = 0.0;
+  condition.normalDerivativeCoefficient = 0.0;
+  condition.normalDerivativeCoefficientCoordinate = "radius";
+  condition.derivativeKind = "radial";
+
+  const auto derivs = grid.derivatives(values);
+  std::vector<double> residual(grid.size(), 0.0);
+  applySpectralBoundaryConditions(
+      grid, derivs,
+      std::span<const SpectralBoundaryCondition>(&condition, 1), residual);
+
+  double maxErr = 0.0;
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double z = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      const std::size_t i = 0;
+      const double x = grid.axis(0).points[i];
+      const std::size_t p = grid.index(i, j, k);
+      const double radius2 = x * x + y * y + z * z;
+      maxErr = std::max(maxErr, std::abs(residual[p] - 2.0 * radius2));
+    }
+  }
+
+  if (maxErr > 1e-12) {
+    std::cerr << "FAIL: radial Robin boundary residual mismatch max="
+              << maxErr << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSpectralDerivativeBundleAnalyticMixedTerms() {
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralGrid3D;
@@ -5630,6 +5769,8 @@ int main() {
        &testLoweredGridHostHeaderEmission},
       {"testLoweredGridHostABIDescriptor",
        &testLoweredGridHostABIDescriptor},
+      {"testSpectralRobinCoordinateBoundaryHostABI",
+       &testSpectralRobinCoordinateBoundaryHostABI},
       {"testHostFieldStoragePlanDeduplicatesBuffers",
        &testHostFieldStoragePlanDeduplicatesBuffers},
       {"testGeneratedHostStorageConsumesDescriptorTables",
@@ -5642,6 +5783,8 @@ int main() {
        &testSpectralGridManufacturedPoisson},
       {"testSpectralChebyshevLobattoAxisHasBoundaryPoints",
        &testSpectralChebyshevLobattoAxisHasBoundaryPoints},
+      {"testSpectralRadialRobinBoundaryResidual",
+       &testSpectralRadialRobinBoundaryResidual},
       {"testSpectralDerivativeBundleAnalyticMixedTerms",
        &testSpectralDerivativeBundleAnalyticMixedTerms},
       {"testSpectralPointwisePoissonResidualIsAnalyticallyZero",

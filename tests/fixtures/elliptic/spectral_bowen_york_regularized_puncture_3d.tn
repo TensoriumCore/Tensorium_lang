@@ -7,6 +7,8 @@
 # The puncture radius is regularized with eps2 so the current global spectral
 # grid can exercise the nonlinear residual before exact puncture/domain
 # treatment exists.
+# The bounded spectral smoke imposes a first asymptotic cube boundary:
+#   u + r d_r u = 0
 extern scalar sqrt(scalar)
 
 field scalar u
@@ -54,4 +56,10 @@ constraints SpectralBowenYorkRegularizedPuncture3D {
   Hlocal = laplacian(u) + 0.125 * A2 / psi7
 
   residual H = Hlocal
+  boundary H lower_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary H upper_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary H lower_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary H upper_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary H lower_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary H upper_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
 }

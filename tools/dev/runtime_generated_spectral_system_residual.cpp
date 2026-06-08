@@ -4,7 +4,6 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <exception>
 #include <limits>
 #include <span>
@@ -28,8 +27,8 @@ using tensorium_mlir::runtime::SpectralResidualSystemEquation;
 using tensorium_mlir::runtime::SpectralResidualSystemProblem;
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
 using tensorium_mlir::runtime::evaluateSpectralResidualSystemJacobianVectorProduct;
-using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
-using tensorium_mlir::runtime::solveSpectralNewton;
+using tensorium_mlir::runtime::makeGeneratedSpectralResidualSystem;
+using tensorium_mlir::runtime::solveGeneratedSpectralEllipticSystem;
 
 double exactU(double x, double y, double z) {
   return (4.0 * x * x * x - 3.0 * x) + 0.5 * y * y +
@@ -85,13 +84,6 @@ int main() {
     static_assert(TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT >= 1,
                   "expected at least one generated spectral residual system");
 
-    const auto &systemDesc = tensorium_spectral_residual_systems[0];
-    if (!systemDesc.symbol_name ||
-        std::strcmp(systemDesc.symbol_name, "SpectralTwoFieldSystem3D") != 0 ||
-        systemDesc.unknown_count != 2 || systemDesc.equation_count != 2) {
-      throw std::runtime_error("unexpected generated spectral system metadata");
-    }
-
     const double alpha = 0.5;
     const double beta = -0.35;
     const double coupling = 0.125;
@@ -140,13 +132,16 @@ int main() {
                 std::span<const std::vector<double>>(hvAuxiliaryFields.data(),
                                                      hvAuxiliaryFields.size())},
         }};
-    const auto generatedSystem = makeSpectralResidualSystemFromDesc(
-        systemDesc, grid, tensorium_spectral_residual_kernels,
+    const auto generatedSystem = makeGeneratedSpectralResidualSystem(
+        tensorium_spectral_residual_systems,
+        TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT, "SpectralTwoFieldSystem3D",
+        grid, tensorium_spectral_residual_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
         tensorium_spectral_residual_grid_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT,
         std::span<const SpectralGeneratedResidualSystemEquationInputs>(
-            systemInputs.data(), systemInputs.size()));
+            systemInputs.data(), systemInputs.size()),
+        2, 2);
     const auto system = generatedSystem.view();
 
     if (generatedSystem.equations.size() != 2 ||
@@ -241,13 +236,12 @@ int main() {
     solveOptions.jvpOptions.relativeStep = 1e-6;
     solveOptions.linearPivotTolerance = 1e-13;
 
-    const auto solveResult = solveSpectralNewton(
+    const auto solveRun = solveGeneratedSpectralEllipticSystem(
         system, std::span<std::vector<double>>(solutionFields.data(),
                                                solutionFields.size()),
         solveOptions);
-    const auto finalResidual = assembleSpectralResidualSystem(
-        system, std::span<const std::vector<double>>(solutionFields.data(),
-                                                     solutionFields.size()));
+    const auto &solveResult = solveRun.solveResult;
+    const auto &finalResidual = solveRun.finalResidual;
 
     std::vector<double> solutionErrors(2 * grid.size(), 0.0);
     for (std::size_t p = 0; p < grid.size(); ++p) {
@@ -344,15 +338,13 @@ int main() {
     std::array<std::vector<double>, 2> permutedSolutionFields{
         std::vector<double>(grid.size(), 0.0),
         std::vector<double>(grid.size(), 0.0)};
-    const auto permutedSolveResult = solveSpectralNewton(
+    const auto permutedSolveRun = solveGeneratedSpectralEllipticSystem(
         permutedSystem,
         std::span<std::vector<double>>(permutedSolutionFields.data(),
                                        permutedSolutionFields.size()),
         solveOptions);
-    const auto permutedFinalResidual = assembleSpectralResidualSystem(
-        permutedSystem, std::span<const std::vector<double>>(
-                            permutedSolutionFields.data(),
-                            permutedSolutionFields.size()));
+    const auto &permutedSolveResult = permutedSolveRun.solveResult;
+    const auto &permutedFinalResidual = permutedSolveRun.finalResidual;
     std::vector<double> permutedSolutionErrors(2 * grid.size(), 0.0);
     for (std::size_t p = 0; p < grid.size(); ++p) {
       permutedSolutionErrors[p] = permutedSolutionFields[0][p] - u[p];

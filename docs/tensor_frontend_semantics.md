@@ -216,7 +216,10 @@ Rules:
   `residual` equations. Spectral elliptic constraints may also declare boundary
   rows:
   `boundary H lower_x1 dirichlet = 0.0` or
-  `boundary H upper_x1 robin(value=1.0, normal=1.0, target=0.0)`.
+  `boundary H upper_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)`.
+  Robin coefficients accept constants or coordinate tokens `x1`, `x2`, `x3`,
+  `x`, `y`, `z`, `r`, and `radius`. Robin derivatives default to `normal`;
+  `derivative=radial` selects `(x1 d1 + x2 d2 + x3 d3) / radius`.
 * Residual targets must be declared fields, with the same rank/index rules as
   evolution targets.
 * Boundary declarations attach to a residual by name and are emitted in the

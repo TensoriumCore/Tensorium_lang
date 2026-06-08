@@ -153,6 +153,10 @@ struct BoundaryConditionDecl {
   double valueCoefficient = 1.0;
   double normalDerivativeCoefficient = 0.0;
   double targetValue = 0.0;
+  std::string derivativeKind = "normal";
+  std::string valueCoefficientCoordinate;
+  std::string normalDerivativeCoefficientCoordinate;
+  std::string targetValueCoordinate;
 };
 
 struct ConstraintDecl {

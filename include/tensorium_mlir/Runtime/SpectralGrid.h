@@ -255,9 +255,10 @@ public:
 
     std::vector<double> out(values.size(), 0.0);
     if (dim == 0) {
-      std::vector<double> line(n1());
+#pragma omp parallel for collapse(2) schedule(static)
       for (std::size_t k = 0; k < n3(); ++k) {
         for (std::size_t j = 0; j < n2(); ++j) {
+          std::vector<double> line(n1());
           for (std::size_t i = 0; i < n1(); ++i)
             line[i] = values[index(i, j, k)];
           const auto diff = axes_[0].differentiate(line, order);
@@ -269,9 +270,10 @@ public:
     }
 
     if (dim == 1) {
-      std::vector<double> line(n2());
+#pragma omp parallel for collapse(2) schedule(static)
       for (std::size_t k = 0; k < n3(); ++k) {
         for (std::size_t i = 0; i < n1(); ++i) {
+          std::vector<double> line(n2());
           for (std::size_t j = 0; j < n2(); ++j)
             line[j] = values[index(i, j, k)];
           const auto diff = axes_[1].differentiate(line, order);
@@ -282,9 +284,10 @@ public:
       return out;
     }
 
-    std::vector<double> line(n3());
+#pragma omp parallel for collapse(2) schedule(static)
     for (std::size_t j = 0; j < n2(); ++j) {
       for (std::size_t i = 0; i < n1(); ++i) {
+        std::vector<double> line(n3());
         for (std::size_t k = 0; k < n3(); ++k)
           line[k] = values[index(i, j, k)];
         const auto diff = axes_[2].differentiate(line, order);
@@ -300,6 +303,7 @@ public:
     const auto d22 = derivative(values, 1, 2);
     const auto d33 = derivative(values, 2, 2);
     std::vector<double> out(values.size(), 0.0);
+#pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < values.size(); ++i)
       out[i] = d11[i] + d22[i] + d33[i];
     return out;

@@ -398,6 +398,32 @@ BoundaryConditionDecl Parser::parseBoundaryConditionDecl() {
     boundary.targetValue = sign * std::stod(cur.text);
     advance();
   } else if (boundary.kind == "robin") {
+    struct RobinCoefficient {
+      double constant = 0.0;
+      std::string coordinate;
+    };
+    auto parseRobinCoefficient = [&]() -> RobinCoefficient {
+      double sign = 1.0;
+      if (cur.type == TokenType::Minus) {
+        sign = -1.0;
+        advance();
+      }
+      if (cur.type == TokenType::Number) {
+        const double value = sign * std::stod(cur.text);
+        advance();
+        return RobinCoefficient{value, {}};
+      }
+      if (cur.type == TokenType::Identifier) {
+        if (sign < 0.0)
+          syntaxError("Robin coordinate coefficient cannot be signed");
+        const std::string coordinate = cur.text;
+        advance();
+        return RobinCoefficient{0.0, coordinate};
+      }
+      syntaxError("Robin boundary coefficient expects number or coordinate");
+      return RobinCoefficient{};
+    };
+
     expect(TokenType::LParen);
     bool haveValue = false;
     bool haveNormal = false;
@@ -408,24 +434,32 @@ BoundaryConditionDecl Parser::parseBoundaryConditionDecl() {
       const std::string name = cur.text;
       advance();
       expect(TokenType::Equals);
-      double sign = 1.0;
-      if (cur.type == TokenType::Minus) {
-        sign = -1.0;
+      if (name == "derivative") {
+        if (cur.type != TokenType::Identifier)
+          syntaxError("Robin derivative expects normal or radial");
+        boundary.derivativeKind = cur.text;
         advance();
+        if (cur.type == TokenType::Comma) {
+          advance();
+          continue;
+        }
+        if (cur.type != TokenType::RParen)
+          syntaxError("expected ',' or ')' in Robin boundary");
+        continue;
       }
-      if (cur.type != TokenType::Number)
-        syntaxError("Robin boundary coefficient expects number");
-      const double value = sign * std::stod(cur.text);
-      advance();
+      const RobinCoefficient value = parseRobinCoefficient();
 
       if (name == "value") {
-        boundary.valueCoefficient = value;
+        boundary.valueCoefficient = value.constant;
+        boundary.valueCoefficientCoordinate = value.coordinate;
         haveValue = true;
       } else if (name == "normal") {
-        boundary.normalDerivativeCoefficient = value;
+        boundary.normalDerivativeCoefficient = value.constant;
+        boundary.normalDerivativeCoefficientCoordinate = value.coordinate;
         haveNormal = true;
       } else if (name == "target") {
-        boundary.targetValue = value;
+        boundary.targetValue = value.constant;
+        boundary.targetValueCoordinate = value.coordinate;
         haveTarget = true;
       } else {
         syntaxError("unknown Robin boundary coefficient");

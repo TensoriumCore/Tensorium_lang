@@ -725,6 +725,11 @@ ModuleIR BackendBuilder::build(const Program &prog,
       bc.normalDerivativeCoefficient =
           boundary.normalDerivativeCoefficient;
       bc.targetValue = boundary.targetValue;
+      bc.derivativeKind = boundary.derivativeKind;
+      bc.valueCoefficientCoordinate = boundary.valueCoefficientCoordinate;
+      bc.normalDerivativeCoefficientCoordinate =
+          boundary.normalDerivativeCoefficientCoordinate;
+      bc.targetValueCoordinate = boundary.targetValueCoordinate;
       out.boundaryConditions.push_back(std::move(bc));
     }
 

@@ -270,6 +270,7 @@ public:
 
       double *stateData = data(update.stateStorageIndex);
       const double *derivativeData = data(update.derivativeStorageIndex);
+#pragma omp parallel for schedule(static)
       for (std::int64_t i = 0; i < update.scalarCount; ++i)
         stateData[i] += dt * derivativeData[i];
     }

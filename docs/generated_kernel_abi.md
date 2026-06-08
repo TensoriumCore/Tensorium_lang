@@ -27,7 +27,13 @@ Source of truth for the runtime spectral residual callback ABI:
 `include/tensorium_mlir/Runtime/SpectralResidualKernel.h`.
 This remains the public umbrella include; the runtime implementation is split
 under `SpectralResidualTypes.h`, `SpectralResidualAssembly.h`,
-`SpectralResidualJVP.h`, and `SpectralEllipticSolver.h`.
+`SpectralResidualJVP.h`, `SpectralEllipticSolver.h`, and
+`GeneratedSpectralResidualSystem.h`. The generated-system helper binds the C
+descriptor tables emitted in host headers to runtime
+`SpectralGeneratedResidualSystem` objects by name, with optional unknown and
+equation count validation. It also provides lightweight helpers for generated
+elliptic init solves: assemble a generated residual system, run Newton/GMRES,
+and reassemble the final residual as one checked runtime operation.
 
 Architectural context: `docs/language_mlir_abi_architecture.md` describes how
 this ABI fits between Tensorium MLIR/LLVM kernels, generated host glue,
@@ -177,25 +183,28 @@ consume directly:
   modal `laplacian + shift` inverse approximation intended as the scalable
   runtime path.
 - Bounded spectral elliptic solves can attach runtime boundary conditions to a
-  `SpectralResidualProblem`. `SpectralBoundaryCondition` currently supports
-  Dirichlet and face-normal Robin rows on non-periodic faces. During residual
-  assembly, boundary collocation rows replace the generated interior residual,
-  so finite-difference JVPs, Newton, and GMRES all solve the same bounded
-  system. The dense `laplacian + shift` preconditioner mirrors these boundary
-  rows in its operator matrix. Chebyshev-Lobatto axes expose endpoint
-  collocation points for strong face conditions; Chebyshev-zero axes remain
-  available for interior-only and smoke fixtures.
+  `SpectralResidualProblem`. `SpectralBoundaryCondition` supports Dirichlet and
+  face-normal Robin rows on non-periodic faces. During residual assembly,
+  boundary collocation rows replace the generated interior residual, so
+  finite-difference JVPs, Newton, and GMRES all solve the same bounded system.
+  The dense `laplacian + shift` preconditioner mirrors these boundary rows in
+  its operator matrix. Chebyshev-Lobatto axes expose endpoint collocation points
+  for strong face conditions; Chebyshev-zero axes remain available for
+  interior-only and smoke fixtures.
   Constraint blocks can declare generated boundary metadata with:
   `boundary <residual> <face> dirichlet = <target>` or
   `boundary <residual> <face> robin(value=<a>, normal=<b>, target=<c>)`.
+  Robin coefficients may be constants or coordinate tokens `x1`, `x2`, `x3`,
+  `x`, `y`, `z`, `r`, or `radius`; coordinate tokens are evaluated from the
+  physical coordinates produced by the residual problem's coordinate map.
+  Robin rows default to the outward face-normal derivative and can request a
+  radial derivative with `derivative=radial`, e.g.
+  `robin(value=1.0, normal=radius, target=0.0, derivative=radial)` for
+  `u + r d_r u = 0` on Cartesian spectral grids.
   Faces are `lower_x1`, `upper_x1`, `lower_x2`, `upper_x2`, `lower_x3`, and
   `upper_x3`. Generated host headers expose these rows on the matching
   `tensorium_spectral_residual_system_equation_desc`, so runtimes can attach
   them without reconstructing conditions from runner code.
-  This v1 boundary surface intentionally supports constant coefficients only;
-  puncture-style asymptotic Robin rows such as `u + r d_r u = 0` need the next
-  descriptor step for coordinate-dependent coefficients or a compactified radial
-  coordinate map.
 - `SpectralResidualSystemProblem` is the first multi-residual assembly surface.
   It combines several scalar `SpectralResidualProblem` equations into one
   equation-major vector `[F0(points), F1(points), ...]`. Each equation still has
@@ -246,16 +255,29 @@ consume directly:
   the first non-manufactured puncture-like spectral Hamiltonian fixture. It uses
   a regularized single-puncture conformal factor
   `psi = 1 + mass/(2*r_eps) + u` and the flat-space Bowen-York momentum
-  contraction as `A2`. The short runtime test is a generated-kernel smoke test:
-  it checks residual reduction and positive conformal factor rather than an
-  analytic solution. The companion continuation runner reuses each stage's
-  solution as the initial guess for the next regularization/momentum step,
-  estimating the modal Laplacian shift from the local Bowen-York
-  Lichnerowicz Jacobian term `-7/8 A2 / psi^8`. It deliberately stays on an
-  easy/wide continuation where the current matrix-free GMRES path performs a
-  real Newton update; harder regularization/momentum stages are not treated as
-  passing tests until the runtime has a stronger elliptic preconditioner and
-  real asymptotic/puncture boundary conditions.
+  contraction as `A2`. The fixture now emits six radial Robin rows
+  `u + r d_r u = 0`; the runtime runners use Chebyshev-Lobatto axes so those
+  generated boundary rows are imposed on the cube faces. The short runtime test
+  is a generated-kernel smoke test: it checks residual reduction and positive
+  conformal factor rather than an analytic solution, using matrix-free GMRES
+  with a boundary-aware dense shifted-Laplacian preconditioner. The companion
+  continuation runner reuses each stage's solution as the initial guess for the
+  next regularization/momentum step, estimating the dense Laplacian shift from
+  the local Bowen-York Lichnerowicz Jacobian term `-7/8 A2 / psi^8`. It
+  deliberately stays on an easy/wide continuation where the current
+  matrix-free GMRES path performs a real Newton update; harder
+  regularization/momentum stages are not treated as passing tests until the
+  runtime has stronger puncture/domain treatment and scalable preconditioning.
+  The continuation runner can
+  load stages from `TENSORIUM_BY_CONTINUATION_STAGES`; the repository smoke
+  uses `tools/dev/bowen_york_puncture_continuation_stages.txt` with CSV columns
+  `name,eps2,mass,px,x0,y0,z0,residual_tolerance,required_ratio,minimum_shift_magnitude,requires_newton_update`.
+  `tools/dev/test_generated_spectral_bowen_york_puncture_slice_export_ll.sh`
+  runs the same continuation on a larger Chebyshev-Lobatto grid
+  (`TENSORIUM_BY_GRID_N`, default `16`) and writes a final-stage z-slice CSV to
+  `build/exports/bowen_york_puncture_z_slice_n<N>.csv`. The slice is taken at
+  the grid plane nearest the final puncture `z0` and contains
+  `x,y,z,u,psi_singular,psi,residual,r_puncture` columns for plotting.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual
@@ -264,6 +286,12 @@ consume directly:
   differentiation in the runtime grid layer for now.
   Generated host headers expose uniform descriptors through
   `tensorium_spectral_residual_grid_kernels`.
+
+The generated spectral LLVM smoke scripts share
+`tools/dev/generated_spectral_smoke_common.sh` for the repeated
+driver/header/LLVM-object/runtime-runner flow. Individual scripts should keep
+only fixture selection, runner selection, output stem, and symbol/metadata
+checks.
 
 Generated host headers also expose the same runtime contract in C-compatible
 tables:

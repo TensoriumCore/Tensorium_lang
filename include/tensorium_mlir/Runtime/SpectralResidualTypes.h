@@ -77,6 +77,10 @@ typedef struct tensorium_spectral_boundary_condition_desc {
   double value_coefficient;
   double normal_derivative_coefficient;
   double target_value;
+  const char *derivative_kind;
+  const char *value_coefficient_coordinate;
+  const char *normal_derivative_coefficient_coordinate;
+  const char *target_value_coordinate;
 } tensorium_spectral_boundary_condition_desc;
 
 typedef struct tensorium_spectral_residual_system_equation_desc {
@@ -148,6 +152,10 @@ struct SpectralBoundaryCondition {
   double valueCoefficient = 1.0;
   double normalDerivativeCoefficient = 0.0;
   double targetValue = 0.0;
+  std::string derivativeKind = "normal";
+  std::string valueCoefficientCoordinate;
+  std::string normalDerivativeCoefficientCoordinate;
+  std::string targetValueCoordinate;
 };
 
 struct SpectralResidualProblem {
