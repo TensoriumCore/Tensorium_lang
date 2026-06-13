@@ -1,7 +1,7 @@
 #pragma once
 
 #include "tensorium/Backend/DomainIR.hpp"
-#include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Core/CompilationMode.hpp"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 
 #include <string>

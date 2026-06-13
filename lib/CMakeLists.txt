@@ -75,8 +75,8 @@ add_library(tensoriumLowering
 )
 tensorium_configure_public_headers(tensoriumLowering)
 target_link_libraries(tensoriumLowering PUBLIC
-  tensoriumSema
   tensoriumIR
+  tensoriumAST
 )
 
 add_library(tensoriumValidation
@@ -346,4 +346,5 @@ target_link_libraries(tensoriumCompilerAPI
     tensoriumMlirCodegen
   PRIVATE
     tensoriumParse
+    tensoriumSema
 )

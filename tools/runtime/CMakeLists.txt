@@ -4,6 +4,7 @@ add_executable(Tensorium_abi_probe
 
 target_link_libraries(Tensorium_abi_probe PRIVATE
   tensoriumParse
+  tensoriumSema
   tensoriumLowering
   tensoriumValidation
   tensoriumMlirRuntime

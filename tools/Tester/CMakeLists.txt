@@ -6,6 +6,7 @@ add_executable(Tensorium_tester
 target_link_libraries(Tensorium_tester
   PRIVATE
     tensoriumParse
+    tensoriumSema
     tensoriumLowering
     tensoriumValidation
 )
@@ -18,6 +19,7 @@ target_link_libraries(Tensorium_unittests
   PRIVATE
     tensoriumCompilerAPI
     tensoriumParse
+    tensoriumSema
     tensoriumLowering
     tensoriumValidation
     tensoriumMlirRuntime

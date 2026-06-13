@@ -3,6 +3,7 @@
 #include "tensorium/Backend/BackendBuilder.hpp"
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
+#include "tensorium/Sema/Sema.hpp"
 #include "tensorium/Validation/IRCanonicalize.hpp"
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium/Validation/ProgramValidator.hpp"

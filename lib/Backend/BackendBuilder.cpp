@@ -817,7 +817,7 @@ static SimulationIR lowerSimulation(const tensorium::SimulationConfig &sim) {
 }
 
 ModuleIR BackendBuilder::build(const Program &prog,
-                               tensorium::SemanticAnalyzer &sem) {
+                               tensorium::lowering::SemanticAnalysis &semantics) {
   ModuleIR mod;
   bool hasConnectionTensor = false;
 
@@ -910,7 +910,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
 
   mod.evolutions.reserve(prog.evolutions.size());
   for (const auto &evo : prog.evolutions) {
-    auto indexed = sem.analyzeEvolution(evo);
+    auto indexed = semantics.analyzeEvolution(evo);
 
     EvolutionIR out;
     out.name = indexed.name;
@@ -939,7 +939,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
   }
 
   for (const auto &constraints : prog.constraints) {
-    auto indexed = sem.analyzeConstraint(constraints);
+    auto indexed = semantics.analyzeConstraint(constraints);
 
     EvolutionIR out;
     out.name = indexed.name;
@@ -1045,7 +1045,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
 
   mod.prints.reserve(prog.prints.size());
   for (const auto &print : prog.prints) {
-    auto indexed = sem.analyzePrint(print);
+    auto indexed = semantics.analyzePrint(print);
     mod.prints.push_back(lowerPrint(indexed));
   }
 

@@ -1,6 +1,8 @@
 #pragma once
 #include "tensorium/AST/AST.hpp"
 #include "tensorium/AST/IndexedAST.hpp" // Inclusion du fichier complet
+#include "tensorium/Core/CompilationMode.hpp"
+#include "tensorium/Lowering/SemanticAnalysis.hpp"
 #include <deque>
 #include <memory>
 #include <unordered_map>
@@ -8,9 +10,7 @@
 
 namespace tensorium {
 
-enum class CompilationMode { Executable, Symbolic };
-
-class SemanticAnalyzer {
+class SemanticAnalyzer : public lowering::SemanticAnalysis {
   const Program &prog;
   CompilationMode mode;
   std::unordered_map<std::string, int> coordIndex;
@@ -50,8 +50,8 @@ public:
   CompilationMode getMode() const { return mode; }
   const std::vector<std::string> &getWarnings() const { return warnings; }
   IndexedMetric analyzeMetric(const MetricDecl &decl);
-  IndexedEvolution analyzeEvolution(const EvolutionDecl &evo);
-  IndexedEvolution analyzeConstraint(const ConstraintDecl &decl);
-  IndexedPrint analyzePrint(const PrintDecl &decl);
+  IndexedEvolution analyzeEvolution(const EvolutionDecl &evo) override;
+  IndexedEvolution analyzeConstraint(const ConstraintDecl &decl) override;
+  IndexedPrint analyzePrint(const PrintDecl &decl) override;
 };
 } // namespace tensorium
