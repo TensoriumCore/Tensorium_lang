@@ -71,7 +71,7 @@ target_link_libraries(tensoriumCore INTERFACE
 )
 
 add_library(tensoriumLowering
-  Backend/BackendBuilder.cpp
+  Lowering/BackendBuilder.cpp
 )
 tensorium_configure_public_headers(tensoriumLowering)
 target_link_libraries(tensoriumLowering PUBLIC

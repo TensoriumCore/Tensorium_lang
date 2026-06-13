@@ -56,7 +56,7 @@ Observed dependency direction (module-level, simplified):
 - `Tools/driver -> AST + Lex + Parse + Sema + Backend + Runtime + MLIRGen`
 
 Detected cycle at architecture level (hidden today by monolithic target):
-- `Backend` depends on `Sema` (`include/tensorium/Backend/BackendBuilder.hpp:6`)
+- `Backend` depends on `Sema` (`include/tensorium/Lowering/BackendBuilder.hpp:6`)
 
 ### 2.4 Architectural smells
 1. Compatibility target packing
@@ -64,7 +64,7 @@ Detected cycle at architecture level (hidden today by monolithic target):
 - `tensorium_mlir_backend` remains as compatibility aggregate over split MLIR targets.
 
 2. Layering violations
-- BackendBuilder API tied to concrete semantic analyzer (`include/tensorium/Backend/BackendBuilder.hpp:12`).
+- BackendBuilder API tied to concrete semantic analyzer (`include/tensorium/Lowering/BackendBuilder.hpp:12`).
 - Public include paths still use historical `Backend/*` wrappers for IR/lowering naming.
 
 3. God files / mixed responsibilities
@@ -105,7 +105,7 @@ Detected cycle at architecture level (hidden today by monolithic target):
 | `include/tensorium/Parse`, `lib/Parse` | L1 | Token parsing -> `Program` | Syntax validity, top-level ordering | Lex + AST |
 | `include/tensorium/Sema`, `lib/Sema` | L1/L2 | Symbol resolution + typing + Einstein checks | Valid indices, coherent variance, exec/symbolic mode policy | AST (+ Backend for validator) |
 | `include/tensorium/Backend/DomainIR.hpp` | L2 | Internal IR targeting runtime/MLIR | Coherent `FieldIR` up/down metadata, typed `ExprIR` | AST type leakage |
-| `include/tensorium/Backend/BackendBuilder.hpp`, `lib/Backend` | L2 | AST+Sema -> DomainIR conversion | Preserve equation/temp semantics | AST + IndexedAST + Sema |
+| `include/tensorium/Lowering/BackendBuilder.hpp`, `lib/Lowering` | L2 | AST+Sema -> DomainIR conversion | Preserve equation/temp semantics | AST + IndexedAST + Sema |
 | `include/tensorium/Runtime`, `lib/Runtime` | L3 | Scalar 1D CPU evaluation | Simulation required, Euler-only, scalar-only | Backend IR |
 | `include/tensorium_mlir/Dialect/*`, `lib/.../IR` | L3 | Dialect/ops/types Tensorium MLIR | Op verifiers, rank/type contracts | MLIR core |
 | `include/tensorium_mlir/Semantic`, `lib/.../Semantic` | L3 | Einstein index semantic helpers | role classification + validity | LLVM ADT |
@@ -185,7 +185,7 @@ Constraints:
 | Validator placement mismatch (`Sema/ProgramValidator` validates backend IR) | Move to `Validation` module with IR-only API | Low | Existing `--validate` integration test + new unit test |
 
 Specific defect to isolate in dedicated patch:
-- `ConTensor3 -> ConTensor4` mapping in `lib/Backend/BackendBuilder.cpp:84`
+- `ConTensor3 -> ConTensor4` mapping in `lib/Lowering/BackendBuilder.cpp:84`
   - Risk: High correctness risk for rank-3 contravariant tensors.
   - Add integration test: compile a `con_tensor3` evolution and check resulting IR rank/type.
 
@@ -313,7 +313,7 @@ Planned commit sequence (one intention per commit):
 
 ### Phase 1 done
 - Fixed backend lowering defect:
-  - `TensorKind::ConTensor3` now maps to `FieldKind::ConTensor3` in `lib/Backend/BackendBuilder.cpp`.
+  - `TensorKind::ConTensor3` now maps to `FieldKind::ConTensor3` in `lib/Lowering/BackendBuilder.cpp`.
 - Added non-regression test:
   - `tools/Tester/UnitTests.cpp` validates backend kind for a `con_tensor3` field.
   - Behavior demonstrated:
@@ -353,7 +353,7 @@ Planned commit sequence (one intention per commit):
   - introduced `include/tensorium/IR/TensorType.hpp` (`tensorium::ir::TensorType`),
   - `include/tensorium/Backend/DomainIR.hpp` now consumes IR-native tensor type and no longer includes AST headers.
 - Boundary conversions implemented at lowering edge:
-  - `lib/Backend/BackendBuilder.cpp` converts frontend `TensorTypeDesc` into IR tensor type,
+  - `lib/Lowering/BackendBuilder.cpp` converts frontend `TensorTypeDesc` into IR tensor type,
   - MLIR and runtime consumers now read IR-native tensor metadata only.
 - Validation module moved out of Sema:
   - `ProgramValidator` moved to `include/tensorium/Validation/ProgramValidator.hpp` and `lib/Validation/ProgramValidator.cpp`,
@@ -469,7 +469,7 @@ Planned commit sequence (one intention per commit):
   - This phase enforces a clearer split:
     - Sema: IndexAnalysis + validation (`include/tensorium/Sema/tensor_type_checker.hpp:140`).
     - IR: explicit op forms (`include/tensorium/Backend/DomainIR.hpp:60`).
-    - Lowering: explicit op materialization and conversion (`lib/Backend/BackendBuilder.cpp:118`, `lib/Backend/BackendBuilder.cpp:159`, `lib/Backend/BackendBuilder.cpp:189`).
+    - Lowering: explicit op materialization and conversion (`lib/Lowering/BackendBuilder.cpp:118`, `lib/Lowering/BackendBuilder.cpp:159`, `lib/Lowering/BackendBuilder.cpp:189`).
 
 ### Design decisions (explicit vs implicit)
 - Einstein notation remains source-level friendly, but contractions are now materialized in backend IR as explicit `ContractionIR` with `summedIndices`.
