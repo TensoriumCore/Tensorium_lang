@@ -5,11 +5,15 @@
 
 namespace tensorium::lowering {
 
-inline ir::TensorType lowerTensorType(const TensorTypeDesc &desc) {
+inline ir::TensorType makeTensorType(int up, int down) {
   ir::TensorType out;
-  out.up = desc.up;
-  out.down = desc.down;
+  out.up = up;
+  out.down = down;
   return out;
+}
+
+inline ir::TensorType lowerTensorType(const TensorTypeDesc &desc) {
+  return makeTensorType(desc.up, desc.down);
 }
 
 inline backend::FieldKind lowerFieldKind(TensorKind kind) {

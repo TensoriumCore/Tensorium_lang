@@ -85,6 +85,7 @@ target_link_libraries(tensoriumFrontend INTERFACE
 
 add_library(tensoriumLowering
   Lowering/BackendBuilder.cpp
+  Lowering/ExprLowering.cpp
 )
 tensorium_configure_public_headers(tensoriumLowering)
 target_link_libraries(tensoriumLowering PUBLIC
