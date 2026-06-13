@@ -1,6 +1,6 @@
 #include "tensorium/API/Compiler.hpp"
 
-#include "tensorium/Backend/BackendBuilder.hpp"
+#include "tensorium/Lowering/BackendBuilder.hpp"
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"

@@ -4,9 +4,9 @@
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"
 
-#include "tensorium/Backend/BackendBuilder.hpp"
-#include "tensorium/Backend/DomainIR.hpp"
-#include "tensorium/Backend/IRPrinter.hpp"
+#include "tensorium/Lowering/BackendBuilder.hpp"
+#include "tensorium/IR/DomainIR.hpp"
+#include "tensorium/IR/IRPrinter.hpp"
 #include "tensorium/Runtime/CpuRuntime.hpp"
 #include "tensorium/Runtime/Eval.hpp"
 #include "tensorium/Validation/IRCanonicalize.hpp"

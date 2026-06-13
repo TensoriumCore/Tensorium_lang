@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tensorium/Backend/DomainIR.hpp"
+#include "tensorium/IR/DomainIR.hpp"
 
 #include <cstdint>
 #include <string>

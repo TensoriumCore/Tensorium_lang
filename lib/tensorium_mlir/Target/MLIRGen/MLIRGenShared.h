@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tensorium/Backend/DomainIR.hpp"
+#include "tensorium/IR/DomainIR.hpp"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"

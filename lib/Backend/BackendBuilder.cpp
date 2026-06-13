@@ -1,5 +1,5 @@
 
-#include "tensorium/Backend/BackendBuilder.hpp"
+#include "tensorium/Lowering/BackendBuilder.hpp"
 #include "tensorium/Core/IndexSet.h"
 
 #include <map>

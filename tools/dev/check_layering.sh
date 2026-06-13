@@ -24,6 +24,16 @@ check_forbidden_in_path \
   "DomainIR must not include AST headers"
 
 check_forbidden_in_path \
+  "include/tensorium/IR/DomainIR.hpp" \
+  "^#include\\s+\"tensorium/AST/" \
+  "IR DomainIR must not include AST headers"
+
+check_forbidden_in_path \
+  "include/tensorium/Lowering" \
+  "^#include\\s+\"tensorium/Sema/" \
+  "Lowering headers must not depend on concrete Sema headers"
+
+check_forbidden_in_path \
   "lib/Runtime" \
   "^#include\\s+\"tensorium/(Parse|Sema)/" \
   "Runtime layer must not depend on Parse/Sema"

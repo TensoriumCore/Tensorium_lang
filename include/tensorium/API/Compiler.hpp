@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tensorium/Backend/DomainIR.hpp"
+#include "tensorium/IR/DomainIR.hpp"
 #include "tensorium/Core/CompilationMode.hpp"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 

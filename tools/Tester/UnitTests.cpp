@@ -1,4 +1,4 @@
-#include "tensorium/Backend/BackendBuilder.hpp"
+#include "tensorium/Lowering/BackendBuilder.hpp"
 #include "tensorium/API/Compiler.hpp"
 #include "tensorium/Core/IndexSet.h"
 #include "tensorium/Lex/Lexer.hpp"
