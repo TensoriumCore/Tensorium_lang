@@ -1,25 +1,11 @@
 #pragma once
+#include "tensorium/Core/TensorTypes.hpp"
 #include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace tensorium {
-
-enum class TensorKind {
-  Scalar,
-  Vector,
-  Covector,
-  CovTensor2,
-  ConTensor2,
-  CovTensor3,
-  ConTensor3,
-  ConTensor4,
-  CovTensor4,
-  MixedTensor,
-  Metric,
-  InverseMetric
-};
 
 struct NumberExpr;
 struct VarExpr;
@@ -97,12 +83,6 @@ struct TensorAccess {
 struct Assignment {
   TensorAccess lhs;
   std::unique_ptr<Expr> rhs;
-};
-
-struct TensorTypeDesc {
-  TensorKind kind = TensorKind::Scalar;
-  int up = 0;
-  int down = 0;
 };
 
 struct ExternDecl {

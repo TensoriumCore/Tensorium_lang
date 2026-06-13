@@ -1,6 +1,7 @@
 
 #include "tensorium/Lowering/BackendBuilder.hpp"
 #include "tensorium/Core/IndexSet.h"
+#include "tensorium/Lowering/TensorTypeConversion.hpp"
 
 #include <map>
 #include <stdexcept>
@@ -43,13 +44,6 @@ static std::unique_ptr<InitExprIR> lowerInitExpr(const tensorium::Expr *expr) {
     return out;
   }
   return std::make_unique<InitSymbolIR>("<expr>");
-}
-
-static tensorium::ir::TensorType lowerTensorType(const tensorium::TensorTypeDesc &d) {
-  tensorium::ir::TensorType out;
-  out.up = d.up;
-  out.down = d.down;
-  return out;
 }
 
 static bool hasTensorRank(const tensorium::IndexedExpr *e) {
@@ -421,7 +415,7 @@ lowerChristoffelBuiltin(const tensorium::IndexedCall *call) {
 
   auto out =
       std::make_unique<BinaryIR>("*", std::move(half), std::move(contraction));
-  out->exprType = lowerTensorType(call->inferredType);
+  out->exprType = lowering::lowerTensorType(call->inferredType);
   return out;
 }
 
@@ -467,7 +461,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
 
   if (auto n = dynamic_cast<const IndexedNumber *>(e)) {
     auto out = std::make_unique<NumberIR>(n->value);
-    out->exprType = lowerTensorType(n->inferredType);
+    out->exprType = lowering::lowerTensorType(n->inferredType);
     return out;
   }
 
@@ -493,7 +487,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
     auto out = std::make_unique<VarIR>(v->name, k);
     out->coordIndex = coord;
     out->tensorIndexNames = v->tensorIndexNames;
-    out->exprType = lowerTensorType(v->inferredType);
+    out->exprType = lowering::lowerTensorType(v->inferredType);
     return out;
   }
 
@@ -506,12 +500,12 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
     std::unique_ptr<ExprIR> out;
     if (b->op == '*' && hasTensorRank(b->lhs.get()) && hasTensorRank(b->rhs.get())) {
       auto product = std::make_unique<TensorProductIR>(std::move(lhs), std::move(rhs));
-      product->exprType = lowerTensorType(b->inferredType);
+      product->exprType = lowering::lowerTensorType(b->inferredType);
       out = std::move(product);
     } else {
       auto binary = std::make_unique<BinaryIR>(std::string(1, b->op),
                                                std::move(lhs), std::move(rhs));
-      binary->exprType = lowerTensorType(b->inferredType);
+      binary->exprType = lowering::lowerTensorType(b->inferredType);
       out = std::move(binary);
     }
 
@@ -520,7 +514,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       if (!summed.empty()) {
         auto contraction = std::make_unique<ContractionIR>(std::move(out));
         contraction->summedIndices = std::move(summed);
-        contraction->exprType = lowerTensorType(b->inferredType);
+        contraction->exprType = lowering::lowerTensorType(b->inferredType);
         return contraction;
       }
     }
@@ -536,7 +530,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
           lowerIndexedExpr(c->args[0].get(), materializeImplicitContraction,
                            hasConnectionTensor),
           coordIndex);
-      deriv->exprType = lowerTensorType(c->inferredType);
+      deriv->exprType = lowering::lowerTensorType(c->inferredType);
       return deriv;
     }
 
@@ -550,7 +544,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
           coordIndex);
       deriv->contravariant = contra;
       deriv->hasConnectionTensor = hasConnectionTensor;
-      deriv->exprType = lowerTensorType(c->inferredType);
+      deriv->exprType = lowering::lowerTensorType(c->inferredType);
       return deriv;
     }
 
@@ -564,7 +558,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
                            hasConnectionTensor),
           coordIndex);
       deriv->hasConnectionTensor = hasConnectionTensor;
-      deriv->exprType = lowerTensorType(c->inferredType);
+      deriv->exprType = lowering::lowerTensorType(c->inferredType);
       return deriv;
     }
 
@@ -574,7 +568,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       auto grad = std::make_unique<GradientIR>(
           lowerIndexedExpr(c->args[0].get(), materializeImplicitContraction,
                            hasConnectionTensor));
-      grad->exprType = lowerTensorType(c->inferredType);
+      grad->exprType = lowering::lowerTensorType(c->inferredType);
       return grad;
     }
 
@@ -589,7 +583,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
         if (tryExtractIndexName(c->args[1].get(), idx))
           div->contractedIndex = idx;
       }
-      div->exprType = lowerTensorType(c->inferredType);
+      div->exprType = lowering::lowerTensorType(c->inferredType);
       return div;
     }
 
@@ -605,7 +599,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       }
       if (trace->tracedIndices.empty())
         trace->tracedIndices = collectRepeatedIndices(c->args[0].get());
-      trace->exprType = lowerTensorType(c->inferredType);
+      trace->exprType = lowering::lowerTensorType(c->inferredType);
       return trace;
     }
 
@@ -614,7 +608,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
         return std::make_unique<CallIR>("<invalid_vector_laplacian>");
       return lowerVectorLaplacianExpr(
           c->args[0].get(), materializeImplicitContraction,
-          hasConnectionTensor, lowerTensorType(c->inferredType), "j");
+          hasConnectionTensor, lowering::lowerTensorType(c->inferredType), "j");
     }
 
     if (c->callee == "york_vector_laplacian_diag") {
@@ -629,7 +623,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       out->args.push_back(lowerIndexedExpr(c->args[0].get(),
                                            materializeImplicitContraction,
                                            hasConnectionTensor));
-      out->exprType = lowerTensorType(c->inferredType);
+      out->exprType = lowering::lowerTensorType(c->inferredType);
       return out;
     }
 
@@ -643,7 +637,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       out->args.push_back(lowerIndexedExpr(c->args[0].get(),
                                            materializeImplicitContraction,
                                            hasConnectionTensor));
-      out->exprType = lowerTensorType(c->inferredType);
+      out->exprType = lowering::lowerTensorType(c->inferredType);
       return out;
     }
 
@@ -658,7 +652,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
         if (tryExtractIndexName(c->args[i].get(), idx))
           permute->order.push_back(idx);
       }
-      permute->exprType = lowerTensorType(c->inferredType);
+      permute->exprType = lowering::lowerTensorType(c->inferredType);
       return permute;
     }
 
@@ -674,7 +668,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       auto rename = std::make_unique<IndexRenameIR>(
           lowerIndexedExpr(c->args[0].get(), false, hasConnectionTensor),
           from, to);
-      rename->exprType = lowerTensorType(c->inferredType);
+      rename->exprType = lowering::lowerTensorType(c->inferredType);
       return rename;
     }
 
@@ -684,7 +678,7 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       auto contraction = std::make_unique<ContractionIR>(
           lowerIndexedExpr(c->args[0].get(), false, hasConnectionTensor));
       contraction->summedIndices = collectRepeatedIndices(c->args[0].get());
-      contraction->exprType = lowerTensorType(c->inferredType);
+      contraction->exprType = lowering::lowerTensorType(c->inferredType);
       return contraction;
     }
 
@@ -695,16 +689,16 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
     auto out = std::make_unique<CallIR>(c->callee);
     out->isExtern = c->isExtern;
     out->externArity = c->declaredArity;
-    out->returnType = lowerTensorType(c->returnType);
+    out->returnType = lowering::lowerTensorType(c->returnType);
     out->paramTypes.reserve(c->paramTypes.size());
     for (const auto &paramType : c->paramTypes)
-      out->paramTypes.push_back(lowerTensorType(paramType));
+      out->paramTypes.push_back(lowering::lowerTensorType(paramType));
     out->args.reserve(c->args.size());
     for (const auto &a : c->args)
       out->args.push_back(
           lowerIndexedExpr(a.get(), materializeImplicitContraction,
                            hasConnectionTensor));
-    out->exprType = lowerTensorType(c->inferredType);
+    out->exprType = lowering::lowerTensorType(c->inferredType);
     return out;
   }
 
@@ -734,38 +728,8 @@ static PrintIR lowerPrint(const tensorium::IndexedPrint &print) {
   out.label = renderPrintLabel(*var);
   out.fieldName = var->name;
   out.indices = var->tensorIndexNames;
-  out.tensorType = lowerTensorType(print.expr->inferredType);
+  out.tensorType = lowering::lowerTensorType(print.expr->inferredType);
   return out;
-}
-
-FieldKind BackendBuilder::lowerFieldKind(TensorKind k) {
-  switch (k) {
-  case TensorKind::Scalar:
-    return FieldKind::Scalar;
-  case TensorKind::Vector:
-    return FieldKind::Vector;
-  case TensorKind::Covector:
-    return FieldKind::Covector;
-  case TensorKind::CovTensor2:
-    return FieldKind::CovTensor2;
-  case TensorKind::ConTensor2:
-    return FieldKind::ConTensor2;
-  case TensorKind::CovTensor3:
-    return FieldKind::CovTensor3;
-  case TensorKind::ConTensor3:
-    return FieldKind::ConTensor3;
-  case TensorKind::CovTensor4:
-    return FieldKind::CovTensor4;
-  case TensorKind::ConTensor4:
-    return FieldKind::ConTensor4;
-  case TensorKind::MixedTensor:
-    return FieldKind::MixedTensor;
-  case TensorKind::Metric:
-    return FieldKind::CovTensor2;
-  case TensorKind::InverseMetric:
-    return FieldKind::ConTensor2;
-  }
-  return FieldKind::Scalar;
 }
 
 static SimulationIR lowerSimulation(const tensorium::SimulationConfig &sim) {
@@ -897,7 +861,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
   for (const auto &f : prog.fields) {
     FieldIR out;
     out.name = f.name;
-    out.kind = lowerFieldKind(f.kind);
+    out.kind = lowering::lowerFieldKind(f.kind);
     out.tensorType.up = f.up;
     out.tensorType.down = f.down;
     if ((f.up == 1 && f.down == 2) ||
@@ -956,7 +920,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
       } else {
         ConstraintFieldRoleIR role;
         role.name = unknown.name;
-        role.tensorType = lowerTensorType(unknown.type);
+        role.tensorType = lowering::lowerTensorType(unknown.type);
         out.constraintUnknowns.push_back(std::move(role));
       }
     }
@@ -973,7 +937,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
       } else {
         ConstraintFieldRoleIR role;
         role.name = freeField.name;
-        role.tensorType = lowerTensorType(freeField.type);
+        role.tensorType = lowering::lowerTensorType(freeField.type);
         out.constraintFreeFields.push_back(std::move(role));
       }
     }

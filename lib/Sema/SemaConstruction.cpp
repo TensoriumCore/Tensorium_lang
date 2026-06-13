@@ -1,4 +1,5 @@
 #include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Core/TensorTypes.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -7,7 +8,7 @@
 namespace tensorium {
 namespace {
 bool isScalarDesc(const TensorTypeDesc &desc) {
-  return desc.up == 0 && desc.down == 0 && desc.kind == TensorKind::Scalar;
+  return core::isScalarTensorType(desc);
 }
 
 constexpr const char *kErrMissingSimulationBlock =

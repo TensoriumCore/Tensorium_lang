@@ -1,7 +1,9 @@
 #include "tensorium/Lowering/BackendBuilder.hpp"
 #include "tensorium/API/Compiler.hpp"
 #include "tensorium/Core/IndexSet.h"
+#include "tensorium/Core/TensorTypes.hpp"
 #include "tensorium/Lex/Lexer.hpp"
+#include "tensorium/Lowering/TensorTypeConversion.hpp"
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"
 #include "tensorium/Validation/IRCanonicalize.hpp"
@@ -80,6 +82,43 @@ static bool verifyCanonicalIR(const backend::ModuleIR &mod,
 static tensorium_mlir::MLIRGenOptions makeExecutablePipelineOpts() {
   return tensorium_mlir::makeMLIRGenOptions(
       tensorium_mlir::OptimizationLevel::O2);
+}
+
+static bool testTensorTypeConversionHelpers() {
+  if (core::deduceTensorKind(3, 0) != TensorKind::ConTensor3 ||
+      core::deduceTensorKind(0, 4) != TensorKind::CovTensor4 ||
+      core::deduceTensorKind(1, 1) != TensorKind::MixedTensor) {
+    std::cerr << "FAIL: tensor kind deduction mismatch\n";
+    return false;
+  }
+
+  const TensorTypeDesc mixed = core::makeTensorTypeDesc(2, 1);
+  if (mixed.kind != TensorKind::MixedTensor || mixed.up != 2 ||
+      mixed.down != 1) {
+    std::cerr << "FAIL: TensorTypeDesc construction mismatch\n";
+    return false;
+  }
+
+  if (core::declaredContravariantCount(TensorKind::InverseMetric) != 2 ||
+      core::declaredContravariantCount(TensorKind::MixedTensor, 3) != 3) {
+    std::cerr << "FAIL: declared contravariant count mismatch\n";
+    return false;
+  }
+
+  const auto irType = lowering::lowerTensorType(mixed);
+  if (irType.up != 2 || irType.down != 1) {
+    std::cerr << "FAIL: IR tensor type lowering mismatch\n";
+    return false;
+  }
+
+  if (lowering::lowerFieldKind(TensorKind::ConTensor3) !=
+          backend::FieldKind::ConTensor3 ||
+      lowering::lowerFieldKind(TensorKind::Metric) !=
+          backend::FieldKind::CovTensor2) {
+    std::cerr << "FAIL: field kind lowering mismatch\n";
+    return false;
+  }
+  return true;
 }
 
 static bool testMLIRGenOptimizationPassOptions() {
@@ -5974,6 +6013,7 @@ int main() {
   };
 
   const NamedTest tests[] = {
+      {"testTensorTypeConversionHelpers", &testTensorTypeConversionHelpers},
       {"testMLIRGenOptimizationPassOptions",
        &testMLIRGenOptimizationPassOptions},
       {"testConTensor3Lowering", &testConTensor3Lowering},

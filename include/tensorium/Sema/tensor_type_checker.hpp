@@ -2,6 +2,7 @@
 #include "tensorium/AST/AST.hpp"
 #include "tensorium/AST/IndexedAST.hpp"
 #include "tensorium/Core/IndexSet.h"
+#include "tensorium/Core/TensorTypes.hpp"
 #include <algorithm>
 #include <array>
 #include <stdexcept>
@@ -43,63 +44,15 @@ class TensorTypeChecker {
     std::vector<std::string> duplicateWithinTensor;
   };
   bool connectionTensorAvailable = false;
-  static TensorKind deduceKind(int up, int down) {
-    if (up == 0 && down == 0)
-      return TensorKind::Scalar;
-    if (up == 1 && down == 0)
-      return TensorKind::Vector;
-    if (up == 0 && down == 1)
-      return TensorKind::Covector;
-    if (up == 0 && down == 2)
-      return TensorKind::CovTensor2;
-    if (up == 2 && down == 0)
-      return TensorKind::ConTensor2;
-    if (up == 0 && down == 3)
-      return TensorKind::CovTensor3;
-    if (up == 3 && down == 0)
-      return TensorKind::ConTensor3;
-    if (up == 0 && down == 4)
-      return TensorKind::CovTensor4;
-    if (up == 4 && down == 0)
-      return TensorKind::ConTensor4;
-    return TensorKind::MixedTensor;
-  }
-
   static int getDeclaredUpCount(const IndexedVar *v) {
     if (!v)
       return 0;
-    switch (v->tensorKind) {
-    case TensorKind::Scalar:
-      return 0;
-    case TensorKind::Vector:
-      return 1;
-    case TensorKind::Covector:
-      return 0;
-    case TensorKind::CovTensor2:
-      return 0;
-    case TensorKind::ConTensor2:
-      return 2;
-    case TensorKind::CovTensor3:
-      return 0;
-    case TensorKind::ConTensor3:
-      return 3;
-    case TensorKind::CovTensor4:
-      return 0;
-    case TensorKind::ConTensor4:
-      return 4;
-    case TensorKind::MixedTensor:
-      return v->up;
-    case TensorKind::Metric:
-      return 0;
-    case TensorKind::InverseMetric:
-      return 2;
-    }
-    return 0;
+    return core::declaredContravariantCount(v->tensorKind, v->up);
   }
 
   static void annotateType(const IndexedExpr *expr, const TensorType &tt) {
     auto *mut = const_cast<IndexedExpr *>(expr);
-    mut->inferredType.kind = deduceKind(tt.up, tt.down);
+    mut->inferredType.kind = core::deduceTensorKind(tt.up, tt.down);
     mut->inferredType.up = tt.up;
     mut->inferredType.down = tt.down;
   }

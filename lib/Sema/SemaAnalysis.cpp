@@ -1,4 +1,5 @@
 #include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Core/TensorTypes.hpp"
 #include "tensorium/Sema/tensor_type_checker.hpp"
 
 #include <stdexcept>
@@ -21,28 +22,6 @@ struct LocalScopeGuard {
 
   ~LocalScopeGuard() { locals = std::move(saved); }
 };
-
-static TensorKind deduceKind(int up, int down) {
-  if (up == 0 && down == 0)
-    return TensorKind::Scalar;
-  if (up == 1 && down == 0)
-    return TensorKind::Vector;
-  if (up == 0 && down == 1)
-    return TensorKind::Covector;
-  if (up == 0 && down == 2)
-    return TensorKind::CovTensor2;
-  if (up == 2 && down == 0)
-    return TensorKind::ConTensor2;
-  if (up == 0 && down == 3)
-    return TensorKind::CovTensor3;
-  if (up == 3 && down == 0)
-    return TensorKind::ConTensor3;
-  if (up == 0 && down == 4)
-    return TensorKind::CovTensor4;
-  if (up == 4 && down == 0)
-    return TensorKind::ConTensor4;
-  return TensorKind::MixedTensor;
-}
 
 static bool sameTensorShape(const FieldDecl &field,
                             const TensorTypeDesc &desc) {
@@ -211,8 +190,7 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
     out.temp.push_back(std::move(ia));
 
     locals[tmp.lhs.base] =
-        TensorTypeDesc{deduceKind(rhsType.up, rhsType.down), rhsType.up,
-                       rhsType.down};
+        core::makeTensorTypeDesc(rhsType.up, rhsType.down);
   }
 
   for (const auto &eq : evo.equations) {
@@ -428,8 +406,7 @@ SemanticAnalyzer::analyzeConstraint(const ConstraintDecl &decl) {
     out.temp.push_back(std::move(ia));
 
     locals[tmp.lhs.base] =
-        TensorTypeDesc{deduceKind(rhsType.up, rhsType.down), rhsType.up,
-                       rhsType.down};
+        core::makeTensorTypeDesc(rhsType.up, rhsType.down);
   }
 
   for (const auto &eq : decl.residuals) {
