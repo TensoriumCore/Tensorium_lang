@@ -183,6 +183,8 @@ struct SpectralResidualSystemEquation {
   SpectralResidualProblem problem;
   std::size_t unknownIndex = 0;
   std::string residualName;
+  std::vector<std::string> auxiliaryNames{};
+  std::vector<std::vector<double>> staticAuxiliaryFields{};
   std::span<const SpectralAuxiliaryUnknownIndex> auxiliaryUnknownIndices{};
 };
 

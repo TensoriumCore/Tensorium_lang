@@ -116,6 +116,7 @@ struct CallIR final : ExprIR {
 
 struct EquationIR {
   std::string fieldName;
+  std::string unknownFieldName;
   std::vector<std::string> indices;
   std::unique_ptr<ExprIR> rhs;
 };
@@ -133,6 +134,11 @@ struct BoundaryConditionIR {
   std::string targetValueCoordinate;
 };
 
+struct ConstraintFieldRoleIR {
+  std::string name;
+  tensorium::ir::TensorType tensorType;
+};
+
 struct TempAssignIR {
   std::string name;
   std::vector<std::string> indices;
@@ -142,6 +148,8 @@ struct TempAssignIR {
 
 struct EvolutionIR {
   std::string name;
+  std::vector<ConstraintFieldRoleIR> constraintUnknowns;
+  std::vector<ConstraintFieldRoleIR> constraintFreeFields;
   std::vector<EquationIR> equations;
   std::vector<TempAssignIR> temporaries;
   std::vector<BoundaryConditionIR> boundaryConditions;

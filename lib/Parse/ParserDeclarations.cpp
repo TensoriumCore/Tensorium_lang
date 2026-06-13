@@ -303,6 +303,7 @@ EvolutionEq Parser::parseEvolutionEq() {
     }
     expect(close);
   }
+
   expect(TokenType::Equals);
   eq.rhs = parseExpr();
   return eq;
@@ -329,6 +330,36 @@ EvolutionDecl Parser::parseEvolution() {
   }
   expect(TokenType::RBrace);
   return evo;
+}
+
+ConstraintFieldRoleDecl
+Parser::parseConstraintFieldRoleDecl(const std::string &roleName) {
+  if (cur.type != TokenType::Identifier || cur.text != roleName)
+    syntaxError("Expected constraints " + roleName + " declaration");
+  advance();
+
+  ConstraintFieldRoleDecl decl;
+  decl.type = parseTensorTypeDesc();
+  if (cur.type != TokenType::Identifier)
+    syntaxError("constraints " + roleName + " declaration expects field name");
+  decl.name = cur.text;
+  advance();
+  if (cur.type == TokenType::LBracket) {
+    advance();
+    while (cur.type == TokenType::Identifier) {
+      decl.indices.push_back(cur.text);
+      advance();
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      break;
+    }
+    expect(TokenType::RBracket);
+  }
+  if (cur.type == TokenType::Semicolon)
+    advance();
+  return decl;
 }
 
 ConstraintEq Parser::parseConstraintEq() {
@@ -358,6 +389,16 @@ ConstraintEq Parser::parseConstraintEq() {
     }
     expect(close);
   }
+
+  if (cur.type == TokenType::Identifier &&
+      (cur.text == "for" || cur.text == "unknown")) {
+    advance();
+    if (cur.type != TokenType::Identifier)
+      syntaxError("constraints residual expects unknown field name");
+    eq.unknownFieldName = cur.text;
+    advance();
+  }
+
   expect(TokenType::Equals);
   eq.rhs = parseExpr();
   return eq;
@@ -494,6 +535,14 @@ ConstraintDecl Parser::parseConstraints() {
   advance();
   expect(TokenType::LBrace);
   while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+    if (cur.type == TokenType::Identifier && cur.text == "unknown") {
+      constraints.unknowns.push_back(parseConstraintFieldRoleDecl("unknown"));
+      continue;
+    }
+    if (cur.type == TokenType::Identifier && cur.text == "free") {
+      constraints.freeFields.push_back(parseConstraintFieldRoleDecl("free"));
+      continue;
+    }
     if (cur.type == TokenType::KwResidual) {
       constraints.residuals.push_back(parseConstraintEq());
       continue;

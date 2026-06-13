@@ -1,0 +1,72 @@
+# Spectral York/Lichnerowicz plus vector momentum initial-data fixture.
+#
+# This is the user-facing vector form. The spectral backend lowers W[i], J[i],
+# and M[i] to scalar component equations while preserving the tensorial source.
+field scalar psi
+field vector W[i]
+field scalar A2
+field scalar K
+field scalar rho
+field scalar Rbar
+field scalar modSource
+field vector J[i]
+field scalar H
+field vector M[i]
+
+params { matter_coeff, modified_coeff, vector_mass }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [7,7,8]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralYorkMomentumVectorConstraint3D {
+  unknown scalar psi
+  unknown vector W[i]
+  free scalar A2
+  free scalar K
+  free scalar rho
+  free scalar Rbar
+  free scalar modSource
+  free vector J[i]
+
+  psi2 = psi * psi
+  psi4 = psi2 * psi2
+  psi5 = psi4 * psi
+  psi7 = psi4 * psi2 * psi
+  K2 = K * K
+
+  Hlocal = laplacian(psi) - 0.125 * Rbar * psi + 0.125 * A2 / psi7
+  Hmatter = matter_coeff * rho * psi5
+  Hmodified = modified_coeff * modSource
+  Hmean = Hlocal - 0.08333333333333333 * K2 * psi5 + Hmatter + Hmodified
+
+  residual H for psi = Hmean
+  residual M[i] for W = york_vector_laplacian(W[i]) + vector_mass * W[i] + J[i]
+
+  boundary H lower_x1 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x1 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H lower_x2 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x2 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H lower_x3 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x3 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+
+  boundary M lower_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M upper_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M lower_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M upper_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M lower_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M upper_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+}

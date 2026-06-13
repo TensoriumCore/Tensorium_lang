@@ -132,15 +132,26 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
       throw std::runtime_error(
           "spectral residual system parameter count mismatch");
     }
-    if (input.auxiliaryFields.size() !=
-        static_cast<std::size_t>(equationDesc.auxiliary_count)) {
-      throw std::runtime_error(
-          "spectral residual system auxiliary count mismatch");
-    }
     if (equationDesc.auxiliary_count > 0 &&
         !equationDesc.auxiliary_unknown_indices) {
       throw std::runtime_error(
           "spectral residual system auxiliary map is null");
+    }
+    std::size_t staticAuxiliaryCount = 0;
+    for (std::int64_t aux = 0; aux < equationDesc.auxiliary_count; ++aux) {
+      if (equationDesc.auxiliary_unknown_indices[aux] ==
+          kSpectralStaticAuxiliary)
+        ++staticAuxiliaryCount;
+    }
+    const std::size_t totalAuxiliaryCount =
+        static_cast<std::size_t>(equationDesc.auxiliary_count);
+    const bool compactStaticAuxiliaries =
+        input.auxiliaryFields.size() == staticAuxiliaryCount;
+    const bool legacyFullAuxiliaries =
+        input.auxiliaryFields.size() == totalAuxiliaryCount;
+    if (!compactStaticAuxiliaries && !legacyFullAuxiliaries) {
+      throw std::runtime_error(
+          "spectral residual system auxiliary count mismatch");
     }
 
     SpectralResidualProblem problem{
@@ -148,7 +159,7 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
         spectralResidualKernelFromDesc(
             pointKernelDescs[equationDesc.point_kernel_index]),
         input.params,
-        input.auxiliaryFields};
+        {}};
     if (equationDesc.grid_kernel_index >= 0) {
       if (!gridKernelDescs ||
           static_cast<std::size_t>(equationDesc.grid_kernel_index) >=
@@ -173,13 +184,34 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
         std::span<const SpectralBoundaryCondition>(equationBoundaries.data(),
                                                    equationBoundaries.size());
 
-    out.equations.push_back(SpectralResidualSystemEquation{
-        problem,
-        static_cast<std::size_t>(equationDesc.unknown_index),
-        equationDesc.residual_name,
+    SpectralResidualSystemEquation equation;
+    equation.problem = problem;
+    equation.unknownIndex = static_cast<std::size_t>(equationDesc.unknown_index);
+    equation.residualName = equationDesc.residual_name;
+    equation.auxiliaryUnknownIndices =
         std::span<const SpectralAuxiliaryUnknownIndex>(
             equationDesc.auxiliary_unknown_indices,
-            static_cast<std::size_t>(equationDesc.auxiliary_count))});
+            static_cast<std::size_t>(equationDesc.auxiliary_count));
+    equation.auxiliaryNames.reserve(
+        static_cast<std::size_t>(equationDesc.auxiliary_count));
+    for (std::int64_t aux = 0; aux < equationDesc.auxiliary_count; ++aux) {
+      equation.auxiliaryNames.push_back(
+          equationDesc.auxiliary_names ? equationDesc.auxiliary_names[aux] : "");
+    }
+    equation.staticAuxiliaryFields.reserve(staticAuxiliaryCount);
+    if (compactStaticAuxiliaries) {
+      equation.staticAuxiliaryFields.assign(input.auxiliaryFields.begin(),
+                                            input.auxiliaryFields.end());
+    } else {
+      for (std::int64_t aux = 0; aux < equationDesc.auxiliary_count; ++aux) {
+        if (equationDesc.auxiliary_unknown_indices[aux] ==
+            kSpectralStaticAuxiliary) {
+          equation.staticAuxiliaryFields.push_back(
+              input.auxiliaryFields[static_cast<std::size_t>(aux)]);
+        }
+      }
+    }
+    out.equations.push_back(std::move(equation));
   }
   return out;
 }
@@ -732,6 +764,46 @@ inline const SpectralGrid3D &requireSpectralResidualSystemGrid(
   return *system.grid;
 }
 
+inline bool parseSpectralDerivedAuxiliaryName(std::string_view name,
+                                              std::string &derivative) {
+  constexpr std::string_view prefix = "__spectral_deriv_";
+  if (name.rfind(prefix, 0) != 0)
+    return false;
+  const std::size_t derivStart = prefix.size();
+  const std::size_t split = name.find('_', derivStart);
+  if (split == std::string_view::npos || split == derivStart)
+    return false;
+  derivative = std::string(name.substr(derivStart, split - derivStart));
+  return true;
+}
+
+inline const std::vector<double> &
+selectSpectralDerivativeBuffer(const SpectralDerivatives3D &derivs,
+                               const std::string &derivative) {
+  if (derivative == "value")
+    return derivs.value;
+  if (derivative == "d1")
+    return derivs.d1;
+  if (derivative == "d2")
+    return derivs.d2;
+  if (derivative == "d3")
+    return derivs.d3;
+  if (derivative == "d11")
+    return derivs.d11;
+  if (derivative == "d12")
+    return derivs.d12;
+  if (derivative == "d13")
+    return derivs.d13;
+  if (derivative == "d22")
+    return derivs.d22;
+  if (derivative == "d23")
+    return derivs.d23;
+  if (derivative == "d33")
+    return derivs.d33;
+  throw std::runtime_error("unknown spectral auxiliary derivative: " +
+                           derivative);
+}
+
 inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
     const SpectralResidualSystemProblem &system,
     std::span<const std::vector<double>> unknownFields) {
@@ -762,16 +834,22 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
     std::vector<std::vector<double>> resolvedAuxiliaryFields;
     if (!equation.auxiliaryUnknownIndices.empty()) {
       if (equation.auxiliaryUnknownIndices.size() !=
-          problem.auxiliaryFields.size()) {
+          equation.auxiliaryNames.size()) {
         throw std::runtime_error(
             "spectral residual system auxiliary map size mismatch");
       }
-      resolvedAuxiliaryFields.reserve(problem.auxiliaryFields.size());
-      for (std::size_t i = 0; i < problem.auxiliaryFields.size(); ++i) {
+      resolvedAuxiliaryFields.reserve(equation.auxiliaryUnknownIndices.size());
+      std::size_t staticAuxiliaryIndex = 0;
+      for (std::size_t i = 0; i < equation.auxiliaryUnknownIndices.size(); ++i) {
         const SpectralAuxiliaryUnknownIndex mappedUnknown =
             equation.auxiliaryUnknownIndices[i];
         if (mappedUnknown == kSpectralStaticAuxiliary) {
-          resolvedAuxiliaryFields.push_back(problem.auxiliaryFields[i]);
+          if (staticAuxiliaryIndex >= equation.staticAuxiliaryFields.size()) {
+            throw std::runtime_error(
+                "spectral residual system static auxiliary index out of range");
+          }
+          resolvedAuxiliaryFields.push_back(
+              equation.staticAuxiliaryFields[staticAuxiliaryIndex++]);
           continue;
         }
         if (mappedUnknown < 0 ||
@@ -779,8 +857,21 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
           throw std::runtime_error(
               "spectral residual system auxiliary unknown index out of range");
         }
-        resolvedAuxiliaryFields.push_back(
-            unknownFields[static_cast<std::size_t>(mappedUnknown)]);
+        std::string derivative;
+        if (parseSpectralDerivedAuxiliaryName(equation.auxiliaryNames[i],
+                                              derivative)) {
+          const auto derivs = grid.derivatives(
+              unknownFields[static_cast<std::size_t>(mappedUnknown)]);
+          resolvedAuxiliaryFields.push_back(
+              selectSpectralDerivativeBuffer(derivs, derivative));
+        } else {
+          resolvedAuxiliaryFields.push_back(
+              unknownFields[static_cast<std::size_t>(mappedUnknown)]);
+        }
+      }
+      if (staticAuxiliaryIndex != equation.staticAuxiliaryFields.size()) {
+        throw std::runtime_error(
+            "spectral residual system static auxiliary count mismatch");
       }
       problem.auxiliaryFields = std::span<const std::vector<double>>(
           resolvedAuxiliaryFields.data(), resolvedAuxiliaryFields.size());

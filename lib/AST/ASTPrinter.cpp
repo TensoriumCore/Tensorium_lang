@@ -295,6 +295,45 @@ void printProgram(const Program &prog) {
 
   for (const auto &constraints : prog.constraints) {
     std::cout << "Constraints " << constraints.name << " {\n";
+    auto printRoleDecl = [](const char *role,
+                            const ConstraintFieldRoleDecl &decl) {
+      std::cout << "  " << role << " ";
+      switch (decl.type.kind) {
+      case TensorKind::Scalar:
+        std::cout << "scalar";
+        break;
+      case TensorKind::Vector:
+        std::cout << "vector";
+        break;
+      case TensorKind::Covector:
+        std::cout << "covector";
+        break;
+      case TensorKind::CovTensor2:
+        std::cout << "cov_tensor2";
+        break;
+      case TensorKind::ConTensor2:
+        std::cout << "con_tensor2";
+        break;
+      default:
+        std::cout << "tensor";
+        break;
+      }
+      std::cout << " " << decl.name;
+      if (!decl.indices.empty()) {
+        std::cout << "[";
+        for (size_t i = 0; i < decl.indices.size(); ++i) {
+          std::cout << decl.indices[i];
+          if (i + 1 < decl.indices.size())
+            std::cout << ",";
+        }
+        std::cout << "]";
+      }
+      std::cout << "\n";
+    };
+    for (const auto &unknown : constraints.unknowns)
+      printRoleDecl("unknown", unknown);
+    for (const auto &freeField : constraints.freeFields)
+      printRoleDecl("free", freeField);
     for (const auto &tmp : constraints.tempAssignments) {
       std::cout << "  " << tmp.lhs.base;
       if (!tmp.lhs.indices.empty()) {
@@ -321,6 +360,8 @@ void printProgram(const Program &prog) {
         }
         std::cout << "]";
       }
+      if (!eq.unknownFieldName.empty())
+        std::cout << " for " << eq.unknownFieldName;
       std::cout << " = ";
       printExpr(eq.rhs.get());
       std::cout << "\n";

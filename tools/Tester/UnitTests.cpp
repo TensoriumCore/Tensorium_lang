@@ -3574,6 +3574,268 @@ constraints SpectralRobinCoordinate3D {
   return true;
 }
 
+static bool testSpectralResidualExplicitUnknownHostABI() {
+  const char *source = R"tn(
+field scalar psi
+field scalar phi
+field scalar rho
+field scalar H
+field scalar S
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [5,5,8]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints CoupledScalarID {
+  unknown scalar psi
+  unknown scalar phi
+  free scalar rho
+  residual H for psi = laplacian(psi) + phi + rho
+  residual S for phi = laplacian(phi) + psi
+}
+)tn";
+
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+
+  backend::ModuleIR mod =
+      buildModuleFromSource(source, CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  if (!verifyCanonicalIR(mod, "spectral explicit unknown residual"))
+    return false;
+
+  ::mlir::MLIRContext ctx;
+  bool pipelineOk = true;
+  auto module = tensorium_mlir::buildMLIRModule(mod, ctx, opts, &pipelineOk);
+  if (!pipelineOk) {
+    std::cerr << "FAIL: MLIR pipeline failed for explicit spectral unknown\n";
+    return false;
+  }
+
+  const auto abi = tensorium_mlir::buildHostModuleABI(mod, *module);
+  if (abi.spectralResidualSystems.size() != 1 ||
+      abi.spectralResidualSystems[0].name != "CoupledScalarID" ||
+      abi.spectralResidualSystems[0].unknownNames !=
+          std::vector<std::string>({"psi", "phi"}) ||
+      abi.spectralResidualSystems[0].equations.size() != 2) {
+    std::cerr << "FAIL: explicit spectral unknown system descriptor mismatch\n";
+    return false;
+  }
+
+  const auto &h = abi.spectralResidualSystems[0].equations[0];
+  const auto &s = abi.spectralResidualSystems[0].equations[1];
+  if (h.residualName != "H" || h.unknownName != "psi" ||
+      h.unknownIndex != 0 || h.auxiliaryNames !=
+                                std::vector<std::string>({"phi", "rho"}) ||
+      s.residualName != "S" || s.unknownName != "phi" ||
+      s.unknownIndex != 1 ||
+      s.auxiliaryNames != std::vector<std::string>({"psi"})) {
+    std::cerr << "FAIL: explicit spectral unknown equation descriptor mismatch\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSpectralYorkLichnerowiczConstraintHostABI() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/fixtures/elliptic/spectral_york_lichnerowicz_constraint_3d.tn",
+      CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  if (!verifyCanonicalIR(mod, "spectral York Lichnerowicz constraint"))
+    return false;
+
+  ::mlir::MLIRContext ctx;
+  bool pipelineOk = true;
+  auto module = tensorium_mlir::buildMLIRModule(mod, ctx, opts, &pipelineOk);
+  if (!pipelineOk) {
+    std::cerr << "FAIL: MLIR pipeline failed for York Lichnerowicz fixture\n";
+    return false;
+  }
+
+  const auto abi = tensorium_mlir::buildHostModuleABI(mod, *module);
+  if (abi.spectralResidualSystems.size() != 1 ||
+      abi.spectralResidualSystems[0].name !=
+          "SpectralYorkLichnerowiczConstraint3D" ||
+      abi.spectralResidualSystems[0].unknownNames !=
+          std::vector<std::string>({"psi"}) ||
+      abi.spectralResidualSystems[0].equations.size() != 1) {
+    std::cerr << "FAIL: York Lichnerowicz spectral system descriptor mismatch\n";
+    return false;
+  }
+
+  const auto &h = abi.spectralResidualSystems[0].equations[0];
+  if (h.residualName != "H" || h.unknownName != "psi" ||
+      h.unknownIndex != 0 || h.pointKernelSymbol.empty() ||
+      h.gridKernelSymbol.empty() ||
+      h.params != std::vector<std::string>({"matter_coeff", "modified_coeff"}) ||
+      h.auxiliaryNames !=
+          std::vector<std::string>(
+              {"A2", "K", "Rbar", "modSource", "rho"}) ||
+      h.auxiliaryUnknownIndices !=
+          std::vector<std::int64_t>({-1, -1, -1, -1, -1}) ||
+      h.boundaryConditions.size() != 6) {
+    std::cerr << "FAIL: York Lichnerowicz equation descriptor mismatch\n";
+    return false;
+  }
+
+  for (const auto &boundary : h.boundaryConditions) {
+    if (boundary.kind != "robin" || boundary.derivativeKind != "radial" ||
+        boundary.valueCoefficient != 1.0 ||
+        boundary.normalDerivativeCoefficientCoordinate != "radius" ||
+        boundary.targetValue != 1.0) {
+      std::cerr << "FAIL: York Lichnerowicz boundary descriptor mismatch\n";
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool testSpectralYorkMomentumSplitConstraintHostABI() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/fixtures/elliptic/spectral_york_momentum_split_constraint_3d.tn",
+      CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  if (!verifyCanonicalIR(mod, "spectral York momentum split constraint"))
+    return false;
+
+  ::mlir::MLIRContext ctx;
+  bool pipelineOk = true;
+  auto module = tensorium_mlir::buildMLIRModule(mod, ctx, opts, &pipelineOk);
+  if (!pipelineOk) {
+    std::cerr << "FAIL: MLIR pipeline failed for York momentum split fixture\n";
+    return false;
+  }
+
+  const auto abi = tensorium_mlir::buildHostModuleABI(mod, *module);
+  if (abi.spectralResidualSystems.size() != 1 ||
+      abi.spectralResidualSystems[0].name !=
+          "SpectralYorkMomentumSplitConstraint3D" ||
+      abi.spectralResidualSystems[0].unknownNames !=
+          std::vector<std::string>({"psi", "W1", "W2", "W3"}) ||
+      abi.spectralResidualSystems[0].equations.size() != 4) {
+    std::cerr << "FAIL: York momentum split system descriptor mismatch\n";
+    return false;
+  }
+
+  const std::vector<std::string> residuals{"H", "M1", "M2", "M3"};
+  const std::vector<std::string> unknowns{"psi", "W1", "W2", "W3"};
+  for (std::size_t i = 0; i < residuals.size(); ++i) {
+    const auto &eq = abi.spectralResidualSystems[0].equations[i];
+    if (eq.residualName != residuals[i] || eq.unknownName != unknowns[i] ||
+        eq.unknownIndex != static_cast<std::int64_t>(i) ||
+        eq.pointKernelSymbol.empty() || eq.gridKernelSymbol.empty() ||
+        eq.boundaryConditions.size() != 6) {
+      std::cerr << "FAIL: York momentum split equation descriptor mismatch\n";
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool testSpectralYorkMomentumVectorConstraintHostABI() {
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableMetricLoweringPass = true;
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStripSourceFuncsPass = true;
+  opts.enableStencilLoweringPass = true;
+  opts.enableEinsteinLoweringPass = true;
+  opts.enableEinsteinAnalyzeEinsumPass = true;
+  opts.enableEinsteinCanonicalizePass = true;
+  opts.enableEinsteinValidityPass = true;
+
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/fixtures/elliptic/spectral_york_momentum_vector_constraint_3d.tn",
+      CompilationMode::Executable);
+  validation::canonicalizeDifferentialIR(mod);
+  validation::canonicalizeEinsteinIR(mod);
+  if (!verifyCanonicalIR(mod, "spectral York momentum vector constraint"))
+    return false;
+
+  ::mlir::MLIRContext ctx;
+  bool pipelineOk = true;
+  auto module = tensorium_mlir::buildMLIRModule(mod, ctx, opts, &pipelineOk);
+  if (!pipelineOk) {
+    std::cerr << "FAIL: MLIR pipeline failed for York momentum vector fixture\n";
+    return false;
+  }
+
+  const auto abi = tensorium_mlir::buildHostModuleABI(mod, *module);
+  if (abi.spectralResidualSystems.size() != 1 ||
+      abi.spectralResidualSystems[0].name !=
+          "SpectralYorkMomentumVectorConstraint3D" ||
+      abi.spectralResidualSystems[0].unknownNames !=
+          std::vector<std::string>({"psi", "W1", "W2", "W3"}) ||
+      abi.spectralResidualSystems[0].equations.size() != 4) {
+    std::cerr << "FAIL: York momentum vector system descriptor mismatch\n";
+    return false;
+  }
+
+  const std::vector<std::string> residuals{"H", "M1", "M2", "M3"};
+  const std::vector<std::string> unknowns{"psi", "W1", "W2", "W3"};
+  for (std::size_t i = 0; i < residuals.size(); ++i) {
+    const auto &eq = abi.spectralResidualSystems[0].equations[i];
+    if (eq.residualName != residuals[i] || eq.unknownName != unknowns[i] ||
+        eq.unknownIndex != static_cast<std::int64_t>(i) ||
+        eq.pointKernelSymbol.empty() || eq.gridKernelSymbol.empty() ||
+        eq.boundaryConditions.size() != 6) {
+      std::cerr << "FAIL: York momentum vector equation descriptor mismatch\n";
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool testHostFieldStoragePlanDeduplicatesBuffers() {
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableMetricLoweringPass = true;
@@ -5771,6 +6033,14 @@ int main() {
        &testLoweredGridHostABIDescriptor},
       {"testSpectralRobinCoordinateBoundaryHostABI",
        &testSpectralRobinCoordinateBoundaryHostABI},
+      {"testSpectralResidualExplicitUnknownHostABI",
+       &testSpectralResidualExplicitUnknownHostABI},
+      {"testSpectralYorkLichnerowiczConstraintHostABI",
+       &testSpectralYorkLichnerowiczConstraintHostABI},
+      {"testSpectralYorkMomentumSplitConstraintHostABI",
+       &testSpectralYorkMomentumSplitConstraintHostABI},
+      {"testSpectralYorkMomentumVectorConstraintHostABI",
+       &testSpectralYorkMomentumVectorConstraintHostABI},
       {"testHostFieldStoragePlanDeduplicatesBuffers",
        &testHostFieldStoragePlanDeduplicatesBuffers},
       {"testGeneratedHostStorageConsumesDescriptorTables",

@@ -29,10 +29,13 @@ simulation {
 }
 
 constraints SpectralHamiltonianToyNonlinear3D {
+  unknown scalar psi
+  free scalar source
+
   psi2 = psi * psi
   psi4 = psi2 * psi2
   psi5 = psi4 * psi
   Hlocal = laplacian(psi) + mass * psi + alpha * psi5 + source
 
-  residual H = Hlocal
+  residual H for psi = Hlocal
 }

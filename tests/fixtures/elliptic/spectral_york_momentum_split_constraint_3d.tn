@@ -1,0 +1,104 @@
+# Spectral York/Lichnerowicz plus split momentum initial-data fixture.
+#
+# This is an intermediate contract for momentum constraints before native
+# vector-valued spectral unknowns are available. W1/W2/W3 represent the
+# components of a vector potential as separate scalar elliptic unknowns.
+field scalar psi
+field scalar W1
+field scalar W2
+field scalar W3
+field scalar A2
+field scalar K
+field scalar rho
+field scalar Rbar
+field scalar modSource
+field scalar J1
+field scalar J2
+field scalar J3
+field scalar H
+field scalar M1
+field scalar M2
+field scalar M3
+
+params { matter_coeff, modified_coeff, vector_coupling, vector_mass, momentum_psi_coupling }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [7,7,8]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralYorkMomentumSplitConstraint3D {
+  unknown scalar psi
+  unknown scalar W1
+  unknown scalar W2
+  unknown scalar W3
+  free scalar A2
+  free scalar K
+  free scalar rho
+  free scalar Rbar
+  free scalar modSource
+  free scalar J1
+  free scalar J2
+  free scalar J3
+
+  psi2 = psi * psi
+  psi4 = psi2 * psi2
+  psi5 = psi4 * psi
+  psi7 = psi4 * psi2 * psi
+  K2 = K * K
+  Wsum = W1 + W2 + W3
+
+  Hlocal = laplacian(psi) - 0.125 * Rbar * psi + 0.125 * A2 / psi7
+  Hmatter = matter_coeff * rho * psi5
+  Hmodified = modified_coeff * modSource
+  Hmean = Hlocal - 0.08333333333333333 * K2 * psi5 + Hmatter + Hmodified + vector_coupling * Wsum
+
+  M1local = laplacian(W1) + vector_mass * W1 + momentum_psi_coupling * (psi - 1.0) + J1
+  M2local = laplacian(W2) + vector_mass * W2 + momentum_psi_coupling * (psi - 1.0) + J2
+  M3local = laplacian(W3) + vector_mass * W3 + momentum_psi_coupling * (psi - 1.0) + J3
+
+  residual H for psi = Hmean
+  residual M1 for W1 = M1local
+  residual M2 for W2 = M2local
+  residual M3 for W3 = M3local
+
+  boundary H lower_x1 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x1 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H lower_x2 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x2 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H lower_x3 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x3 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+
+  boundary M1 lower_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M1 upper_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M1 lower_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M1 upper_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M1 lower_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M1 upper_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+
+  boundary M2 lower_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M2 upper_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M2 lower_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M2 upper_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M2 lower_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M2 upper_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+
+  boundary M3 lower_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M3 upper_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M3 lower_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M3 upper_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M3 lower_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+  boundary M3 upper_x3 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
+}

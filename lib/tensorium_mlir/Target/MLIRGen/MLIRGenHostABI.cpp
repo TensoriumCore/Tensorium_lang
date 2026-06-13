@@ -420,8 +420,16 @@ std::int64_t appendOrFindUnknown(std::vector<std::string> &unknowns,
 
 std::int64_t findUnknownIndex(const std::vector<std::string> &unknowns,
                               llvm::StringRef name) {
+  std::string lookupName = name.str();
+  const std::string derivedPrefix = "__spectral_deriv_";
+  if (lookupName.rfind(derivedPrefix, 0) == 0) {
+    const std::size_t derivStart = derivedPrefix.size();
+    const std::size_t split = lookupName.find('_', derivStart);
+    if (split != std::string::npos && split + 1 < lookupName.size())
+      lookupName = lookupName.substr(split + 1);
+  }
   for (std::size_t i = 0; i < unknowns.size(); ++i) {
-    if (unknowns[i] == name)
+    if (unknowns[i] == lookupName)
       return static_cast<std::int64_t>(i);
   }
   return -1;
@@ -437,6 +445,9 @@ std::vector<HostSpectralResidualSystemABI> hostSpectralResidualSystems(
   for (const auto &evo : module.evolutions) {
     HostSpectralResidualSystemABI system;
     system.name = evo.name;
+    system.unknownNames.reserve(evo.constraintUnknowns.size());
+    for (const auto &unknown : evo.constraintUnknowns)
+      system.unknownNames.push_back(unknown.name);
     bool complete = true;
     for (const auto &eq : evo.equations) {
       const HostKernelABI *pointKernel = findSpectralResidualKernel(

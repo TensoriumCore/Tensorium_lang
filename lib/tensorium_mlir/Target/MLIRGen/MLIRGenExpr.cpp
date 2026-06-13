@@ -236,6 +236,33 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
       lap->setAttr("sum_indices", makeIndexArrayAttr(b, {"i"}));
       return lap.getResult();
     }
+    if (startsWith(c->callee, "york_vector_laplacian_diag_")) {
+      if (c->args.size() != 1) {
+        emitUnsupportedExprError(
+            loc, "york_vector_laplacian_diag() expects exactly one argument in MLIR emission");
+      }
+
+      auto arg0 = emitExpr(b, loc, c->args[0].get(), fieldArg, localTemps);
+      auto argTy = mlir::dyn_cast<tensorium::mlir::FieldType>(arg0.getType());
+      if (!argTy || argTy.getRank() != 0 || desiredType.getRank() != 0) {
+        emitUnsupportedExprError(
+            loc, "york_vector_laplacian_diag() generic lowering expects scalar component");
+      }
+      return arg0;
+    }
+    if (startsWith(c->callee, "york_vector_laplacian_")) {
+      if (c->args.size() != 1) {
+        emitUnsupportedExprError(
+            loc, "york_vector_laplacian() expects exactly one argument in MLIR emission");
+      }
+      auto arg0 = emitExpr(b, loc, c->args[0].get(), fieldArg, localTemps);
+      auto argTy = mlir::dyn_cast<tensorium::mlir::FieldType>(arg0.getType());
+      if (!argTy || argTy.getRank() != 0 || desiredType.getRank() != 0) {
+        emitUnsupportedExprError(
+            loc, "york_vector_laplacian() generic lowering expects scalar component");
+      }
+      return arg0;
+    }
     if (c->isExtern) {
       if (!isScalarTensorType(c->returnType) || desiredType.getRank() != 0)
         emitExternLoweringError(loc, c->callee);

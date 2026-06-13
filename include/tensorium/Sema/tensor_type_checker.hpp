@@ -598,6 +598,42 @@ public:
         return res;
       }
 
+      if (cal == "vector_laplacian") {
+        if (call->args.size() != 1)
+          throw std::runtime_error(
+              "vector_laplacian() expects exactly 1 argument");
+        TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
+        if (argT.rank() != 1)
+          throw std::runtime_error(
+              "vector_laplacian() expects rank-1 argument");
+        annotateType(e, argT);
+        return argT;
+      }
+
+      if (cal == "york_vector_laplacian_diag") {
+        if (call->args.size() != 1)
+          throw std::runtime_error(
+              "york_vector_laplacian_diag() expects exactly 1 argument");
+        TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
+        if (argT.rank() != 1)
+          throw std::runtime_error(
+              "york_vector_laplacian_diag() expects rank-1 argument");
+        annotateType(e, argT);
+        return argT;
+      }
+
+      if (cal == "york_vector_laplacian") {
+        if (call->args.size() != 1)
+          throw std::runtime_error(
+              "york_vector_laplacian() expects exactly 1 argument");
+        TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
+        if (argT.rank() != 1)
+          throw std::runtime_error(
+              "york_vector_laplacian() expects rank-1 argument");
+        annotateType(e, argT);
+        return argT;
+      }
+
       if (call->isExtern) {
         if (call->paramTypes.size() != call->args.size())
           throw std::runtime_error("extern call parameter mismatch");

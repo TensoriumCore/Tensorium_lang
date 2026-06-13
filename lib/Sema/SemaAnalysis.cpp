@@ -44,6 +44,45 @@ static TensorKind deduceKind(int up, int down) {
   return TensorKind::MixedTensor;
 }
 
+static bool sameTensorShape(const FieldDecl &field,
+                            const TensorTypeDesc &desc) {
+  return field.up == desc.up && field.down == desc.down;
+}
+
+static size_t tensorRank(const TensorTypeDesc &desc) {
+  return static_cast<size_t>(desc.up + desc.down);
+}
+
+static void collectAstFieldRefs(const Expr *expr,
+                                const std::unordered_map<std::string,
+                                                         const FieldDecl *> &fields,
+                                std::unordered_set<std::string> &out) {
+  if (!expr)
+    return;
+  if (auto var = dynamic_cast<const VarExpr *>(expr)) {
+    if (fields.count(var->name))
+      out.insert(var->name);
+    return;
+  }
+  if (auto idx = dynamic_cast<const IndexedVarExpr *>(expr)) {
+    if (fields.count(idx->base))
+      out.insert(idx->base);
+    return;
+  }
+  if (auto bin = dynamic_cast<const BinaryExpr *>(expr)) {
+    collectAstFieldRefs(bin->lhs.get(), fields, out);
+    collectAstFieldRefs(bin->rhs.get(), fields, out);
+    return;
+  }
+  if (auto call = dynamic_cast<const CallExpr *>(expr)) {
+    for (const auto &arg : call->args)
+      collectAstFieldRefs(arg.get(), fields, out);
+    return;
+  }
+  if (auto paren = dynamic_cast<const ParenExpr *>(expr))
+    collectAstFieldRefs(paren->inner.get(), fields, out);
+}
+
 static void seedCoordinateSymbols(const SimulationConfig *sim,
                                   std::unordered_map<std::string, int> &coords) {
   if (!sim)
@@ -228,6 +267,43 @@ SemanticAnalyzer::analyzeConstraint(const ConstraintDecl &decl) {
   IndexedEvolution out;
   out.name = decl.name;
 
+  const bool hasExplicitRoles =
+      !decl.unknowns.empty() || !decl.freeFields.empty();
+  std::unordered_set<std::string> unknownNames;
+  std::unordered_set<std::string> freeNames;
+  auto validateRole = [&](const ConstraintFieldRoleDecl &role,
+                          const char *roleName,
+                          std::unordered_set<std::string> &names) {
+    if (!names.insert(role.name).second)
+      throw std::runtime_error(std::string("constraints ") + roleName +
+                               " redeclared: " + role.name);
+    auto it = fields.find(role.name);
+    if (it == fields.end()) {
+      throw std::runtime_error(std::string("constraints ") + roleName +
+                               " references unknown field '" + role.name + "'");
+    }
+    if (!sameTensorShape(*it->second, role.type)) {
+      throw std::runtime_error(std::string("constraints ") + roleName +
+                               " type mismatch for field '" + role.name + "'");
+    }
+    if (role.indices.size() != tensorRank(role.type)) {
+      throw std::runtime_error(std::string("constraints ") + roleName +
+                               " index count mismatch for field '" +
+                               role.name + "'");
+    }
+  };
+  for (const auto &unknown : decl.unknowns)
+    validateRole(unknown, "unknown", unknownNames);
+  for (const auto &freeField : decl.freeFields)
+    validateRole(freeField, "free", freeNames);
+  for (const auto &name : unknownNames) {
+    if (freeNames.count(name)) {
+      throw std::runtime_error("constraints field cannot be both unknown and "
+                               "free: " +
+                               name);
+    }
+  }
+
   for (const auto &tmp : decl.tempAssignments)
     for (const auto &idx : tmp.lhs.indices) {
       validateSpatialIndex(idx);
@@ -239,6 +315,39 @@ SemanticAnalyzer::analyzeConstraint(const ConstraintDecl &decl) {
       validateSpatialIndex(idx);
       coordIndex[idx] = -1;
     }
+
+  for (const auto &eq : decl.residuals) {
+    if (!eq.unknownFieldName.empty() && !fields.count(eq.unknownFieldName)) {
+      throw std::runtime_error("Unknown field in constraints residual unknown: " +
+                               eq.unknownFieldName);
+    }
+    if (hasExplicitRoles) {
+      if (eq.unknownFieldName.empty()) {
+        throw std::runtime_error("constraints residual '" + eq.fieldName +
+                                 "' requires `for <unknown>` when unknown/free "
+                                 "roles are declared");
+      }
+      if (!unknownNames.count(eq.unknownFieldName)) {
+        throw std::runtime_error("constraints residual '" + eq.fieldName +
+                                 "' references non-unknown field '" +
+                                 eq.unknownFieldName + "'");
+      }
+    }
+  }
+
+  if (hasExplicitRoles) {
+    std::unordered_set<std::string> usedFields;
+    for (const auto &tmp : decl.tempAssignments)
+      collectAstFieldRefs(tmp.rhs.get(), fields, usedFields);
+    for (const auto &eq : decl.residuals)
+      collectAstFieldRefs(eq.rhs.get(), fields, usedFields);
+    for (const std::string &fieldName : usedFields) {
+      if (!unknownNames.count(fieldName) && !freeNames.count(fieldName)) {
+        throw std::runtime_error("constraints field '" + fieldName +
+                                 "' must be declared unknown or free");
+      }
+    }
+  }
 
   std::unordered_set<std::string> residualNames;
   for (const auto &eq : decl.residuals)
@@ -342,6 +451,7 @@ SemanticAnalyzer::analyzeConstraint(const ConstraintDecl &decl) {
 
     IndexedEvolutionEq ie;
     ie.fieldName = eq.fieldName;
+    ie.unknownFieldName = eq.unknownFieldName;
     ie.indices = eq.indices;
     ie.rhs = transformExpr(eq.rhs.get());
 

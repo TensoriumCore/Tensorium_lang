@@ -33,9 +33,14 @@ simulation {
 }
 
 constraints SpectralTwoFieldSystem3D {
+  unknown scalar u
+  unknown scalar v
+  free scalar source_u
+  free scalar source_v
+
   Hulocal = laplacian(u) + alpha * u + coupling * v + source_u
   Hvlocal = laplacian(v) + beta * v + coupling * u + source_v
 
-  residual Hu = Hulocal
-  residual Hv = Hvlocal
+  residual Hu for u = Hulocal
+  residual Hv for v = Hvlocal
 }

@@ -174,6 +174,40 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       return out;
     }
 
+    if (c->callee == "vector_laplacian") {
+      if (c->args.size() != 1)
+        throw std::runtime_error("vector_laplacian() expects exactly 1 argument");
+      TensorTypeChecker checker;
+      auto arg = transformExpr(c->args[0].get());
+      TensorType argT = checker.infer(arg.get());
+      if (argT.rank() != 1)
+        throw std::runtime_error("vector_laplacian() expects rank-1 argument");
+
+      auto d1 = makeDeriv("j", std::move(arg), checker);
+      auto d2 = makeDeriv("j", std::move(d1), checker);
+      auto out = makeContract(std::move(d2), checker);
+      checker.infer(out.get());
+      return out;
+    }
+
+    if (c->callee == "york_vector_laplacian" ||
+        c->callee == "york_vector_laplacian_diag") {
+      if (c->args.size() != 1)
+        throw std::runtime_error(c->callee + "() expects exactly 1 argument");
+      TensorTypeChecker checker;
+      auto arg = transformExpr(c->args[0].get());
+      TensorType argT = checker.infer(arg.get());
+      if (argT.rank() != 1)
+        throw std::runtime_error(c->callee + "() expects rank-1 argument");
+
+      auto out = std::make_unique<IndexedCall>();
+      out->callee = c->callee;
+      out->args.push_back(std::move(arg));
+      out->isExtern = false;
+      checker.infer(out.get());
+      return out;
+    }
+
     const bool isCovariantNabla =
         c->callee.size() == 7 && c->callee.rfind("nabla_", 0) == 0;
     const bool isContravariantNabla =

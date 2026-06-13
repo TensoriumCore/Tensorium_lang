@@ -142,8 +142,15 @@ struct EvolutionDecl {
 
 struct ConstraintEq {
   std::string fieldName;
+  std::string unknownFieldName;
   std::vector<std::string> indices;
   std::unique_ptr<Expr> rhs;
+};
+
+struct ConstraintFieldRoleDecl {
+  TensorTypeDesc type;
+  std::string name;
+  std::vector<std::string> indices;
 };
 
 struct BoundaryConditionDecl {
@@ -161,6 +168,8 @@ struct BoundaryConditionDecl {
 
 struct ConstraintDecl {
   std::string name;
+  std::vector<ConstraintFieldRoleDecl> unknowns;
+  std::vector<ConstraintFieldRoleDecl> freeFields;
   std::vector<ConstraintEq> residuals;
   std::vector<Assignment> tempAssignments;
   std::vector<BoundaryConditionDecl> boundaryConditions;

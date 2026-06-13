@@ -174,6 +174,179 @@ static tensorium::ir::TensorType makeTensorType(int up, int down) {
   return out;
 }
 
+static std::string spectralComponentName(const std::string &base,
+                                         int component) {
+  return base + std::to_string(component + 1);
+}
+
+static std::string spectralComponentCoordName(int component) {
+  switch (component) {
+  case 0:
+    return "i";
+  case 1:
+    return "j";
+  default:
+    return "k";
+  }
+}
+
+static bool isRankOneField(const std::vector<FieldIR> &fields,
+                           const std::string &name) {
+  for (const auto &field : fields)
+    if (field.name == name)
+      return field.tensorType.rank() == 1;
+  return false;
+}
+
+static bool hasFieldIR(const std::vector<FieldIR> &fields,
+                       const std::string &name) {
+  for (const auto &field : fields)
+    if (field.name == name)
+      return true;
+  return false;
+}
+
+static void ensureScalarComponentFields(std::vector<FieldIR> &fields,
+                                        const std::string &base) {
+  if (!isRankOneField(fields, base))
+    return;
+  for (int component = 0; component < 3; ++component) {
+    const std::string name = spectralComponentName(base, component);
+    if (hasFieldIR(fields, name))
+      continue;
+    FieldIR out;
+    out.name = name;
+    out.kind = FieldKind::Scalar;
+    out.tensorType = makeTensorType(0, 0);
+    fields.push_back(std::move(out));
+  }
+}
+
+static void componentizeRankOneFieldRefs(ExprIR *expr,
+                                         const std::vector<FieldIR> &fields,
+                                         const std::string &componentIndex,
+                                         int component) {
+  if (!expr)
+    return;
+  switch (expr->kind) {
+  case ExprIR::Kind::Var: {
+    auto *var = static_cast<VarIR *>(expr);
+    if (var->vkind == VarKind::Field && isRankOneField(fields, var->name) &&
+        var->tensorIndexNames.size() == 1 &&
+        var->tensorIndexNames[0] == componentIndex) {
+      var->name = spectralComponentName(var->name, component);
+      var->tensorIndexNames.clear();
+      var->exprType = makeTensorType(0, 0);
+    }
+    return;
+  }
+  case ExprIR::Kind::Binary: {
+    auto *bin = static_cast<BinaryIR *>(expr);
+    componentizeRankOneFieldRefs(bin->lhs.get(), fields, componentIndex,
+                                 component);
+    componentizeRankOneFieldRefs(bin->rhs.get(), fields, componentIndex,
+                                 component);
+    bin->exprType = makeTensorType(0, 0);
+    return;
+  }
+  case ExprIR::Kind::TensorProduct: {
+    auto *prod = static_cast<TensorProductIR *>(expr);
+    componentizeRankOneFieldRefs(prod->lhs.get(), fields, componentIndex,
+                                 component);
+    componentizeRankOneFieldRefs(prod->rhs.get(), fields, componentIndex,
+                                 component);
+    prod->exprType = makeTensorType(0, 0);
+    return;
+  }
+  case ExprIR::Kind::Call: {
+    auto *call = static_cast<CallIR *>(expr);
+    std::string vectorBase;
+    if (call->callee == "york_vector_laplacian" && call->args.size() == 1) {
+      if (auto *var = dynamic_cast<VarIR *>(call->args[0].get());
+          var && var->vkind == VarKind::Field)
+        vectorBase = var->name;
+    }
+    for (auto &arg : call->args)
+      componentizeRankOneFieldRefs(arg.get(), fields, componentIndex,
+                                   component);
+    if (call->callee == "york_vector_laplacian_diag")
+      call->callee += "_" + spectralComponentCoordName(component);
+    if (call->callee == "york_vector_laplacian" && !vectorBase.empty())
+      call->callee += "_" + vectorBase + "_" + std::to_string(component);
+    call->exprType = makeTensorType(0, 0);
+    return;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    auto *deriv = static_cast<PartialDerivativeIR *>(expr);
+    componentizeRankOneFieldRefs(deriv->in.get(), fields, componentIndex,
+                                 component);
+    if (deriv->coordIndex == componentIndex)
+      deriv->coordIndex = spectralComponentCoordName(component);
+    deriv->exprType =
+        makeTensorType(deriv->in ? deriv->in->exprType.up : 0,
+                       deriv->in ? deriv->in->exprType.down + 1 : 1);
+    return;
+  }
+  case ExprIR::Kind::Contraction: {
+    auto *contract = static_cast<ContractionIR *>(expr);
+    componentizeRankOneFieldRefs(contract->in.get(), fields, componentIndex,
+                                 component);
+    contract->exprType = makeTensorType(0, 0);
+    return;
+  }
+  case ExprIR::Kind::IndexRename: {
+    auto *rename = static_cast<IndexRenameIR *>(expr);
+    componentizeRankOneFieldRefs(rename->in.get(), fields, componentIndex,
+                                 component);
+    rename->exprType = rename->in ? rename->in->exprType : makeTensorType(0, 0);
+    return;
+  }
+  case ExprIR::Kind::IndexPermute: {
+    auto *permute = static_cast<IndexPermuteIR *>(expr);
+    componentizeRankOneFieldRefs(permute->in.get(), fields, componentIndex,
+                                 component);
+    permute->exprType =
+        permute->in ? permute->in->exprType : makeTensorType(0, 0);
+    return;
+  }
+  case ExprIR::Kind::Trace: {
+    auto *trace = static_cast<TraceIR *>(expr);
+    componentizeRankOneFieldRefs(trace->in.get(), fields, componentIndex,
+                                 component);
+    trace->exprType = makeTensorType(0, 0);
+    return;
+  }
+  case ExprIR::Kind::Gradient: {
+    auto *grad = static_cast<GradientIR *>(expr);
+    componentizeRankOneFieldRefs(grad->in.get(), fields, componentIndex,
+                                 component);
+    grad->exprType =
+        makeTensorType(grad->in ? grad->in->exprType.up : 0,
+                       grad->in ? grad->in->exprType.down + 1 : 1);
+    return;
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    auto *deriv = static_cast<CovariantDerivativeIR *>(expr);
+    componentizeRankOneFieldRefs(deriv->in.get(), fields, componentIndex,
+                                 component);
+    deriv->exprType =
+        makeTensorType(deriv->in ? deriv->in->exprType.up : 0,
+                       deriv->in ? deriv->in->exprType.down + 1 : 1);
+    return;
+  }
+  case ExprIR::Kind::Divergence: {
+    auto *div = static_cast<DivergenceIR *>(expr);
+    componentizeRankOneFieldRefs(div->in.get(), fields, componentIndex,
+                                 component);
+    div->exprType = makeTensorType(0, 0);
+    return;
+  }
+  case ExprIR::Kind::Number:
+    expr->exprType = makeTensorType(0, 0);
+    return;
+  }
+}
+
 static std::unique_ptr<VarIR>
 makeIndexedFieldRef(const std::string &fieldName,
                     const std::vector<std::string> &indexNames, int up,
@@ -191,6 +364,11 @@ asFieldVar(const tensorium::IndexedExpr *e) {
     return nullptr;
   return v;
 }
+
+static std::unique_ptr<ExprIR>
+lowerIndexedExpr(const tensorium::IndexedExpr *e,
+                bool materializeImplicitContraction,
+                bool hasConnectionTensor);
 
 static std::unique_ptr<ExprIR>
 lowerChristoffelBuiltin(const tensorium::IndexedCall *call) {
@@ -245,6 +423,37 @@ lowerChristoffelBuiltin(const tensorium::IndexedCall *call) {
       std::make_unique<BinaryIR>("*", std::move(half), std::move(contraction));
   out->exprType = lowerTensorType(call->inferredType);
   return out;
+}
+
+static std::string componentIndexName(const tensorium::IndexedCall *call) {
+  if (!call || call->args.empty())
+    return "?";
+  auto *field = dynamic_cast<const tensorium::IndexedVar *>(call->args[0].get());
+  if (!field || field->tensorIndexNames.size() != 1)
+    return "?";
+  return field->tensorIndexNames.front();
+}
+
+static std::unique_ptr<ExprIR>
+lowerVectorLaplacianExpr(const tensorium::IndexedExpr *arg,
+                         bool materializeImplicitContraction,
+                         bool hasConnectionTensor,
+                         const tensorium::ir::TensorType &resultType,
+                         const std::string &dummyIndex) {
+  auto first = std::make_unique<PartialDerivativeIR>(
+      lowerIndexedExpr(arg, materializeImplicitContraction,
+                       hasConnectionTensor),
+      dummyIndex);
+  first->exprType =
+      makeTensorType(arg->inferredType.up, arg->inferredType.down + 1);
+  auto second =
+      std::make_unique<PartialDerivativeIR>(std::move(first), dummyIndex);
+  second->exprType =
+      makeTensorType(arg->inferredType.up, arg->inferredType.down + 2);
+  auto trace = std::make_unique<TraceIR>(std::move(second));
+  trace->tracedIndices = {dummyIndex};
+  trace->exprType = resultType;
+  return trace;
 }
 
 static std::unique_ptr<ExprIR>
@@ -398,6 +607,44 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
         trace->tracedIndices = collectRepeatedIndices(c->args[0].get());
       trace->exprType = lowerTensorType(c->inferredType);
       return trace;
+    }
+
+    if (c->callee == "vector_laplacian") {
+      if (c->args.empty())
+        return std::make_unique<CallIR>("<invalid_vector_laplacian>");
+      return lowerVectorLaplacianExpr(
+          c->args[0].get(), materializeImplicitContraction,
+          hasConnectionTensor, lowerTensorType(c->inferredType), "j");
+    }
+
+    if (c->callee == "york_vector_laplacian_diag") {
+      if (c->args.empty())
+        return std::make_unique<CallIR>(
+            "<invalid_york_vector_laplacian_diag>");
+      const std::string componentIndex = componentIndexName(c);
+      if (!tensorium::core::isTensorIndexName(componentIndex))
+        return std::make_unique<CallIR>(
+            "<invalid_york_vector_laplacian_diag>");
+      auto out = std::make_unique<CallIR>("york_vector_laplacian_diag");
+      out->args.push_back(lowerIndexedExpr(c->args[0].get(),
+                                           materializeImplicitContraction,
+                                           hasConnectionTensor));
+      out->exprType = lowerTensorType(c->inferredType);
+      return out;
+    }
+
+    if (c->callee == "york_vector_laplacian") {
+      if (c->args.empty())
+        return std::make_unique<CallIR>("<invalid_york_vector_laplacian>");
+      const std::string componentIndex = componentIndexName(c);
+      if (!tensorium::core::isTensorIndexName(componentIndex))
+        return std::make_unique<CallIR>("<invalid_york_vector_laplacian>");
+      auto out = std::make_unique<CallIR>("york_vector_laplacian");
+      out->args.push_back(lowerIndexedExpr(c->args[0].get(),
+                                           materializeImplicitContraction,
+                                           hasConnectionTensor));
+      out->exprType = lowerTensorType(c->inferredType);
+      return out;
     }
 
     if (c->callee == "index_permute") {
@@ -672,6 +919,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
     for (const auto &eq : indexed.equations) {
       EquationIR oeq;
       oeq.fieldName = eq.fieldName;
+      oeq.unknownFieldName = eq.unknownFieldName;
       oeq.indices = eq.indices;
       oeq.rhs = lowerIndexedExpr(eq.rhs.get(), true, hasConnectionTensor);
       out.equations.push_back(std::move(oeq));
@@ -695,14 +943,66 @@ ModuleIR BackendBuilder::build(const Program &prog,
 
     EvolutionIR out;
     out.name = indexed.name;
+    out.constraintUnknowns.reserve(constraints.unknowns.size());
+    for (const auto &unknown : constraints.unknowns) {
+      ensureScalarComponentFields(mod.fields, unknown.name);
+      if (unknown.type.up + unknown.type.down == 1) {
+        for (int component = 0; component < 3; ++component) {
+          ConstraintFieldRoleIR role;
+          role.name = spectralComponentName(unknown.name, component);
+          role.tensorType = makeTensorType(0, 0);
+          out.constraintUnknowns.push_back(std::move(role));
+        }
+      } else {
+        ConstraintFieldRoleIR role;
+        role.name = unknown.name;
+        role.tensorType = lowerTensorType(unknown.type);
+        out.constraintUnknowns.push_back(std::move(role));
+      }
+    }
+    out.constraintFreeFields.reserve(constraints.freeFields.size());
+    for (const auto &freeField : constraints.freeFields) {
+      ensureScalarComponentFields(mod.fields, freeField.name);
+      if (freeField.type.up + freeField.type.down == 1) {
+        for (int component = 0; component < 3; ++component) {
+          ConstraintFieldRoleIR role;
+          role.name = spectralComponentName(freeField.name, component);
+          role.tensorType = makeTensorType(0, 0);
+          out.constraintFreeFields.push_back(std::move(role));
+        }
+      } else {
+        ConstraintFieldRoleIR role;
+        role.name = freeField.name;
+        role.tensorType = lowerTensorType(freeField.type);
+        out.constraintFreeFields.push_back(std::move(role));
+      }
+    }
     out.equations.reserve(indexed.equations.size());
 
     for (const auto &eq : indexed.equations) {
-      EquationIR oeq;
-      oeq.fieldName = eq.fieldName;
-      oeq.indices = eq.indices;
-      oeq.rhs = lowerIndexedExpr(eq.rhs.get(), true, hasConnectionTensor);
-      out.equations.push_back(std::move(oeq));
+      ensureScalarComponentFields(mod.fields, eq.fieldName);
+      ensureScalarComponentFields(mod.fields, eq.unknownFieldName);
+      if (eq.indices.size() == 1 && isRankOneField(mod.fields, eq.fieldName) &&
+          isRankOneField(mod.fields, eq.unknownFieldName)) {
+        for (int component = 0; component < 3; ++component) {
+          EquationIR oeq;
+          oeq.fieldName = spectralComponentName(eq.fieldName, component);
+          oeq.unknownFieldName =
+              spectralComponentName(eq.unknownFieldName, component);
+          oeq.rhs = lowerIndexedExpr(eq.rhs.get(), true, hasConnectionTensor);
+          componentizeRankOneFieldRefs(oeq.rhs.get(), mod.fields,
+                                       eq.indices.front(), component);
+          oeq.rhs->exprType = makeTensorType(0, 0);
+          out.equations.push_back(std::move(oeq));
+        }
+      } else {
+        EquationIR oeq;
+        oeq.fieldName = eq.fieldName;
+        oeq.unknownFieldName = eq.unknownFieldName;
+        oeq.indices = eq.indices;
+        oeq.rhs = lowerIndexedExpr(eq.rhs.get(), true, hasConnectionTensor);
+        out.equations.push_back(std::move(oeq));
+      }
     }
 
     out.temporaries.reserve(indexed.temp.size());
@@ -717,20 +1017,27 @@ ModuleIR BackendBuilder::build(const Program &prog,
 
     out.boundaryConditions.reserve(constraints.boundaryConditions.size());
     for (const auto &boundary : constraints.boundaryConditions) {
-      BoundaryConditionIR bc;
-      bc.residualName = boundary.residualName;
-      bc.face = boundary.face;
-      bc.kind = boundary.kind;
-      bc.valueCoefficient = boundary.valueCoefficient;
-      bc.normalDerivativeCoefficient =
-          boundary.normalDerivativeCoefficient;
-      bc.targetValue = boundary.targetValue;
-      bc.derivativeKind = boundary.derivativeKind;
-      bc.valueCoefficientCoordinate = boundary.valueCoefficientCoordinate;
-      bc.normalDerivativeCoefficientCoordinate =
-          boundary.normalDerivativeCoefficientCoordinate;
-      bc.targetValueCoordinate = boundary.targetValueCoordinate;
-      out.boundaryConditions.push_back(std::move(bc));
+      const int componentCount =
+          isRankOneField(mod.fields, boundary.residualName) ? 3 : 1;
+      for (int component = 0; component < componentCount; ++component) {
+        BoundaryConditionIR bc;
+        bc.residualName =
+            componentCount == 1
+                ? boundary.residualName
+                : spectralComponentName(boundary.residualName, component);
+        bc.face = boundary.face;
+        bc.kind = boundary.kind;
+        bc.valueCoefficient = boundary.valueCoefficient;
+        bc.normalDerivativeCoefficient =
+            boundary.normalDerivativeCoefficient;
+        bc.targetValue = boundary.targetValue;
+        bc.derivativeKind = boundary.derivativeKind;
+        bc.valueCoefficientCoordinate = boundary.valueCoefficientCoordinate;
+        bc.normalDerivativeCoefficientCoordinate =
+            boundary.normalDerivativeCoefficientCoordinate;
+        bc.targetValueCoordinate = boundary.targetValueCoordinate;
+        out.boundaryConditions.push_back(std::move(bc));
+      }
     }
 
     mod.evolutions.push_back(std::move(out));

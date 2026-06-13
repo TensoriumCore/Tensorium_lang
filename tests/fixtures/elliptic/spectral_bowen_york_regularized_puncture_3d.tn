@@ -34,6 +34,8 @@ simulation {
 }
 
 constraints SpectralBowenYorkRegularizedPuncture3D {
+  unknown scalar u
+
   X = x - x0
   Y = y - y0
   Z = z - z0
@@ -55,7 +57,7 @@ constraints SpectralBowenYorkRegularizedPuncture3D {
 
   Hlocal = laplacian(u) + 0.125 * A2 / psi7
 
-  residual H = Hlocal
+  residual H for u = Hlocal
   boundary H lower_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
   boundary H upper_x1 robin(value=1.0, normal=radius, target=0.0, derivative=radial)
   boundary H lower_x2 robin(value=1.0, normal=radius, target=0.0, derivative=radial)

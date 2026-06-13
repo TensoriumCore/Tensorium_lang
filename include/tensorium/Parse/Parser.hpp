@@ -29,6 +29,8 @@ class Parser {
   InitialDataDecl parseInitialData();
   EvolutionEq parseEvolutionEq();
   EvolutionDecl parseEvolution();
+  ConstraintFieldRoleDecl parseConstraintFieldRoleDecl(
+      const std::string &roleName);
   ConstraintEq parseConstraintEq();
   BoundaryConditionDecl parseBoundaryConditionDecl();
   ConstraintDecl parseConstraints();

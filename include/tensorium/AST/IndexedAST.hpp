@@ -70,6 +70,7 @@ struct IndexedMetric {
 
 struct IndexedEvolutionEq {
   std::string fieldName;
+  std::string unknownFieldName;
   std::vector<std::string> indices;
   std::unique_ptr<IndexedExpr> rhs;
 };

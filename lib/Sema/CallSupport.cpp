@@ -16,6 +16,12 @@ bool isExecutableBuiltin(std::string_view name) {
     return true;
   if (name == "laplacian")
     return true;
+  if (name == "vector_laplacian")
+    return true;
+  if (name == "york_vector_laplacian_diag")
+    return true;
+  if (name == "york_vector_laplacian")
+    return true;
   if (name == "covariant_derivative")
     return true;
   if (name.size() == 7 && name.rfind("nabla_", 0) == 0 &&

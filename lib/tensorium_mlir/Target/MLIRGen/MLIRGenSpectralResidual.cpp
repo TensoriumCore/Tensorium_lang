@@ -66,6 +66,68 @@ struct SpectralCandidate {
   std::vector<std::string> auxiliaryFields;
 };
 
+std::string spectralDerivedAuxName(const std::string &derivative,
+                                   const std::string &field) {
+  return "__spectral_deriv_" + derivative + "_" + field;
+}
+
+bool parseSpectralDerivedAuxName(const std::string &name,
+                                 std::string &derivative,
+                                 std::string &field) {
+  const std::string prefix = "__spectral_deriv_";
+  if (name.rfind(prefix, 0) != 0)
+    return false;
+  const std::size_t derivStart = prefix.size();
+  const std::size_t split = name.find('_', derivStart);
+  if (split == std::string::npos)
+    return false;
+  derivative = name.substr(derivStart, split - derivStart);
+  field = name.substr(split + 1);
+  return !derivative.empty() && !field.empty();
+}
+
+std::string spectralAuxBaseFieldName(const std::string &name) {
+  std::string derivative;
+  std::string field;
+  if (parseSpectralDerivedAuxName(name, derivative, field))
+    return field;
+  return name;
+}
+
+bool parseYorkVectorLaplacianCall(const std::string &callee,
+                                  std::string &base, int &component) {
+  const std::string prefix = "york_vector_laplacian_";
+  if (callee.rfind(prefix, 0) != 0)
+    return false;
+  const std::string rest = callee.substr(prefix.size());
+  const std::size_t split = rest.rfind('_');
+  if (split == std::string::npos || split + 1 >= rest.size())
+    return false;
+  base = rest.substr(0, split);
+  try {
+    component = std::stoi(rest.substr(split + 1));
+  } catch (...) {
+    return false;
+  }
+  return component >= 0 && component < 3 && !base.empty();
+}
+
+std::string secondDerivativeNameForAxes(int a, int b) {
+  if (a > b)
+    std::swap(a, b);
+  if (a == 0 && b == 0)
+    return "d11";
+  if (a == 0 && b == 1)
+    return "d12";
+  if (a == 0 && b == 2)
+    return "d13";
+  if (a == 1 && b == 1)
+    return "d22";
+  if (a == 1 && b == 2)
+    return "d23";
+  return "d33";
+}
+
 bool isScalarField(const ModuleIR &module, const std::string &name) {
   for (const FieldIR &field : module.fields) {
     if (field.name == name)
@@ -206,7 +268,19 @@ void collectDerivativeBaseFields(
   }
   case ExprIR::Kind::Call: {
     const auto *call = static_cast<const CallIR *>(expr);
-    if (call->callee == "laplacian" && call->args.size() == 1) {
+    if ((call->callee == "laplacian" ||
+         call->callee.rfind("york_vector_laplacian_diag_", 0) == 0) &&
+        call->args.size() == 1) {
+      std::unordered_set<std::string> fields;
+      std::unordered_set<std::string> nested;
+      collectFieldNames(call->args[0].get(), temps, fields, nested);
+      out.insert(fields.begin(), fields.end());
+      return;
+    }
+    std::string yorkBase;
+    int yorkComponent = -1;
+    if (parseYorkVectorLaplacianCall(call->callee, yorkBase, yorkComponent) &&
+        call->args.size() == 1) {
       std::unordered_set<std::string> fields;
       std::unordered_set<std::string> nested;
       collectFieldNames(call->args[0].get(), temps, fields, nested);
@@ -339,6 +413,84 @@ sortedParamNames(const ExprIR *expr,
   return out;
 }
 
+void collectSpectralDerivedAuxNames(
+    const ExprIR *expr, const std::unordered_map<std::string, const ExprIR *> &temps,
+    std::vector<std::string> &out, std::unordered_set<std::string> &seen,
+    std::unordered_set<std::string> &visiting) {
+  if (!expr)
+    return;
+  switch (expr->kind) {
+  case ExprIR::Kind::Var: {
+    const auto *var = static_cast<const VarIR *>(expr);
+    if (var->vkind == VarKind::Local && visiting.insert(var->name).second) {
+      auto it = temps.find(var->name);
+      if (it != temps.end())
+        collectSpectralDerivedAuxNames(it->second, temps, out, seen, visiting);
+      visiting.erase(var->name);
+    }
+    return;
+  }
+  case ExprIR::Kind::Binary: {
+    const auto *bin = static_cast<const BinaryIR *>(expr);
+    collectSpectralDerivedAuxNames(bin->lhs.get(), temps, out, seen, visiting);
+    collectSpectralDerivedAuxNames(bin->rhs.get(), temps, out, seen, visiting);
+    return;
+  }
+  case ExprIR::Kind::Call: {
+    const auto *call = static_cast<const CallIR *>(expr);
+    std::string base;
+    int component = -1;
+    if (parseYorkVectorLaplacianCall(call->callee, base, component)) {
+      for (int sibling = 0; sibling < 3; ++sibling) {
+        if (sibling == component)
+          continue;
+        const std::string name = spectralDerivedAuxName(
+            secondDerivativeNameForAxes(component, sibling),
+            base + std::to_string(sibling + 1));
+        if (seen.insert(name).second)
+          out.push_back(name);
+      }
+    }
+    for (const auto &arg : call->args)
+      collectSpectralDerivedAuxNames(arg.get(), temps, out, seen, visiting);
+    return;
+  }
+  case ExprIR::Kind::TensorProduct: {
+    const auto *prod = static_cast<const TensorProductIR *>(expr);
+    collectSpectralDerivedAuxNames(prod->lhs.get(), temps, out, seen, visiting);
+    collectSpectralDerivedAuxNames(prod->rhs.get(), temps, out, seen, visiting);
+    return;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    const auto *deriv = static_cast<const PartialDerivativeIR *>(expr);
+    collectSpectralDerivedAuxNames(deriv->in.get(), temps, out, seen, visiting);
+    return;
+  }
+  case ExprIR::Kind::Contraction: {
+    const auto *contract = static_cast<const ContractionIR *>(expr);
+    collectSpectralDerivedAuxNames(contract->in.get(), temps, out, seen, visiting);
+    return;
+  }
+  case ExprIR::Kind::IndexRename: {
+    const auto *rename = static_cast<const IndexRenameIR *>(expr);
+    collectSpectralDerivedAuxNames(rename->in.get(), temps, out, seen, visiting);
+    return;
+  }
+  case ExprIR::Kind::IndexPermute: {
+    const auto *permute = static_cast<const IndexPermuteIR *>(expr);
+    collectSpectralDerivedAuxNames(permute->in.get(), temps, out, seen, visiting);
+    return;
+  }
+  case ExprIR::Kind::Trace: {
+    const auto *trace = static_cast<const TraceIR *>(expr);
+    collectSpectralDerivedAuxNames(trace->in.get(), temps, out, seen, visiting);
+    return;
+  }
+  default:
+    return;
+  }
+}
+
 std::optional<SpectralCandidate>
 classifySpectralCandidate(const ModuleIR &module, const EvolutionIR &evo,
                           const EquationIR &eq) {
@@ -358,9 +510,24 @@ classifySpectralCandidate(const ModuleIR &module, const EvolutionIR &evo,
   collectDerivativeBaseFields(eq.rhs.get(), temps, derivativeFields,
                               visitingDerivatives);
 
-  if (derivativeFields.size() != 1)
-    return std::nullopt;
-  const std::string unknown = *derivativeFields.begin();
+  std::string unknown;
+  if (!eq.unknownFieldName.empty()) {
+    unknown = eq.unknownFieldName;
+    if (derivativeFields.empty()) {
+      if (!fieldNames.count(unknown))
+        return std::nullopt;
+    } else if (!derivativeFields.count(unknown)) {
+      return std::nullopt;
+    }
+    for (const std::string &fieldName : derivativeFields) {
+      if (fieldName != unknown)
+        return std::nullopt;
+    }
+  } else {
+    if (derivativeFields.size() != 1)
+      return std::nullopt;
+    unknown = *derivativeFields.begin();
+  }
   if (!isScalarField(module, unknown))
     return std::nullopt;
   if (!fieldNames.count(unknown))
@@ -374,7 +541,16 @@ classifySpectralCandidate(const ModuleIR &module, const EvolutionIR &evo,
       return std::nullopt;
     auxiliaryFields.push_back(fieldName);
   }
+  std::unordered_set<std::string> seenAux(auxiliaryFields.begin(),
+                                          auxiliaryFields.end());
+  std::unordered_set<std::string> visitingAux;
+  collectSpectralDerivedAuxNames(eq.rhs.get(), temps, auxiliaryFields,
+                                 seenAux, visitingAux);
   std::sort(auxiliaryFields.begin(), auxiliaryFields.end());
+  for (const std::string &auxiliary : auxiliaryFields) {
+    if (!isScalarField(module, spectralAuxBaseFieldName(auxiliary)))
+      return std::nullopt;
+  }
   return SpectralCandidate{eq.fieldName, unknown, std::move(auxiliaryFields)};
 }
 
@@ -516,6 +692,73 @@ private:
               .getResult();
       return b.create<mlir::arith::AddFOp>(loc, sum, pointArgs.d33)
           .getResult();
+    }
+
+    if (call->callee.rfind("york_vector_laplacian_diag_", 0) == 0) {
+      if (call->args.size() != 1 || !isUnknownExpr(call->args[0].get())) {
+        emitUnsupportedExprError(
+            loc, "spectral york_vector_laplacian_diag() expects the scalarized unknown");
+      }
+      const std::string axis = call->callee.substr(
+          std::string("york_vector_laplacian_diag_").size());
+      mlir::Value lap =
+          b.create<mlir::arith::AddFOp>(
+               loc,
+               b.create<mlir::arith::AddFOp>(loc, pointArgs.d11, pointArgs.d22)
+                   .getResult(),
+               pointArgs.d33)
+              .getResult();
+      mlir::Value oneThird =
+          b.create<mlir::arith::ConstantFloatOp>(
+               loc, llvm::APFloat(1.0 / 3.0),
+               llvm::cast<mlir::FloatType>(b.getF64Type()))
+              .getResult();
+      mlir::Value diagonal =
+          b.create<mlir::arith::MulFOp>(
+               loc, oneThird, secondDerivative(axis, axis))
+              .getResult();
+      return b.create<mlir::arith::AddFOp>(loc, lap, diagonal).getResult();
+    }
+
+    std::string yorkBase;
+    int yorkComponent = -1;
+    if (parseYorkVectorLaplacianCall(call->callee, yorkBase, yorkComponent)) {
+      if (call->args.size() != 1 || !isUnknownExpr(call->args[0].get())) {
+        emitUnsupportedExprError(
+            loc, "spectral york_vector_laplacian() expects the scalarized unknown");
+      }
+      mlir::Value lap =
+          b.create<mlir::arith::AddFOp>(
+               loc,
+               b.create<mlir::arith::AddFOp>(loc, pointArgs.d11, pointArgs.d22)
+                   .getResult(),
+               pointArgs.d33)
+              .getResult();
+      const std::string axisCoords[3] = {"i", "j", "k"};
+      mlir::Value divGrad = secondDerivative(
+          axisCoords[yorkComponent], axisCoords[yorkComponent]);
+      for (int sibling = 0; sibling < 3; ++sibling) {
+        if (sibling == yorkComponent)
+          continue;
+        const std::string auxName = spectralDerivedAuxName(
+            secondDerivativeNameForAxes(yorkComponent, sibling),
+            yorkBase + std::to_string(sibling + 1));
+        auto it = auxiliaryArgs.find(auxName);
+        if (it == auxiliaryArgs.end()) {
+          emitUnsupportedExprError(
+              loc, "missing spectral auxiliary derivative '" + auxName + "'");
+        }
+        divGrad = b.create<mlir::arith::AddFOp>(loc, divGrad, it->second)
+                      .getResult();
+      }
+      mlir::Value oneThird =
+          b.create<mlir::arith::ConstantFloatOp>(
+               loc, llvm::APFloat(1.0 / 3.0),
+               llvm::cast<mlir::FloatType>(b.getF64Type()))
+              .getResult();
+      mlir::Value scaled =
+          b.create<mlir::arith::MulFOp>(loc, oneThird, divGrad).getResult();
+      return b.create<mlir::arith::AddFOp>(loc, lap, scaled).getResult();
     }
 
     if (call->isExtern) {

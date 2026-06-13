@@ -1,0 +1,68 @@
+# Spectral York/Lichnerowicz Hamiltonian initial-data fixture.
+#
+# This declares the elliptic solve contract explicitly:
+#   unknown: psi
+#   free fields: A2, K, rho, Rbar, modSource
+#
+# The residual keeps GR terms plus a model source slot for modified-gravity
+# experiments:
+#   H = laplacian(psi)
+#       - 1/8 Rbar psi
+#       + 1/8 A2 psi^(-7)
+#       - 1/12 K^2 psi^5
+#       + matter_coeff rho psi^5
+#       + modified_coeff modSource
+field scalar psi
+field scalar A2
+field scalar K
+field scalar rho
+field scalar Rbar
+field scalar modSource
+field scalar H
+
+params { matter_coeff, modified_coeff }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [7,7,8]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralYorkLichnerowiczConstraint3D {
+  unknown scalar psi
+  free scalar A2
+  free scalar K
+  free scalar rho
+  free scalar Rbar
+  free scalar modSource
+
+  psi2 = psi * psi
+  psi4 = psi2 * psi2
+  psi5 = psi4 * psi
+  psi7 = psi4 * psi2 * psi
+  K2 = K * K
+
+  Hlocal = laplacian(psi) - 0.125 * Rbar * psi + 0.125 * A2 / psi7
+  Hmatter = matter_coeff * rho * psi5
+  Hmodified = modified_coeff * modSource
+  Hmean = Hlocal - 0.08333333333333333 * K2 * psi5 + Hmatter + Hmodified
+
+  residual H for psi = Hmean
+  boundary H lower_x1 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x1 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H lower_x2 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x2 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H lower_x3 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+  boundary H upper_x3 robin(value=1.0, normal=radius, target=1.0, derivative=radial)
+}

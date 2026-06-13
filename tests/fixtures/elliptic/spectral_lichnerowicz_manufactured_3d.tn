@@ -30,6 +30,10 @@ simulation {
 }
 
 constraints SpectralLichnerowiczManufactured3D {
+  unknown scalar u
+  free scalar A2
+  free scalar source
+
   psi = background + u
   psi2 = psi * psi
   psi4 = psi2 * psi2
@@ -37,5 +41,5 @@ constraints SpectralLichnerowiczManufactured3D {
 
   Hlocal = laplacian(u) + 0.125 * A2 / psi7 + source
 
-  residual H = Hlocal
+  residual H for u = Hlocal
 }
