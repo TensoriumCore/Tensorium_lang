@@ -3,7 +3,6 @@
 
 namespace tensorium {
 Lexer::Lexer(const char *input) : src(input) {}
-
 void Lexer::advanceChar() {
   if (*src == '\n') {
     ++line;
@@ -150,6 +149,7 @@ Token Lexer::next() {
   }
   std::string u(1, c);
   advanceChar();
+
   return {TokenType::Unknown, u, tokLine, tokCol};
 }
 } // namespace tensorium
