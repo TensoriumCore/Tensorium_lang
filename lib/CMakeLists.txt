@@ -4,15 +4,26 @@ function(tensorium_configure_public_headers target_name)
   )
 endfunction()
 
+add_library(tensoriumCore INTERFACE)
+target_include_directories(tensoriumCore INTERFACE
+  ${PROJECT_SOURCE_DIR}/include
+)
+
 add_library(tensoriumAST
   AST/ASTPrinter.cpp
 )
 tensorium_configure_public_headers(tensoriumAST)
+target_link_libraries(tensoriumAST PUBLIC
+  tensoriumCore
+)
 
 add_library(tensoriumLex
   Lex/Lexer.cpp
 )
 tensorium_configure_public_headers(tensoriumLex)
+target_link_libraries(tensoriumLex PUBLIC
+  tensoriumCore
+)
 
 add_library(tensoriumParse
   Parse/Parser.cpp
@@ -23,6 +34,7 @@ add_library(tensoriumParse
 )
 tensorium_configure_public_headers(tensoriumParse)
 target_link_libraries(tensoriumParse PUBLIC
+  tensoriumCore
   tensoriumAST
   tensoriumLex
 )
@@ -39,6 +51,7 @@ add_library(tensoriumSema
 )
 tensorium_configure_public_headers(tensoriumSema)
 target_link_libraries(tensoriumSema PUBLIC
+  tensoriumCore
   tensoriumAST
 )
 
@@ -53,21 +66,21 @@ add_library(tensoriumIR INTERFACE)
 target_include_directories(tensoriumIR INTERFACE
   ${PROJECT_SOURCE_DIR}/include
 )
+target_link_libraries(tensoriumIR INTERFACE
+  tensoriumCore
+)
 
 target_link_libraries(tensoriumRuntime PUBLIC
+  tensoriumCore
   tensoriumIR
 )
 
-add_library(tensoriumCore INTERFACE)
-target_include_directories(tensoriumCore INTERFACE
-  ${PROJECT_SOURCE_DIR}/include
-)
-target_link_libraries(tensoriumCore INTERFACE
+add_library(tensoriumFrontend INTERFACE)
+target_link_libraries(tensoriumFrontend INTERFACE
   tensoriumAST
   tensoriumLex
   tensoriumParse
   tensoriumSema
-  tensoriumRuntime
 )
 
 add_library(tensoriumLowering
@@ -75,6 +88,7 @@ add_library(tensoriumLowering
 )
 tensorium_configure_public_headers(tensoriumLowering)
 target_link_libraries(tensoriumLowering PUBLIC
+  tensoriumCore
   tensoriumIR
   tensoriumAST
 )
@@ -87,6 +101,7 @@ add_library(tensoriumValidation
 )
 tensorium_configure_public_headers(tensoriumValidation)
 target_link_libraries(tensoriumValidation PUBLIC
+  tensoriumCore
   tensoriumIR
 )
 
@@ -96,7 +111,9 @@ target_include_directories(tensorium INTERFACE
 )
 target_link_libraries(tensorium INTERFACE
   tensoriumCore
+  tensoriumFrontend
   tensoriumLowering
+  tensoriumRuntime
   tensoriumValidation
 )
 
