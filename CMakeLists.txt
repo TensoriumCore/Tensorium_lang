@@ -17,8 +17,6 @@ find_package(MLIR REQUIRED CONFIG)
 message(STATUS "LLVM_DIR: ${LLVM_DIR}")
 message(STATUS "MLIR_DIR: ${MLIR_DIR}")
 
-# Fallback for toolchain packages that do not export include directory
-# variables in cache-visible form.
 if (NOT LLVM_INCLUDE_DIRS AND DEFINED LLVM_INCLUDE_DIR)
   set(LLVM_INCLUDE_DIRS "${LLVM_INCLUDE_DIR}")
 endif()
