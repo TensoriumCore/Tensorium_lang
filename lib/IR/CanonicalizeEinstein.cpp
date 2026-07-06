@@ -484,7 +484,6 @@ static void canonicalizeExpr(std::unique_ptr<backend::ExprIR> &expr) {
   }
   }
 }
-
 } // namespace
 
 void canonicalizeEinsteinIR(backend::ModuleIR &module) {
@@ -495,5 +494,4 @@ void canonicalizeEinsteinIR(backend::ModuleIR &module) {
       canonicalizeExpr(equation.rhs);
   }
 }
-
 } // namespace tensorium::validation
