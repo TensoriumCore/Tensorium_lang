@@ -1,3 +1,4 @@
+#basic test
 module {
   func.func @field_ops(%v: !tensorium.field<f64, 1, 0>, %w: !tensorium.field<f64, 0, 1>) {
     %c0 = tensorium.const 0.0 : !tensorium.field<f64, 0, 0>
