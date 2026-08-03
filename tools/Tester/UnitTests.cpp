@@ -4334,6 +4334,212 @@ static bool testCttPhysicalGridHandoff() {
   return true;
 }
 
+static bool testCttBssnGeneratedRhsHandoff() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/ctt_bssn_handoff.tn");
+  constexpr double amplitude = 0.2;
+  tensorium::solver::ConstraintSolveRequest request;
+  request.parameters["amplitude"] = amplitude;
+  const auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module, request);
+  if (!solution.converged || !solution.physicalCtt) {
+    std::cerr << "FAIL: CTT-to-BSSN prerequisite solve failed\n";
+    return false;
+  }
+
+  constexpr std::size_t axisPoints = 3;
+  constexpr std::size_t pointCount =
+      axisPoints * axisPoints * axisPoints;
+  constexpr std::size_t center = 1;
+  const auto linearIndex = [](std::size_t ix, std::size_t iy,
+                              std::size_t iz) {
+    return (ix * axisPoints + iy) * axisPoints + iz;
+  };
+  std::vector<double> x(pointCount);
+  std::vector<double> y(pointCount);
+  std::vector<double> z(pointCount);
+  for (std::size_t ix = 0; ix < axisPoints; ++ix) {
+    for (std::size_t iy = 0; iy < axisPoints; ++iy) {
+      for (std::size_t iz = 0; iz < axisPoints; ++iz) {
+        const std::size_t point = linearIndex(ix, iy, iz);
+        x[point] = 2.2 + 0.1 * (static_cast<double>(ix) - 1.0);
+        y[point] = 0.1 * (static_cast<double>(iy) - 1.0);
+        z[point] = 0.1 * (static_cast<double>(iz) - 1.0);
+      }
+    }
+  }
+
+  auto makePointers = [](std::array<std::vector<double>, 9> &storage) {
+    std::array<double *, 9> pointers{};
+    for (std::size_t component = 0; component < storage.size(); ++component) {
+      storage[component].assign(pointCount, 0.0);
+      pointers[component] = storage[component].data();
+    }
+    return pointers;
+  };
+  std::vector<double> chi(pointCount, 0.0);
+  std::array<std::vector<double>, 9> conformalMetric;
+  std::array<std::vector<double>, 9> inverseConformalMetric;
+  std::array<std::vector<double>, 9> traceFreeExtrinsicCurvature;
+  std::vector<double> meanCurvature(pointCount, 0.0);
+  std::vector<double> lapse(pointCount, 0.0);
+  std::array<std::vector<double>, 3> shift;
+  std::array<double *, 3> shiftPointers{};
+  for (std::size_t component = 0; component < shift.size(); ++component) {
+    shift[component].assign(pointCount, 0.0);
+    shiftPointers[component] = shift[component].data();
+  }
+  const auto conformalMetricPointers = makePointers(conformalMetric);
+  const auto inverseConformalMetricPointers =
+      makePointers(inverseConformalMetric);
+  const auto traceFreePointers = makePointers(traceFreeExtrinsicCurvature);
+
+  tensorium::solver::CttTargetGrid target;
+  target.coordinates = tensorium::solver::CttTargetCoordinates::Cartesian;
+  target.pointCount = pointCount;
+  target.coordinateComponents = {x.data(), y.data(), z.data()};
+  tensorium::solver::CttBssnBuffers bssn;
+  bssn.chi = chi.data();
+  bssn.conformalMetric = conformalMetricPointers;
+  bssn.inverseConformalMetric = inverseConformalMetricPointers;
+  bssn.traceFreeExtrinsicCurvature = traceFreePointers;
+  bssn.meanCurvature = meanCurvature.data();
+  bssn.lapse = lapse.data();
+  bssn.shift = shiftPointers;
+  tensorium::solver::BssnGaugeSeed gauge;
+  gauge.lapse = 0.9;
+  gauge.shift = {0.1, -0.2, 0.3};
+  tensorium::solver::initializeBssnFromRadialCtt(solution, target, bssn,
+                                                 gauge);
+
+  double maxInitializationError = 0.0;
+  double maxTraceFreeError = 0.0;
+  for (std::size_t point = 0; point < pointCount; ++point) {
+    const double radius =
+        std::sqrt(x[point] * x[point] + y[point] * y[point] +
+                  z[point] * z[point]);
+    const std::array<double, 3> radialUnit = {
+        x[point] / radius, y[point] / radius, z[point] / radius};
+    const double radialPower = amplitude * std::pow(radius, -1.5);
+    maxInitializationError =
+        std::max(maxInitializationError, std::abs(chi[point] - 1.0));
+    maxInitializationError =
+        std::max(maxInitializationError, std::abs(lapse[point] - gauge.lapse));
+    for (std::size_t component = 0; component < shift.size(); ++component) {
+      maxInitializationError =
+          std::max(maxInitializationError,
+                   std::abs(shift[component][point] - gauge.shift[component]));
+    }
+    maxInitializationError =
+        std::max(maxInitializationError,
+                 std::abs(meanCurvature[point] - 3.0 * radialPower));
+    double trace = 0.0;
+    for (std::size_t i = 0; i < 3; ++i) {
+      for (std::size_t j = 0; j < 3; ++j) {
+        const std::size_t component = 3 * i + j;
+        const double delta = i == j ? 1.0 : 0.0;
+        const double expectedAtilde =
+            radialPower * delta -
+            3.0 * radialPower * radialUnit[i] * radialUnit[j];
+        maxInitializationError = std::max(
+            maxInitializationError,
+            std::abs(conformalMetric[component][point] - delta));
+        maxInitializationError = std::max(
+            maxInitializationError,
+            std::abs(inverseConformalMetric[component][point] - delta));
+        maxInitializationError = std::max(
+            maxInitializationError,
+            std::abs(traceFreeExtrinsicCurvature[component][point] -
+                     expectedAtilde));
+        trace += inverseConformalMetric[component][point] *
+                 traceFreeExtrinsicCurvature[component][point];
+      }
+    }
+    maxTraceFreeError = std::max(maxTraceFreeError, std::abs(trace));
+  }
+
+  ::mlir::MLIRContext context;
+  auto mlirModule = tensorium_mlir::buildMLIRModule(
+      result.module, context, makeExecutablePipelineOpts());
+  auto rhs = mlirModule->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolRhs);
+  if (!rhs) {
+    std::cerr << "FAIL: combined constraint/evolution module has no RHS\n";
+    return false;
+  }
+  const auto fieldNames = parseStringArrayAttr(
+      rhs->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrFieldNames));
+  if (fieldNames.size() != rhs.getNumArguments()) {
+    std::cerr << "FAIL: combined CTT/BSSN RHS has invalid field metadata\n";
+    return false;
+  }
+
+  tensorium_mlir::RhsEvalDescriptor descriptor;
+  descriptor.grid.spatialDim = 3;
+  descriptor.grid.extents = {axisPoints, axisPoints, axisPoints};
+  descriptor.grid.spacing = {0.1, 0.1, 0.1};
+  descriptor.point = {center, center, center};
+  descriptor.args.resize(fieldNames.size());
+  for (std::size_t argument = 0; argument < fieldNames.size(); ++argument) {
+    auto &components = descriptor.args[argument].components;
+    if (fieldNames[argument] == "chi") {
+      components = {chi.data()};
+    } else if (fieldNames[argument] == "gamma") {
+      components.assign(conformalMetricPointers.begin(),
+                        conformalMetricPointers.end());
+    } else if (fieldNames[argument] == "gammaU") {
+      components.assign(inverseConformalMetricPointers.begin(),
+                        inverseConformalMetricPointers.end());
+    } else if (fieldNames[argument] == "Atilde") {
+      components.assign(traceFreePointers.begin(), traceFreePointers.end());
+    } else if (fieldNames[argument] == "K") {
+      components = {meanCurvature.data()};
+    } else if (fieldNames[argument] == "alpha") {
+      components = {lapse.data()};
+    } else {
+      std::cerr << "FAIL: unexpected combined CTT/BSSN RHS field '"
+                << fieldNames[argument] << "'\n";
+      return false;
+    }
+  }
+
+  const std::size_t centerPoint = linearIndex(center, center, center);
+  const double expectedChiRhs =
+      (2.0 / 3.0) * lapse[centerPoint] * chi[centerPoint] *
+      meanCurvature[centerPoint];
+  std::array<double, 9> expectedMetricRhs{};
+  for (std::size_t component = 0; component < 9; ++component) {
+    expectedMetricRhs[component] =
+        -2.0 * lapse[centerPoint] *
+        traceFreeExtrinsicCurvature[component][centerPoint];
+  }
+  const auto rhsResult =
+      tensorium_mlir::evaluateTensoriumRHS(*mlirModule, descriptor);
+  if (!rhsResult.ok) {
+    std::cerr << "FAIL: generated BSSN RHS rejected CTT buffers: "
+              << rhsResult.message << "\n";
+    return false;
+  }
+
+  double maxRhsError = std::abs(chi[centerPoint] - expectedChiRhs);
+  for (std::size_t component = 0; component < 9; ++component) {
+    maxRhsError = std::max(
+        maxRhsError,
+        std::abs(conformalMetric[component][centerPoint] -
+                 expectedMetricRhs[component]));
+  }
+  if (maxInitializationError > 2.0e-9 || maxTraceFreeError > 2.0e-9 ||
+      maxRhsError > 1.0e-12) {
+    std::cerr << "FAIL: CTT-to-BSSN generated RHS errors: initialization="
+              << maxInitializationError
+              << " trace_free=" << maxTraceFreeError
+              << " rhs=" << maxRhsError << "\n";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct NamedTest {
     const char *name;
@@ -4427,6 +4633,7 @@ int main() {
       {"testCttRadialVacuumConstraintSolve",
        &testCttRadialVacuumConstraintSolve},
       {"testCttPhysicalGridHandoff", &testCttPhysicalGridHandoff},
+      {"testCttBssnGeneratedRhsHandoff", &testCttBssnGeneratedRhsHandoff},
   };
 
   bool ok = true;

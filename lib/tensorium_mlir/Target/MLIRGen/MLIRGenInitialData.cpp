@@ -192,6 +192,8 @@ void emitInitialDataOps(
   const auto &init = *module.initialData;
 
   if (!init.hasMetric4 && !init.hasDecomposed) {
+    if (module.constraintProblem)
+      return;
     emitUnsupportedExprError(
         loc, "initial_data is present but no metric4 or alpha/beta/gamma data "
              "was provided");

@@ -515,6 +515,15 @@ if ! grep -q '^domain,r,conformal_factor,radial_vector,mean_curvature,gamma_radi
   exit 1
 fi
 
+CTT_BSSN_LL="$OUT/ctt_bssn_handoff.ll"
+"$BIN" --solve-constraints --param amplitude=0.2 \
+  --emit-llvm "$CTT_BSSN_LL" \
+  tests/fixtures/gr/ctt_bssn_handoff.tn > /dev/null
+if ! grep -q 'define void @tensorium_rhs_grid_affine' "$CTT_BSSN_LL"; then
+  echo "ERROR: expected generated BSSN grid RHS after the CTT solve"
+  exit 1
+fi
+
 echo
 echo "=============================="
 echo " RUN INITIAL DATA PARAM LOWERING CHECK"

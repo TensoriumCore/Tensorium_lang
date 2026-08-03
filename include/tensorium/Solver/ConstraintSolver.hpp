@@ -70,6 +70,24 @@ struct CttEvolutionBuffers {
   double *meanCurvature = nullptr;
 };
 
+struct BssnGaugeSeed {
+  double lapse = 1.0;
+  std::array<double, 3> shift{};
+};
+
+struct CttBssnBuffers {
+  // BSSN chi = det(gamma)^(-1/3).
+  double *chi = nullptr;
+  // Structure-of-arrays, row-major tensor component: component = 3*i + j.
+  std::array<double *, 9> conformalMetric{};
+  std::array<double *, 9> inverseConformalMetric{};
+  std::array<double *, 9> traceFreeExtrinsicCurvature{};
+  double *meanCurvature = nullptr;
+  // Gauge fields are optional because they are not fixed by the constraints.
+  double *lapse = nullptr;
+  std::array<double *, 3> shift{};
+};
+
 // Coupled scalar/rank-one radial constraint backend with Chebyshev-Lobatto
 // domains, optional compactified infinity, C0/C1 matching, and Newton solve.
 ConstraintSolution
@@ -81,5 +99,13 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
 void interpolateRadialCttToGrid(const ConstraintSolution &solution,
                                 const CttTargetGrid &target,
                                 const CttEvolutionBuffers &outputs);
+
+// Initializes Cartesian BSSN variables from reconstructed physical CTT data.
+// The conformal metric has unit determinant and the conformal extrinsic
+// curvature is trace-free. Optional lapse/shift buffers receive gauge seeds.
+void initializeBssnFromRadialCtt(const ConstraintSolution &solution,
+                                 const CttTargetGrid &target,
+                                 const CttBssnBuffers &outputs,
+                                 const BssnGaugeSeed &gauge = {});
 
 } // namespace tensorium::solver

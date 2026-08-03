@@ -1075,4 +1075,92 @@ void interpolateRadialCttToGrid(const ConstraintSolution &solution,
   }
 }
 
+void initializeBssnFromRadialCtt(const ConstraintSolution &solution,
+                                 const CttTargetGrid &target,
+                                 const CttBssnBuffers &outputs,
+                                 const BssnGaugeSeed &gauge) {
+  if (target.coordinates != CttTargetCoordinates::Cartesian)
+    fail("BSSN initialization currently requires Cartesian target coordinates");
+  if (!outputs.chi || !outputs.meanCurvature)
+    fail("CTT BSSN output has a null scalar component");
+  for (std::size_t component = 0; component < 9; ++component) {
+    if (!outputs.conformalMetric[component] ||
+        !outputs.inverseConformalMetric[component] ||
+        !outputs.traceFreeExtrinsicCurvature[component])
+      fail("CTT BSSN output has a null tensor component");
+  }
+  const bool hasAnyShift = std::any_of(
+      outputs.shift.begin(), outputs.shift.end(), [](const double *component) {
+        return component != nullptr;
+      });
+  const bool hasAllShift = std::all_of(
+      outputs.shift.begin(), outputs.shift.end(), [](const double *component) {
+        return component != nullptr;
+      });
+  if (hasAnyShift && !hasAllShift)
+    fail("CTT BSSN shift output must provide all three components or none");
+  if (!std::isfinite(gauge.lapse) ||
+      !std::all_of(gauge.shift.begin(), gauge.shift.end(),
+                   [](double value) { return std::isfinite(value); }))
+    fail("CTT BSSN gauge seed must be finite");
+
+  std::array<std::vector<double>, 9> physicalMetric;
+  std::array<std::vector<double>, 9> physicalInverseMetric;
+  std::array<std::vector<double>, 9> physicalExtrinsicCurvature;
+  auto allocatePointers = [&](std::array<std::vector<double>, 9> &storage) {
+    std::array<double *, 9> pointers{};
+    for (std::size_t component = 0; component < storage.size(); ++component) {
+      storage[component].resize(target.pointCount);
+      pointers[component] = storage[component].data();
+    }
+    return pointers;
+  };
+  std::vector<double> physicalMeanCurvature(target.pointCount);
+  CttEvolutionBuffers physicalOutputs;
+  physicalOutputs.spatialMetric = allocatePointers(physicalMetric);
+  physicalOutputs.inverseSpatialMetric =
+      allocatePointers(physicalInverseMetric);
+  physicalOutputs.extrinsicCurvature =
+      allocatePointers(physicalExtrinsicCurvature);
+  physicalOutputs.meanCurvature = physicalMeanCurvature.data();
+  interpolateRadialCttToGrid(solution, target, physicalOutputs);
+
+  for (std::size_t point = 0; point < target.pointCount; ++point) {
+    const double a = physicalMetric[0][point];
+    const double b = physicalMetric[1][point];
+    const double c = physicalMetric[2][point];
+    const double d = physicalMetric[3][point];
+    const double e = physicalMetric[4][point];
+    const double f = physicalMetric[5][point];
+    const double g = physicalMetric[6][point];
+    const double h = physicalMetric[7][point];
+    const double i = physicalMetric[8][point];
+    const double determinant =
+        a * (e * i - f * h) - b * (d * i - f * g) +
+        c * (d * h - e * g);
+    if (!(determinant > 0.0) || !std::isfinite(determinant))
+      fail("CTT physical metric must have a finite positive determinant");
+
+    const double chi = std::cbrt(1.0 / determinant);
+    const double meanCurvature = physicalMeanCurvature[point];
+    outputs.chi[point] = chi;
+    outputs.meanCurvature[point] = meanCurvature;
+    for (std::size_t component = 0; component < 9; ++component) {
+      outputs.conformalMetric[component][point] =
+          chi * physicalMetric[component][point];
+      outputs.inverseConformalMetric[component][point] =
+          physicalInverseMetric[component][point] / chi;
+      outputs.traceFreeExtrinsicCurvature[component][point] =
+          chi * (physicalExtrinsicCurvature[component][point] -
+                 physicalMetric[component][point] * meanCurvature / 3.0);
+    }
+    if (outputs.lapse)
+      outputs.lapse[point] = gauge.lapse;
+    if (hasAllShift) {
+      for (std::size_t component = 0; component < 3; ++component)
+        outputs.shift[component][point] = gauge.shift[component];
+    }
+  }
+}
+
 } // namespace tensorium::solver
