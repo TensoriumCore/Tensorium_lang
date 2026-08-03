@@ -395,9 +395,12 @@ IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
     indexed.unknown = decl.name;
     indexed.indices = assignment.lhs.indices;
     indexed.rhs = transformExpr(assignment.rhs.get());
-    checker.checkAssignmentVariance(TensorType{decl.type.up, decl.type.down},
-                                    assignment.lhs.indices, indexed.rhs.get());
-    checker.infer(indexed.rhs.get());
+    const TensorType rhsType = checker.infer(indexed.rhs.get());
+    if (!rhsType.isScalar() || rank == 0) {
+      checker.checkAssignmentVariance(TensorType{decl.type.up, decl.type.down},
+                                      assignment.lhs.indices,
+                                      indexed.rhs.get());
+    }
     return indexed;
   };
 

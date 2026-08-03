@@ -78,6 +78,10 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
 
     if (auto itu = unknowns.find(v->name); itu != unknowns.end()) {
       const ConstraintUnknownDecl *decl = itu->second;
+      if (decl->type.up + decl->type.down > 0) {
+        throw std::runtime_error("constraint tensor unknown '" + v->name +
+                                 "' requires indexed access");
+      }
       auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Unknown);
       iv->tensorKind = decl->type.kind;
       iv->up = decl->type.up;
@@ -179,8 +183,14 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       TensorTypeChecker checker;
       auto arg = transformExpr(c->args[0].get());
       TensorType argT = checker.infer(arg.get());
-      if (!argT.isScalar())
-        throw std::runtime_error("laplacian() expects scalar argument");
+      if (!argT.isScalar()) {
+        auto out = std::make_unique<IndexedCall>();
+        out->callee = "laplacian";
+        out->declaredArity = 1;
+        out->args.push_back(std::move(arg));
+        checker.infer(out.get());
+        return out;
+      }
 
       auto d1 = makeDeriv("i", std::move(arg), checker);
       auto d2 = makeDeriv("i", std::move(d1), checker);

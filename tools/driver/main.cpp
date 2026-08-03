@@ -627,13 +627,29 @@ int main(int argc, char **argv) {
                     << " compactified="
                     << (domain.compactified ? "true" : "false") << "\n";
         }
-        for (const auto &entry : solution.unknowns) {
-          std::cout << "[ConstraintSolve] unknown=" << entry.first
-                    << " points=" << entry.second.size();
-          if (!entry.second.empty())
-            std::cout << " inner=" << entry.second.front()
-                      << " outer=" << entry.second.back();
+        for (const auto &unknownLayout : solution.unknownLayouts) {
+          const auto &values = solution.unknowns.at(unknownLayout.name);
+          std::cout << "[ConstraintSolve] unknown=" << unknownLayout.name
+                    << " points=" << unknownLayout.pointsPerComponent
+                    << " components=" << unknownLayout.componentCount
+                    << " values=" << values.size();
+          if (unknownLayout.componentCount == 1 && !values.empty())
+            std::cout << " inner=" << values.front()
+                      << " outer=" << values.back();
           std::cout << "\n";
+          if (unknownLayout.componentCount > 1) {
+            for (std::size_t component = 0;
+                 component < unknownLayout.componentCount; ++component) {
+              const std::size_t offset =
+                  component * unknownLayout.pointsPerComponent;
+              std::cout << "[ConstraintSolve] unknown=" << unknownLayout.name
+                        << " component=" << component
+                        << " inner=" << values[offset]
+                        << " outer="
+                        << values[offset + unknownLayout.pointsPerComponent - 1]
+                        << "\n";
+            }
+          }
         }
       }
 

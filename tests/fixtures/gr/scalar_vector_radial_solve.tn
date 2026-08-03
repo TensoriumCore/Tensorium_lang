@@ -1,0 +1,47 @@
+# Component-aware radial prototype: a scalar elliptic equation coupled to a
+# three-component momentum-style vector residual on two spectral domains.
+initial_data ScalarVectorRadial {
+  domain near {
+    coordinates = spherical
+    topology = shell
+    resolution = [13]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+
+  domain infinity {
+    coordinates = spherical
+    topology = compactified
+    resolution = [9]
+    basis = chebyshev
+    bounds = [2]
+  }
+
+  interface near -> infinity
+
+  unknown scalar psi
+  unknown vector W[i]
+
+  equation scalar hamiltonian = laplacian(psi) + psi - 1
+  equation vector momentum[i] = laplacian(W[i]) + psi * W[i]
+
+  boundary inner {
+    psi = 1
+    W[i] = 0
+  }
+
+  boundary outer {
+    psi = 1
+    W[i] = 0
+  }
+
+  seed psi = 0.5
+  seed W[i] = 1
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-10
+    max_iterations = 12
+  }
+}

@@ -118,7 +118,8 @@ The current numerical backend supports:
 
 - one or more spherical shell domains in declaration order;
 - an optional compactified final domain;
-- one or more scalar unknowns with the same number of scalar residuals;
+- scalar and rank-one unknowns, paired with residuals of identical variance;
+- three spatial components for each rank-one unknown;
 - Chebyshev-Lobatto collocation;
 - the radial spherical Laplacian
   `d2/dr2 + (2/r) d/dr`;
@@ -179,6 +180,42 @@ compactified exterior domain. It converges from unequal seeds to the exact
 constant solution `psi = w = 1` and exercises the cross-unknown Jacobian
 entries.
 
+## Rank-one component layout
+
+Rank-one equations preserve their free index through semantic analysis and
+IR lowering. The radial solver instantiates that index for components `0`,
+`1`, and `2`. Scalar boundary or seed expressions are broadcast to every
+component, which makes homogeneous vector data concise:
+
+```tensorium
+unknown scalar psi
+unknown vector W[i]
+
+equation scalar hamiltonian = laplacian(psi) + psi - 1
+equation vector momentum[i] = laplacian(W[i]) + psi * W[i]
+
+boundary outer {
+  psi = 1
+  W[i] = 0
+}
+```
+
+Run the component-layout regression with:
+
+```sh
+./tools/driver/Tensorium_cc --solve-constraints \
+  ../tests/fixtures/gr/scalar_vector_radial_solve.tn
+```
+
+The solution buffer for a rank-one unknown is component-major: all radial
+points for component `0`, followed by components `1` and `2`. The CLI reports
+both the point count per component and the total number of stored values.
+
+At this stage `laplacian(W[i])` applies the scalar radial Laplacian to each
+component independently. It is not yet the covariant vector Laplacian in a
+spherical basis; connection terms and tensor contractions are the next
+geometric lowering step.
+
 ## Pipeline status
 
 ```text
@@ -188,9 +225,9 @@ constrained initial_data DSL
   -> ConstraintProblemIR
   -> multidomain radial maps and Chebyshev-Lobatto collocation [implemented]
   -> compactified exterior and C0/C1 matching [implemented]
-  -> coupled scalar residual and automatic Jacobian [implemented]
+  -> coupled scalar/rank-one component layout and Jacobian [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] vector/tensor unknowns and component-aware residual layout
+  -> [next] covariant vector operators, contractions, and rank-two unknowns
   -> [next] export gamma_ij, K_ij, alpha, and beta^i
 ```
 
