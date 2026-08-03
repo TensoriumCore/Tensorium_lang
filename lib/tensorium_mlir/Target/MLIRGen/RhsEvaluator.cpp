@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -532,7 +533,7 @@ static RhsEvalResult storeDtAssign(const RhsEvalDescriptor &desc,
   if (rhs.indices.size() != rank)
     return RhsEvalResult::failure("dt_assign rhs rank/index mismatch");
 
-  const auto &dest = desc.args[fieldArg.getArgNumber()];
+  const auto &dest = desc.outputs[fieldArg.getArgNumber()];
   const std::size_t destComps = powU(spatialDim, rank);
   if (dest.components.size() != destComps)
     return RhsEvalResult::failure("dt_assign destination component count mismatch");
@@ -586,7 +587,7 @@ static RhsEvalResult validateDescriptor(const RhsEvalDescriptor &desc,
         "rhs evaluator descriptor spatialDim does not match module");
   }
 
-  for (unsigned axis = 0; axis < spatialDim; ++axis) {
+  for (unsigned axis = 0; axis < 3; ++axis) {
     if (desc.grid.extents[axis] == 0)
       return RhsEvalResult::failure("rhs evaluator grid extents must be > 0");
     if (!(desc.point[axis] < desc.grid.extents[axis])) {
@@ -598,6 +599,31 @@ static RhsEvalResult validateDescriptor(const RhsEvalDescriptor &desc,
   if (desc.args.size() != rhsFunc.getNumArguments()) {
     return RhsEvalResult::failure(
         "rhs evaluator argument buffer count does not match @tensorium_rhs signature");
+  }
+  if (desc.outputs.size() != rhsFunc.getNumArguments()) {
+    return RhsEvalResult::failure(
+        "rhs evaluator output buffer count does not match @tensorium_rhs signature");
+  }
+
+  std::vector<bool> isOutput(rhsFunc.getNumArguments(), false);
+  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+    auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op);
+    if (!dt)
+      continue;
+    auto fieldArg = llvm::dyn_cast<::mlir::BlockArgument>(dt.getField());
+    if (!fieldArg || fieldArg.getArgNumber() >= isOutput.size()) {
+      return RhsEvalResult::failure(
+          "rhs evaluator found invalid dt_assign destination");
+    }
+    isOutput[fieldArg.getArgNumber()] = true;
+  }
+
+  std::unordered_set<double *> inputPointers;
+  for (unsigned i = 0; i < rhsFunc.getNumArguments(); ++i) {
+    for (double *component : desc.args[i].components) {
+      if (component)
+        inputPointers.insert(component);
+    }
   }
 
   for (unsigned i = 0; i < rhsFunc.getNumArguments(); ++i) {
@@ -620,9 +646,71 @@ static RhsEvalResult validateDescriptor(const RhsEvalDescriptor &desc,
             std::to_string(i));
       }
     }
+
+    if (!isOutput[i]) {
+      if (!desc.outputs[i].components.empty()) {
+        return RhsEvalResult::failure(
+            "rhs evaluator received output buffers for a field without dt assignment");
+      }
+      continue;
+    }
+    if (desc.outputs[i].components.size() != expectedComps) {
+      return RhsEvalResult::failure(
+          "rhs evaluator output component count mismatch for argument " +
+          std::to_string(i));
+    }
+    for (std::size_t c = 0; c < expectedComps; ++c) {
+      double *output = desc.outputs[i].components[c];
+      if (!output) {
+        return RhsEvalResult::failure(
+            "rhs evaluator received null output component buffer for argument " +
+            std::to_string(i));
+      }
+      if (inputPointers.count(output)) {
+        return RhsEvalResult::failure(
+            "rhs evaluator input and output buffers must not alias");
+      }
+    }
   }
 
   return RhsEvalResult::success();
+}
+
+static unsigned computeEvaluatorHalo(::mlir::func::FuncOp rhsFunc,
+                                     unsigned spatialDim) {
+  unsigned halo = 0;
+  rhsFunc.walk([&](tensorium::mlir::RefOp ref) {
+    const auto offsets = getRefOffsets(ref, spatialDim);
+    for (unsigned axis = 0; axis < spatialDim; ++axis) {
+      halo = std::max<unsigned>(
+          halo, static_cast<unsigned>(std::abs(offsets[axis])));
+    }
+  });
+  rhsFunc.walk([&](tensorium::mlir::DerivOp deriv) {
+    auto ref = deriv.getIn().getDefiningOp<tensorium::mlir::RefOp>();
+    if (!ref)
+      return;
+    const auto offsets = getRefOffsets(ref, spatialDim);
+    for (unsigned axis = 0; axis < spatialDim; ++axis) {
+      halo = std::max<unsigned>(
+          halo, static_cast<unsigned>(std::max(std::abs(offsets[axis] - 1),
+                                               std::abs(offsets[axis] + 1))));
+    }
+  });
+  return halo;
+}
+
+using OwnedField = std::vector<std::vector<double>>;
+using OwnedState = std::vector<OwnedField>;
+
+static std::vector<RhsFieldSoA> makeViews(OwnedState &storage) {
+  std::vector<RhsFieldSoA> views(storage.size());
+  for (std::size_t field = 0; field < storage.size(); ++field) {
+    views[field].components.reserve(storage[field].size());
+    for (auto &component : storage[field])
+      views[field].components.push_back(component.data());
+  }
+  return views;
 }
 
 } // namespace
@@ -809,6 +897,241 @@ RhsEvalResult evaluateTensoriumRHS(::mlir::ModuleOp module,
                                   op.getName().getStringRef().str());
   }
 
+  return RhsEvalResult::success();
+}
+
+RhsEvalResult evaluateTensoriumRHSGrid(::mlir::ModuleOp module,
+                                       const RhsEvalDescriptor &desc) {
+  if (!module)
+    return RhsEvalResult::failure("rhs grid evaluator got null module");
+  auto rhsFunc = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhsFunc)
+    return RhsEvalResult::failure(
+        "rhs grid evaluator could not find @tensorium_rhs");
+  if (rhsFunc.getBody().empty() || rhsFunc.getBody().front().empty())
+    return RhsEvalResult::failure(
+        "rhs grid evaluator found empty @tensorium_rhs body");
+
+  unsigned spatialDim = desc.grid.spatialDim;
+  if (auto dimAttr =
+          module->getAttrOfType<::mlir::IntegerAttr>("tensorium.sim.dim")) {
+    spatialDim = static_cast<unsigned>(dimAttr.getInt());
+  }
+
+  RhsEvalDescriptor checked = desc;
+  checked.point = {0, 0, 0};
+  auto valid = validateDescriptor(checked, rhsFunc, spatialDim);
+  if (!valid.ok)
+    return valid;
+
+  const std::size_t halo = computeEvaluatorHalo(rhsFunc, spatialDim);
+  std::array<std::size_t, 3> lower{0, 0, 0};
+  std::array<std::size_t, 3> upper = desc.grid.extents;
+  for (unsigned axis = 0; axis < spatialDim; ++axis) {
+    if (desc.grid.extents[axis] <= 2 * halo)
+      return RhsEvalResult::success();
+    lower[axis] = halo;
+    upper[axis] -= halo;
+  }
+
+  RhsEvalDescriptor pointDesc = desc;
+  for (std::size_t i = lower[0]; i < upper[0]; ++i) {
+    for (std::size_t j = lower[1]; j < upper[1]; ++j) {
+      for (std::size_t k = lower[2]; k < upper[2]; ++k) {
+        pointDesc.point = {i, j, k};
+        auto result = evaluateTensoriumRHS(module, pointDesc);
+        if (!result.ok)
+          return result;
+      }
+    }
+  }
+  return RhsEvalResult::success();
+}
+
+RhsEvalResult advanceTensoriumState(
+    ::mlir::ModuleOp module, const RhsGridSpec &grid,
+    const std::vector<RhsFieldSoA> &state, double dt,
+    tensorium::backend::TimeIntegrator integrator) {
+  if (!module)
+    return RhsEvalResult::failure("rhs time stepper got null module");
+  if (!std::isfinite(dt))
+    return RhsEvalResult::failure("rhs time stepper requires a finite dt");
+
+  auto rhsFunc = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
+  if (!rhsFunc)
+    return RhsEvalResult::failure(
+        "rhs time stepper could not find @tensorium_rhs");
+  if (rhsFunc.getBody().empty() || rhsFunc.getBody().front().empty())
+    return RhsEvalResult::failure(
+        "rhs time stepper found empty @tensorium_rhs body");
+  if (state.size() != rhsFunc.getNumArguments()) {
+    return RhsEvalResult::failure(
+        "rhs time stepper state count does not match @tensorium_rhs signature");
+  }
+
+  std::size_t pointCount = 1;
+  for (std::size_t extent : grid.extents) {
+    if (extent == 0 ||
+        pointCount > std::numeric_limits<std::size_t>::max() / extent) {
+      return RhsEvalResult::failure("rhs time stepper grid size is invalid");
+    }
+    pointCount *= extent;
+  }
+
+  unsigned spatialDim = grid.spatialDim;
+  if (auto dimAttr =
+          module->getAttrOfType<::mlir::IntegerAttr>("tensorium.sim.dim")) {
+    spatialDim = static_cast<unsigned>(dimAttr.getInt());
+  }
+  if (spatialDim == 0 || spatialDim > 3)
+    return RhsEvalResult::failure(
+        "rhs time stepper expects spatialDim in [1,3]");
+
+  std::vector<bool> evolved(rhsFunc.getNumArguments(), false);
+  for (::mlir::Operation &op : rhsFunc.getBody().front()) {
+    auto assign = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op);
+    if (!assign)
+      continue;
+    auto arg = llvm::dyn_cast<::mlir::BlockArgument>(assign.getField());
+    if (!arg || arg.getArgNumber() >= evolved.size()) {
+      return RhsEvalResult::failure(
+          "rhs time stepper found invalid dt_assign destination");
+    }
+    evolved[arg.getArgNumber()] = true;
+  }
+
+  OwnedState initial(state.size());
+  OwnedState stage(state.size());
+  OwnedState rhsStorage(state.size());
+  for (unsigned field = 0; field < rhsFunc.getNumArguments(); ++field) {
+    auto fieldTy = llvm::dyn_cast<tensorium::mlir::FieldType>(
+        rhsFunc.getArgument(field).getType());
+    if (!fieldTy) {
+      return RhsEvalResult::failure(
+          "rhs time stepper expects tensorium.field arguments");
+    }
+    const std::size_t componentCount = powU(spatialDim, fieldTy.getRank());
+    if (state[field].components.size() != componentCount) {
+      return RhsEvalResult::failure(
+          "rhs time stepper state component count mismatch");
+    }
+    initial[field].resize(componentCount);
+    stage[field].resize(componentCount);
+    if (evolved[field])
+      rhsStorage[field].resize(componentCount);
+    for (std::size_t component = 0; component < componentCount; ++component) {
+      if (!state[field].components[component]) {
+        return RhsEvalResult::failure(
+            "rhs time stepper received null state buffer");
+      }
+      initial[field][component].assign(
+          state[field].components[component],
+          state[field].components[component] + pointCount);
+      stage[field][component] = initial[field][component];
+      if (evolved[field])
+        rhsStorage[field][component].assign(pointCount, 0.0);
+    }
+  }
+
+  auto evaluateStage = [&]() -> RhsEvalResult {
+    for (std::size_t field = 0; field < rhsStorage.size(); ++field) {
+      for (auto &component : rhsStorage[field])
+        std::fill(component.begin(), component.end(), 0.0);
+    }
+    RhsEvalDescriptor descriptor;
+    descriptor.grid = grid;
+    descriptor.args = makeViews(stage);
+    descriptor.outputs = makeViews(rhsStorage);
+    return evaluateTensoriumRHSGrid(module, descriptor);
+  };
+
+  auto combine = [&](double initialWeight, double stageWeight,
+                     double rhsWeight) {
+    for (std::size_t field = 0; field < stage.size(); ++field) {
+      if (!evolved[field])
+        continue;
+      for (std::size_t component = 0; component < stage[field].size();
+           ++component) {
+        for (std::size_t point = 0; point < pointCount; ++point) {
+          stage[field][component][point] =
+              initialWeight * initial[field][component][point] +
+              stageWeight * stage[field][component][point] +
+              rhsWeight * dt * rhsStorage[field][component][point];
+        }
+      }
+    }
+  };
+
+  if (integrator == tensorium::backend::TimeIntegrator::Euler) {
+    auto result = evaluateStage();
+    if (!result.ok)
+      return result;
+    combine(1.0, 0.0, 1.0);
+  } else if (integrator == tensorium::backend::TimeIntegrator::RK3) {
+    auto result = evaluateStage();
+    if (!result.ok)
+      return result;
+    combine(1.0, 0.0, 1.0);
+    result = evaluateStage();
+    if (!result.ok)
+      return result;
+    combine(0.75, 0.25, 0.25);
+    result = evaluateStage();
+    if (!result.ok)
+      return result;
+    combine(1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0);
+  } else if (integrator == tensorium::backend::TimeIntegrator::RK4) {
+    OwnedState k1;
+    OwnedState k2;
+    OwnedState k3;
+    auto result = evaluateStage();
+    if (!result.ok)
+      return result;
+    k1 = rhsStorage;
+    combine(1.0, 0.0, 0.5);
+    result = evaluateStage();
+    if (!result.ok)
+      return result;
+    k2 = rhsStorage;
+    combine(1.0, 0.0, 0.5);
+    result = evaluateStage();
+    if (!result.ok)
+      return result;
+    k3 = rhsStorage;
+    combine(1.0, 0.0, 1.0);
+    result = evaluateStage();
+    if (!result.ok)
+      return result;
+    for (std::size_t field = 0; field < stage.size(); ++field) {
+      if (!evolved[field])
+        continue;
+      for (std::size_t component = 0; component < stage[field].size();
+           ++component) {
+        for (std::size_t point = 0; point < pointCount; ++point) {
+          stage[field][component][point] =
+              initial[field][component][point] +
+              (dt / 6.0) * (k1[field][component][point] +
+                            2.0 * k2[field][component][point] +
+                            2.0 * k3[field][component][point] +
+                            rhsStorage[field][component][point]);
+        }
+      }
+    }
+  } else {
+    return RhsEvalResult::failure(
+        "rhs time stepper received unsupported integrator");
+  }
+
+  for (std::size_t field = 0; field < stage.size(); ++field) {
+    if (!evolved[field])
+      continue;
+    for (std::size_t component = 0; component < stage[field].size();
+         ++component) {
+      std::copy(stage[field][component].begin(),
+                stage[field][component].end(),
+                state[field].components[component]);
+    }
+  }
   return RhsEvalResult::success();
 }
 

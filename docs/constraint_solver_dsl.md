@@ -365,6 +365,32 @@ module. A host must call `solveRadialConstraintProblem` followed by
 `initializeBssnFromRadialCtt`, then pass those state buffers and separate RHS
 output buffers to the generated ABI v2 kernel.
 
+### Reference grid evolution runtime
+
+`RhsEvaluator.h` exposes a reusable host-side reference path for the next part
+of that handoff:
+
+- `evaluateTensoriumRHS` evaluates one grid point;
+- `evaluateTensoriumRHSGrid` evaluates every point outside the required halo;
+- `advanceTensoriumState` advances the evolved fields by one Euler, SSPRK3, or
+  classical RK4 step.
+
+`RhsEvalDescriptor::args` is always read-only. Separate buffers in
+`RhsEvalDescriptor::outputs`, indexed like the RHS arguments, receive the time
+derivatives. An output entry is empty when the corresponding field has no
+`dt` equation. Exact input/output pointer aliasing is rejected. The time
+stepper also keeps every Runge--Kutta stage in separate storage and commits the
+new evolved fields only after all stages succeed; fields without a `dt`
+equation remain unchanged.
+
+This path interprets the source Tensorium MLIR and is intended as a numerical
+reference and integration harness. It does not invoke the emitted LLVM kernel
+or provide production JIT execution yet. Its boundary policy is deliberately
+minimal: points in the stencil halo are frozen at their previous values. A
+physical evolution still needs explicit boundary conditions, mesh ownership,
+and halo exchange before this can be treated as a production numerical-
+relativity runtime.
+
 This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
 interval under spherical symmetry and a conformally flat ansatz. It is not yet
 a complete asymptotically flat data set or generic CTT/XCTS: the conformal

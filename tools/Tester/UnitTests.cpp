@@ -3195,9 +3195,11 @@ static bool testSchwarzschildChristoffelNumericPoint() {
 
   std::array<std::vector<double>, 9> gamma;
   std::array<std::vector<double>, 9> gammaU;
+  std::array<std::vector<double>, 27> dtGammaInput;
   std::array<std::vector<double>, 27> dtGamma;
   std::array<double *, 9> gammaPtrs{};
   std::array<double *, 9> gammaUPtrs{};
+  std::array<double *, 27> dtGammaInputPtrs{};
   std::array<double *, 27> dtGammaPtrs{};
   for (unsigned c = 0; c < 9; ++c) {
     gamma[c].assign(nPoints, 0.0);
@@ -3206,7 +3208,9 @@ static bool testSchwarzschildChristoffelNumericPoint() {
     gammaUPtrs[c] = gammaU[c].data();
   }
   for (unsigned c = 0; c < 27; ++c) {
+    dtGammaInput[c].assign(nPoints, 0.0);
     dtGamma[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    dtGammaInputPtrs[c] = dtGammaInput[c].data();
     dtGammaPtrs[c] = dtGamma[c].data();
   }
 
@@ -3237,9 +3241,12 @@ static bool testSchwarzschildChristoffelNumericPoint() {
   desc.grid.spacing = {dr, dtheta, dphi};
   desc.point = {center, center, center};
   desc.args.resize(3);
+  desc.outputs.resize(3);
   desc.args[0].components.assign(gammaPtrs.begin(), gammaPtrs.end());
   desc.args[1].components.assign(gammaUPtrs.begin(), gammaUPtrs.end());
-  desc.args[2].components.assign(dtGammaPtrs.begin(), dtGammaPtrs.end());
+  desc.args[2].components.assign(dtGammaInputPtrs.begin(),
+                                 dtGammaInputPtrs.end());
+  desc.outputs[2].components.assign(dtGammaPtrs.begin(), dtGammaPtrs.end());
 
   auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
   if (!evalRes.ok) {
@@ -3358,11 +3365,15 @@ static bool testCovariantDerivativeRankOneNumericPoint() {
   std::array<std::vector<double>, 27> christoffel;
   std::array<std::vector<double>, 3> covectorV;
   std::array<std::vector<double>, 3> vectorW;
+  std::array<std::vector<double>, 9> inNablaV;
+  std::array<std::vector<double>, 9> inNablaW;
   std::array<std::vector<double>, 9> outNablaV;
   std::array<std::vector<double>, 9> outNablaW;
   std::array<double *, 27> christoffelPtrs{};
   std::array<double *, 3> covectorVPtrs{};
   std::array<double *, 3> vectorWPtrs{};
+  std::array<double *, 9> inNablaVPtrs{};
+  std::array<double *, 9> inNablaWPtrs{};
   std::array<double *, 9> outNablaVPtrs{};
   std::array<double *, 9> outNablaWPtrs{};
 
@@ -3377,8 +3388,12 @@ static bool testCovariantDerivativeRankOneNumericPoint() {
     vectorWPtrs[c] = vectorW[c].data();
   }
   for (unsigned c = 0; c < 9; ++c) {
+    inNablaV[c].assign(nPoints, 0.0);
+    inNablaW[c].assign(nPoints, 0.0);
     outNablaV[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
     outNablaW[c].assign(nPoints, std::numeric_limits<double>::quiet_NaN());
+    inNablaVPtrs[c] = inNablaV[c].data();
+    inNablaWPtrs[c] = inNablaW[c].data();
     outNablaVPtrs[c] = outNablaV[c].data();
     outNablaWPtrs[c] = outNablaW[c].data();
   }
@@ -3405,11 +3420,16 @@ static bool testCovariantDerivativeRankOneNumericPoint() {
   desc.grid.spacing = {1.0, 1.0, 1.0};
   desc.point = {center, center, center};
   desc.args.resize(5);
+  desc.outputs.resize(5);
   desc.args[0].components.assign(christoffelPtrs.begin(), christoffelPtrs.end());
   desc.args[1].components.assign(covectorVPtrs.begin(), covectorVPtrs.end());
   desc.args[2].components.assign(vectorWPtrs.begin(), vectorWPtrs.end());
-  desc.args[3].components.assign(outNablaVPtrs.begin(), outNablaVPtrs.end());
-  desc.args[4].components.assign(outNablaWPtrs.begin(), outNablaWPtrs.end());
+  desc.args[3].components.assign(inNablaVPtrs.begin(), inNablaVPtrs.end());
+  desc.args[4].components.assign(inNablaWPtrs.begin(), inNablaWPtrs.end());
+  desc.outputs[3].components.assign(outNablaVPtrs.begin(),
+                                    outNablaVPtrs.end());
+  desc.outputs[4].components.assign(outNablaWPtrs.begin(),
+                                    outNablaWPtrs.end());
 
   auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
   if (!evalRes.ok) {
@@ -4488,6 +4508,9 @@ static bool testCttBssnGeneratedRhsHandoff() {
   std::array<std::vector<double>, 9> traceFreeExtrinsicCurvature;
   std::vector<double> meanCurvature(pointCount, 0.0);
   std::vector<double> lapse(pointCount, 0.0);
+  std::vector<double> chiRhs(pointCount,
+                             std::numeric_limits<double>::quiet_NaN());
+  std::array<std::vector<double>, 9> conformalMetricRhs;
   std::array<std::vector<double>, 3> shift;
   std::array<double *, 3> shiftPointers{};
   for (std::size_t component = 0; component < shift.size(); ++component) {
@@ -4498,6 +4521,7 @@ static bool testCttBssnGeneratedRhsHandoff() {
   const auto inverseConformalMetricPointers =
       makePointers(inverseConformalMetric);
   const auto traceFreePointers = makePointers(traceFreeExtrinsicCurvature);
+  const auto conformalMetricRhsPointers = makePointers(conformalMetricRhs);
 
   tensorium::solver::CttTargetGrid target;
   target.coordinates = tensorium::solver::CttTargetCoordinates::Cartesian;
@@ -4586,6 +4610,7 @@ static bool testCttBssnGeneratedRhsHandoff() {
   descriptor.grid.spacing = {0.1, 0.1, 0.1};
   descriptor.point = {center, center, center};
   descriptor.args.resize(fieldNames.size());
+  descriptor.outputs.resize(fieldNames.size());
   for (std::size_t argument = 0; argument < fieldNames.size(); ++argument) {
     auto &components = descriptor.args[argument].components;
     if (fieldNames[argument] == "chi") {
@@ -4607,9 +4632,17 @@ static bool testCttBssnGeneratedRhsHandoff() {
                 << fieldNames[argument] << "'\n";
       return false;
     }
+    if (fieldNames[argument] == "chi") {
+      descriptor.outputs[argument].components = {chiRhs.data()};
+    } else if (fieldNames[argument] == "gamma") {
+      descriptor.outputs[argument].components.assign(
+          conformalMetricRhsPointers.begin(), conformalMetricRhsPointers.end());
+    }
   }
 
   const std::size_t centerPoint = linearIndex(center, center, center);
+  const auto chiBeforeRhs = chi;
+  const auto conformalMetricBeforeRhs = conformalMetric;
   const double expectedChiRhs =
       (2.0 / 3.0) * lapse[centerPoint] * chi[centerPoint] *
       meanCurvature[centerPoint];
@@ -4627,21 +4660,181 @@ static bool testCttBssnGeneratedRhsHandoff() {
     return false;
   }
 
-  double maxRhsError = std::abs(chi[centerPoint] - expectedChiRhs);
+  double maxRhsError = std::abs(chiRhs[centerPoint] - expectedChiRhs);
+  double maxRhsInputMutation =
+      std::abs(chi[centerPoint] - chiBeforeRhs[centerPoint]);
   for (std::size_t component = 0; component < 9; ++component) {
     maxRhsError = std::max(
         maxRhsError,
-        std::abs(conformalMetric[component][centerPoint] -
+        std::abs(conformalMetricRhs[component][centerPoint] -
                  expectedMetricRhs[component]));
+    maxRhsInputMutation = std::max(
+        maxRhsInputMutation,
+        std::abs(conformalMetric[component][centerPoint] -
+                 conformalMetricBeforeRhs[component][centerPoint]));
+  }
+
+  const auto meanCurvatureBeforeStep = meanCurvature;
+  const auto lapseBeforeStep = lapse;
+  const auto traceFreeBeforeStep = traceFreeExtrinsicCurvature;
+  constexpr double dt = 0.01;
+  const auto stepResult = tensorium_mlir::advanceTensoriumState(
+      *mlirModule, descriptor.grid, descriptor.args, dt,
+      tensorium::backend::TimeIntegrator::RK4);
+  if (!stepResult.ok) {
+    std::cerr << "FAIL: CTT/BSSN RK4 step failed: " << stepResult.message
+              << "\n";
+    return false;
+  }
+
+  double maxStepError = 0.0;
+  double maxStaticFieldMutation = 0.0;
+  for (std::size_t point = 0; point < pointCount; ++point) {
+    const double rate =
+        (2.0 / 3.0) * lapseBeforeStep[point] * meanCurvatureBeforeStep[point];
+    const double q = dt * rate;
+    const double rk4Factor =
+        1.0 + q + q * q / 2.0 + q * q * q / 6.0 +
+        q * q * q * q / 24.0;
+    maxStepError = std::max(
+        maxStepError,
+        std::abs(chi[point] - chiBeforeRhs[point] * rk4Factor));
+    maxStaticFieldMutation =
+        std::max(maxStaticFieldMutation,
+                 std::abs(meanCurvature[point] - meanCurvatureBeforeStep[point]));
+    maxStaticFieldMutation = std::max(
+        maxStaticFieldMutation, std::abs(lapse[point] - lapseBeforeStep[point]));
+    for (std::size_t component = 0; component < 9; ++component) {
+      const double expectedMetric =
+          conformalMetricBeforeRhs[component][point] -
+          2.0 * dt * lapseBeforeStep[point] *
+              traceFreeBeforeStep[component][point];
+      maxStepError =
+          std::max(maxStepError,
+                   std::abs(conformalMetric[component][point] - expectedMetric));
+      maxStaticFieldMutation = std::max(
+          maxStaticFieldMutation,
+          std::abs(traceFreeExtrinsicCurvature[component][point] -
+                   traceFreeBeforeStep[component][point]));
+    }
   }
   if (maxInitializationError > 2.0e-9 || maxTraceFreeError > 2.0e-9 ||
-      maxRhsError > 1.0e-12) {
+      maxRhsError > 1.0e-12 || maxRhsInputMutation > 0.0 ||
+      maxStepError > 1.0e-12 || maxStaticFieldMutation > 0.0) {
     std::cerr << "FAIL: CTT-to-BSSN generated RHS errors: initialization="
               << maxInitializationError
               << " trace_free=" << maxTraceFreeError
-              << " rhs=" << maxRhsError << "\n";
+              << " rhs=" << maxRhsError
+              << " rhs_input_mutation=" << maxRhsInputMutation
+              << " rk4_step=" << maxStepError
+              << " static_field_mutation=" << maxStaticFieldMutation << "\n";
     return false;
   }
+  return true;
+}
+
+static bool testRhsGridEvolutionRuntime() {
+  {
+    ::mlir::MLIRContext context;
+    auto module = buildMLIRModuleFromFile(
+        "tests/01_scalar_minimal.tn", CompilationMode::Executable, context);
+    constexpr std::size_t pointCount = 8;
+    constexpr double dt = 0.2;
+    constexpr double rate = 0.1;
+    const double q = dt * rate;
+    struct IntegratorCase {
+      tensorium::backend::TimeIntegrator integrator;
+      double factor;
+    };
+    const std::array<IntegratorCase, 3> cases = {{
+        {tensorium::backend::TimeIntegrator::Euler, 1.0 + q},
+        {tensorium::backend::TimeIntegrator::RK3,
+         1.0 + q + q * q / 2.0 + q * q * q / 6.0},
+        {tensorium::backend::TimeIntegrator::RK4,
+         1.0 + q + q * q / 2.0 + q * q * q / 6.0 +
+             q * q * q * q / 24.0},
+    }};
+
+    tensorium_mlir::RhsGridSpec grid;
+    grid.spatialDim = 1;
+    grid.extents = {pointCount, 1, 1};
+    for (const auto &testCase : cases) {
+      std::vector<double> phi(pointCount, 2.0);
+      std::vector<tensorium_mlir::RhsFieldSoA> state(1);
+      state[0].components = {phi.data()};
+      const auto result = tensorium_mlir::advanceTensoriumState(
+          *module, grid, state, dt, testCase.integrator);
+      if (!result.ok) {
+        std::cerr << "FAIL: scalar grid time step failed: " << result.message
+                  << "\n";
+        return false;
+      }
+      for (double value : phi) {
+        if (!almostEqual(value, 2.0 * testCase.factor, 1e-13, 1e-13)) {
+          std::cerr << "FAIL: scalar grid integrator factor mismatch\n";
+          return false;
+        }
+      }
+    }
+
+    std::vector<double> aliased(pointCount, 1.0);
+    tensorium_mlir::RhsEvalDescriptor aliasDescriptor;
+    aliasDescriptor.grid = grid;
+    aliasDescriptor.args.resize(1);
+    aliasDescriptor.outputs.resize(1);
+    aliasDescriptor.args[0].components = {aliased.data()};
+    aliasDescriptor.outputs[0].components = {aliased.data()};
+    const auto aliasResult =
+        tensorium_mlir::evaluateTensoriumRHS(*module, aliasDescriptor);
+    if (aliasResult.ok ||
+        aliasResult.message.find("must not alias") == std::string::npos) {
+      std::cerr << "FAIL: RHS evaluator accepted aliased input/output buffers\n";
+      return false;
+    }
+  }
+
+  {
+    ::mlir::MLIRContext context;
+    tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+    opts.enableStencilLoweringPass = false;
+    auto module = buildMLIRModuleFromFileWithOpts(
+        "tests/03_spacial_derivatives.tn", CompilationMode::Executable,
+        context, opts);
+    constexpr std::size_t pointCount = 8;
+    std::vector<double> phi(pointCount, 0.0);
+    std::vector<double> gradInput(pointCount, 0.0);
+    std::vector<double> gradRhs(pointCount, -17.0);
+    for (std::size_t point = 0; point < pointCount; ++point)
+      phi[point] = static_cast<double>(point * point);
+
+    tensorium_mlir::RhsEvalDescriptor descriptor;
+    descriptor.grid.spatialDim = 1;
+    descriptor.grid.extents = {pointCount, 1, 1};
+    descriptor.grid.spacing = {1.0, 1.0, 1.0};
+    descriptor.args.resize(2);
+    descriptor.outputs.resize(2);
+    descriptor.args[0].components = {phi.data()};
+    descriptor.args[1].components = {gradInput.data()};
+    descriptor.outputs[1].components = {gradRhs.data()};
+    const auto result =
+        tensorium_mlir::evaluateTensoriumRHSGrid(*module, descriptor);
+    if (!result.ok) {
+      std::cerr << "FAIL: derivative grid evaluation failed: "
+                << result.message << "\n";
+      return false;
+    }
+    if (gradRhs.front() != -17.0 || gradRhs.back() != -17.0) {
+      std::cerr << "FAIL: derivative grid evaluator overwrote halo points\n";
+      return false;
+    }
+    for (std::size_t point = 1; point + 1 < pointCount; ++point) {
+      if (!almostEqual(gradRhs[point], 2.0 * static_cast<double>(point))) {
+        std::cerr << "FAIL: derivative grid evaluator interior mismatch\n";
+        return false;
+      }
+    }
+  }
+
   return true;
 }
 
@@ -4741,6 +4934,7 @@ int main() {
        &testCttRadialVacuumConstraintSolve},
       {"testCttPhysicalGridHandoff", &testCttPhysicalGridHandoff},
       {"testCttBssnGeneratedRhsHandoff", &testCttBssnGeneratedRhsHandoff},
+      {"testRhsGridEvolutionRuntime", &testRhsGridEvolutionRuntime},
   };
 
   bool ok = true;

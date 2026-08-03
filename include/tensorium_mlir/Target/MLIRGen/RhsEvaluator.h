@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mlir/IR/BuiltinOps.h"
+#include "tensorium/IR/IRBase.hpp"
 
 #include <array>
 #include <cstddef>
@@ -25,8 +26,11 @@ struct RhsEvalDescriptor {
   RhsGridSpec grid;
   // Point where @tensorium_rhs is evaluated.
   std::array<std::size_t, 3> point{0, 0, 0};
-  // Per-argument field buffers matching @tensorium_rhs argument order.
+  // Read-only field buffers matching @tensorium_rhs argument order.
   std::vector<RhsFieldSoA> args;
+  // Separate RHS buffers using the same argument indexing. Entries for fields
+  // without a dt assignment must be empty.
+  std::vector<RhsFieldSoA> outputs;
 };
 
 struct RhsEvalResult {
@@ -44,5 +48,18 @@ struct RhsEvalResult {
 // ref, deriv, add/sub/mul/div, contract, promote, dt_assign.
 RhsEvalResult evaluateTensoriumRHS(::mlir::ModuleOp module,
                                    const RhsEvalDescriptor &desc);
+
+// Executes @tensorium_rhs over the valid interior grid. Output halo points are
+// left untouched. Inputs and outputs must not alias.
+RhsEvalResult evaluateTensoriumRHSGrid(::mlir::ModuleOp module,
+                                       const RhsEvalDescriptor &desc);
+
+// Advances the evolved fields in state by one explicit time step. The state
+// uses @tensorium_rhs argument order; non-evolved fields and halo points remain
+// unchanged. All stages are evaluated into separate internal RHS buffers.
+RhsEvalResult advanceTensoriumState(
+    ::mlir::ModuleOp module, const RhsGridSpec &grid,
+    const std::vector<RhsFieldSoA> &state, double dt,
+    tensorium::backend::TimeIntegrator integrator);
 
 } // namespace tensorium_mlir

@@ -123,6 +123,14 @@ state and writes each `dt_assign` result to the separate output memref with the
 same name in `output_names`. Inputs and outputs must not alias. The generated
 kernel performs no heap allocation and does not make whole-grid snapshots.
 
+The host-side MLIR reference evaluator follows the same separation:
+`RhsEvalDescriptor::args` contains state and `RhsEvalDescriptor::outputs`
+contains derivatives. Output entries use RHS argument indexing and are empty
+for fields without a `dt` assignment. `evaluateTensoriumRHSGrid` preserves
+halo outputs, while `advanceTensoriumState` uses separate stage buffers for
+Euler, SSPRK3, and classical RK4 integration. This evaluator is a reference
+implementation; it is not the native ABI entry point.
+
 For a field of tensor rank `r` in three spatial dimensions, the caller must
 provide at least `3^r * nx * ny * nz` logical elements. Scalar fields need
 `nx * ny * nz`. ABI v2 checks every descriptor's logical `size` and the minimum
