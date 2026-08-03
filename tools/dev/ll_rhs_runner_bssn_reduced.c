@@ -11,7 +11,10 @@ extern void tensorium_rhs_grid_affine(
     int64_t gamma_stride, double *atilde_alloc, double *atilde_aligned,
     int64_t atilde_offset, int64_t atilde_size, int64_t atilde_stride,
     double *alpha_alloc, double *alpha_aligned, int64_t alpha_offset,
-    int64_t alpha_size, int64_t alpha_stride);
+    int64_t alpha_size, int64_t alpha_stride, double *chi_rhs_alloc,
+    double *chi_rhs_aligned, int64_t chi_rhs_offset, int64_t chi_rhs_size,
+    int64_t chi_rhs_stride, double *gamma_rhs_alloc, double *gamma_rhs_aligned,
+    int64_t gamma_rhs_offset, int64_t gamma_rhs_size, int64_t gamma_rhs_stride);
 
 static int almost_equal(double got, double expected, double rel_tol,
                         double abs_tol) {
@@ -46,12 +49,16 @@ int main(void) {
   double *gamma = (double *)calloc((size_t)(9 * n), sizeof(double));
   double *atilde = (double *)calloc((size_t)(9 * n), sizeof(double));
   double *alpha = (double *)calloc((size_t)n, sizeof(double));
-  if (!chi || !gamma || !atilde || !alpha) {
+  double *chiRhs = (double *)calloc((size_t)n, sizeof(double));
+  double *gammaRhs = (double *)calloc((size_t)(9 * n), sizeof(double));
+  if (!chi || !gamma || !atilde || !alpha || !chiRhs || !gammaRhs) {
     fprintf(stderr, "allocation failure\n");
     free(chi);
     free(gamma);
     free(atilde);
     free(alpha);
+    free(chiRhs);
+    free(gammaRhs);
     return 2;
   }
 
@@ -65,11 +72,12 @@ int main(void) {
   }
 
   tensorium_rhs_grid_affine(nx, ny, nz, dr, dtheta, dphi, chi, chi, 0, n, 1,
-                            gamma, gamma, 0, 9 * n, 1, atilde, atilde, 0,
-                            9 * n, 1, alpha, alpha, 0, n, 1);
+                            gamma, gamma, 0, 9 * n, 1, atilde, atilde, 0, 9 * n,
+                            1, alpha, alpha, 0, n, 1, chiRhs, chiRhs, 0, n, 1,
+                            gammaRhs, gammaRhs, 0, 9 * n, 1);
 
   const double expectedChi = -2.0 * alpha0 * chi0;
-  const double gotChi = chi[cidx];
+  const double gotChi = chiRhs[cidx];
   printf("[ll-smoke] BSSN reduced center dt(chi) got=%.17g expected=%.17g\n",
          gotChi, expectedChi);
 
@@ -77,7 +85,7 @@ int main(void) {
 
   for (int c = 0; c < 9; ++c) {
     const double expected = -2.0 * alpha0 * (double)(c + 1);
-    const double got = gamma[(int64_t)c * n + cidx];
+    const double got = gammaRhs[(int64_t)c * n + cidx];
     if (c < 3) {
       printf("[ll-smoke] BSSN reduced center dt(gamma)[%d] got=%.17g "
              "expected=%.17g\n",
@@ -90,6 +98,8 @@ int main(void) {
   free(gamma);
   free(atilde);
   free(alpha);
+  free(chiRhs);
+  free(gammaRhs);
 
   if (!ok) {
     fprintf(stderr, "BSSN reduced RHS mismatch\n");

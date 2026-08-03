@@ -6,7 +6,7 @@ namespace tensorium_mlir::abi {
 
 // Bump this value only when changing generated symbol signatures or
 // argument-order contracts in a backward-incompatible way.
-inline constexpr std::int64_t kGeneratedKernelABIVersion = 1;
+inline constexpr std::int64_t kGeneratedKernelABIVersion = 2;
 
 // Module and function attributes used to expose the generated ABI contract.
 inline constexpr const char kAttrABIVersion[] = "tensorium.abi.version";
@@ -17,10 +17,11 @@ inline constexpr const char kAttrFieldNames[] = "tensorium.abi.field_names";
 inline constexpr const char kAttrOutputNames[] = "tensorium.abi.output_names";
 inline constexpr const char kAttrWriteArgIndices[] =
     "tensorium.abi.write_arg_indices";
+inline constexpr const char kAttrHaloWidth[] = "tensorium.abi.halo_width";
 inline constexpr const char kAttrMemoryLayout[] = "tensorium.abi.memory_layout";
 inline constexpr const char kAttrMemrefABI[] = "tensorium.abi.memref_abi";
 
-// Stable metadata values for ABI v1.
+// Stable metadata values for ABI v2.
 inline constexpr const char kMemLayoutSoAComponentMajor[] =
     "soa_component_major";
 inline constexpr const char kMemrefABI1DStridedF64[] =
@@ -35,7 +36,8 @@ inline constexpr const char kSymbolInitGridScf[] = "tensorium_init_grid_scf";
 inline constexpr const char kSymbolInitGridAffine[] =
     "tensorium_init_grid_affine";
 inline constexpr const char kSymbolRhsGridScf[] = "tensorium_rhs_grid_scf";
-inline constexpr const char kSymbolRhsGridAffine[] = "tensorium_rhs_grid_affine";
+inline constexpr const char kSymbolRhsGridAffine[] =
+    "tensorium_rhs_grid_affine";
 
 // Stable function kind tags.
 inline constexpr const char kKindInitSource[] = "init_source";
@@ -63,4 +65,3 @@ inline StridedMemRef1DF64 makeContiguousMemRef(double *data,
 }
 
 } // namespace tensorium_mlir::abi
-

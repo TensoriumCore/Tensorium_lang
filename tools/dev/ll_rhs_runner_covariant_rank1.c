@@ -12,7 +12,12 @@ extern void tensorium_rhs_grid_affine(
     double *nabla_v_alloc, double *nabla_v_aligned, int64_t nabla_v_offset,
     int64_t nabla_v_size, int64_t nabla_v_stride, double *nabla_w_alloc,
     double *nabla_w_aligned, int64_t nabla_w_offset, int64_t nabla_w_size,
-    int64_t nabla_w_stride);
+    int64_t nabla_w_stride, double *nabla_v_rhs_alloc,
+    double *nabla_v_rhs_aligned, int64_t nabla_v_rhs_offset,
+    int64_t nabla_v_rhs_size, int64_t nabla_v_rhs_stride,
+    double *nabla_w_rhs_alloc, double *nabla_w_rhs_aligned,
+    int64_t nabla_w_rhs_offset, int64_t nabla_w_rhs_size,
+    int64_t nabla_w_rhs_stride);
 
 static int almost_equal(double got, double expected, double rel_tol,
                         double abs_tol) {
@@ -55,7 +60,9 @@ int main(void) {
   double *w = (double *)calloc((size_t)(3 * n), sizeof(double));
   double *nablaV = (double *)calloc((size_t)(9 * n), sizeof(double));
   double *nablaW = (double *)calloc((size_t)(9 * n), sizeof(double));
-  if (!chr || !v || !w || !nablaV || !nablaW) {
+  double *nablaVRhs = (double *)calloc((size_t)(9 * n), sizeof(double));
+  double *nablaWRhs = (double *)calloc((size_t)(9 * n), sizeof(double));
+  if (!chr || !v || !w || !nablaV || !nablaW || !nablaVRhs || !nablaWRhs) {
     fprintf(stderr, "allocation failure\n");
     return 2;
   }
@@ -78,14 +85,14 @@ int main(void) {
   tensorium_rhs_grid_affine(
       nx, ny, nz, dr, dtheta, dphi, chr, chr, 0, 27 * n, 1, v, v, 0, 3 * n, 1,
       w, w, 0, 3 * n, 1, nablaV, nablaV, 0, 9 * n, 1, nablaW, nablaW, 0, 9 * n,
-      1);
+      1, nablaVRhs, nablaVRhs, 0, 9 * n, 1, nablaWRhs, nablaWRhs, 0, 9 * n, 1);
 
   double matV[3][3];
   double matW[3][3];
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
-      matV[i][j] = nablaV[(int64_t)comp2(i, j) * n + cidx];
-      matW[i][j] = nablaW[(int64_t)comp2(i, j) * n + cidx];
+      matV[i][j] = nablaVRhs[(int64_t)comp2(i, j) * n + cidx];
+      matW[i][j] = nablaWRhs[(int64_t)comp2(i, j) * n + cidx];
     }
   }
 
@@ -119,6 +126,8 @@ int main(void) {
   free(w);
   free(nablaV);
   free(nablaW);
+  free(nablaVRhs);
+  free(nablaWRhs);
 
   if (!ok) {
     fprintf(stderr, "Covariant rank-1 LLVM smoke mismatch\n");

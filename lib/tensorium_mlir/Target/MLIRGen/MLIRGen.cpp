@@ -21,6 +21,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 
 namespace tensorium_mlir {
@@ -84,9 +85,14 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
     return b.getFunctionType(types, {});
   };
 
-  auto initFunc =
-      mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolInit,
-                                 buildTypeFromIndices(initArgIndices));
+  const bool hasAnalyticInitialData =
+      module.initialData &&
+      (module.initialData->hasMetric4 || module.initialData->hasDecomposed);
+  std::optional<mlir::func::FuncOp> initFunc;
+  if (hasAnalyticInitialData) {
+    initFunc = mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolInit,
+                                          buildTypeFromIndices(initArgIndices));
+  }
   auto rhsFunc =
       mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolRhs,
                                  buildTypeFromIndices(rhsArgIndices));
@@ -122,21 +128,26 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
                 b.getStringAttr(tensorium_mlir::abi::kMemrefABI1DStridedF64));
   };
 
-  setCommonABIAttrs(initFunc, tensorium_mlir::abi::kKindInitSource);
+  if (initFunc)
+    setCommonABIAttrs(*initFunc, tensorium_mlir::abi::kKindInitSource);
   setCommonABIAttrs(rhsFunc, tensorium_mlir::abi::kKindRhsSource);
   setCommonABIAttrs(entryFunc, tensorium_mlir::abi::kKindEntrySource);
-  initFunc->setAttr(tensorium_mlir::abi::kAttrFieldNames,
-                    makeFieldNamesAttr(initArgIndices));
+  if (initFunc) {
+    (*initFunc)->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+                         makeFieldNamesAttr(initArgIndices));
+  }
   rhsFunc->setAttr(tensorium_mlir::abi::kAttrFieldNames,
                    makeFieldNamesAttr(rhsArgIndices));
   entryFunc->setAttr(tensorium_mlir::abi::kAttrFieldNames,
                      makeFieldNamesAttr(allArgIndices));
 
-  auto *initBlock = initFunc.addEntryBlock();
-  b.setInsertionPointToEnd(initBlock);
-  auto initFieldArg = mapFieldArgs(initBlock, initArgIndices);
-  emitInitialDataOps(b, loc, module, initFieldArg);
-  b.create<mlir::func::ReturnOp>(loc);
+  if (initFunc) {
+    auto *initBlock = initFunc->addEntryBlock();
+    b.setInsertionPointToEnd(initBlock);
+    auto initFieldArg = mapFieldArgs(initBlock, initArgIndices);
+    emitInitialDataOps(b, loc, module, initFieldArg);
+    b.create<mlir::func::ReturnOp>(loc);
+  }
 
   auto *rhsBlock = rhsFunc.addEntryBlock();
   b.setInsertionPointToEnd(rhsBlock);
@@ -156,8 +167,10 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   for (unsigned idx : rhsArgIndices)
     rhsCallArgs.push_back(entryBlock->getArgument(idx));
 
-  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolInit,
-                               mlir::TypeRange{}, initCallArgs);
+  if (initFunc) {
+    b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolInit,
+                                 mlir::TypeRange{}, initCallArgs);
+  }
   b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolRhs,
                                mlir::TypeRange{}, rhsCallArgs);
   b.create<mlir::func::ReturnOp>(loc);
@@ -179,7 +192,8 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
         "tensorium.sim.coords",
         b.getStringAttr(coordSystemToAttr(module.simulation->coords)));
   }
-  moduleOp->push_back(initFunc);
+  if (initFunc)
+    moduleOp->push_back(*initFunc);
   moduleOp->push_back(rhsFunc);
   moduleOp->push_back(entryFunc);
 

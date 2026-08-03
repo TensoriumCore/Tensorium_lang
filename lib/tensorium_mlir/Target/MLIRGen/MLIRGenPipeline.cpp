@@ -22,10 +22,10 @@ void addEinsteinPipelineSafe(::mlir::PassManager &pm,
     pm.addPass(tensorium::mlir::createTensoriumInitGridAffinePass());
   }
   if (opts.enableRhsGridScfPass) {
-    pm.addPass(tensorium::mlir::createTensoriumRhsGridScfPass());
+    pm.addPass(tensorium::mlir::createTensoriumRhsGridScfPass(opts.order));
   }
   if (opts.enableRhsGridAffinePass) {
-    pm.addPass(tensorium::mlir::createTensoriumRhsGridAffinePass());
+    pm.addPass(tensorium::mlir::createTensoriumRhsGridAffinePass(opts.order));
   }
   if (opts.enableStripSourceFuncsPass) {
     pm.addPass(tensorium::mlir::createTensoriumStripSourceFuncsPass());

@@ -523,6 +523,14 @@ if ! grep -q 'define void @tensorium_rhs_grid_affine' "$CTT_BSSN_LL"; then
   echo "ERROR: expected generated BSSN grid RHS after the CTT solve"
   exit 1
 fi
+if grep -q 'tensorium_init' "$CTT_BSSN_LL"; then
+  echo "ERROR: constraint-backed BSSN handoff must not emit analytic init symbols"
+  exit 1
+fi
+if grep -qE '@(malloc|free)' "$CTT_BSSN_LL"; then
+  echo "ERROR: generated BSSN RHS must not allocate whole-grid snapshots"
+  exit 1
+fi
 
 echo
 echo "=============================="
@@ -714,6 +722,13 @@ echo " RUN BSSN MINIMAL LLVM SMOKE"
 echo "=============================="
 
 bash tools/dev/test_bssn_minimal_ll.sh
+
+echo
+echo "=============================="
+echo " RUN GENERATED RHS ABI V2 SMOKE"
+echo "=============================="
+
+bash tools/dev/test_rhs_abi_v2_ll.sh
 
 echo
 echo "=============================="

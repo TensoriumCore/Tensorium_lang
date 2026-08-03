@@ -15,6 +15,7 @@
 #include "tensorium_mlir/Target/MLIRGen/RhsEvaluator.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
@@ -2004,7 +2005,11 @@ static bool testSchwarzschildRhsGridScfLowering() {
     return false;
   }
 
-  const unsigned expectedArgs = 6 + rhs.getNumArguments();
+  auto writeArgs = parseI64ArrayAttr(
+      rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrWriteArgIndices));
+  const unsigned expectedArgs =
+      6 + rhs.getNumArguments() + static_cast<unsigned>(writeArgs.size());
   if (rhsGrid.getNumArguments() != expectedArgs) {
     std::cerr << "FAIL: tensorium_rhs_grid_scf must have " << expectedArgs
               << " args, got " << rhsGrid.getNumArguments() << "\n";
@@ -2027,9 +2032,16 @@ static bool testSchwarzschildRhsGridScfLowering() {
   }
   for (unsigned i = 6; i < expectedArgs; ++i) {
     auto memTy = llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(i).getType());
+    auto layout = memTy
+                      ? llvm::dyn_cast<::mlir::StridedLayoutAttr>(
+                            memTy.getLayout())
+                      : ::mlir::StridedLayoutAttr{};
     if (!memTy || memTy.getRank() != 1 ||
         memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
-        !memTy.getElementType().isF64()) {
+        !memTy.getElementType().isF64() || !layout ||
+        !::mlir::ShapedType::isDynamic(layout.getOffset()) ||
+        layout.getStrides().size() != 1 ||
+        !::mlir::ShapedType::isDynamic(layout.getStrides()[0])) {
       std::cerr << "FAIL: tensorium_rhs_grid_scf arg " << i
                 << " must be memref<?xf64>\n";
       return false;
@@ -2038,11 +2050,22 @@ static bool testSchwarzschildRhsGridScfLowering() {
 
   bool hasFor = false;
   bool hasStore = false;
+  bool hasAllocation = false;
+  bool storesOnlyToOutputs = true;
   bool hasTensoriumOp = false;
   std::string tensoriumOpName;
   rhsGrid.walk([&](::mlir::Operation *op) {
     hasFor |= llvm::isa<::mlir::scf::ForOp>(op);
     hasStore |= (op->getName().getStringRef() == "memref.store");
+    hasAllocation |= llvm::isa<::mlir::memref::AllocOp,
+                               ::mlir::memref::CopyOp>(op);
+    if (auto store = llvm::dyn_cast<::mlir::memref::StoreOp>(op)) {
+      const unsigned outputBase = 6 + rhs.getNumArguments();
+      bool isOutput = false;
+      for (unsigned arg = outputBase; arg < expectedArgs; ++arg)
+        isOutput |= store.getMemRef() == rhsGrid.getArgument(arg);
+      storesOnlyToOutputs &= isOutput;
+    }
     if (op != rhsGrid.getOperation() &&
         op->getName().getDialectNamespace() == "tensorium") {
       hasTensoriumOp = true;
@@ -2056,6 +2079,11 @@ static bool testSchwarzschildRhsGridScfLowering() {
   }
   if (!hasStore) {
     std::cerr << "FAIL: tensorium_rhs_grid_scf must contain memref.store\n";
+    return false;
+  }
+  if (hasAllocation || !storesOnlyToOutputs) {
+    std::cerr << "FAIL: tensorium_rhs_grid_scf must write only separate output "
+                 "buffers and must not allocate snapshots\n";
     return false;
   }
   if (hasTensoriumOp) {
@@ -2181,9 +2209,9 @@ evolution CoordInRhs {
     return false;
   }
 
-  if (rhsGrid.getNumArguments() != 7) {
-    std::cerr << "FAIL: expected tensorium_rhs_grid_scf to have 7 args "
-                 "(nx,ny,nz,dx,dy,dz,beta), got "
+  if (rhsGrid.getNumArguments() != 8) {
+    std::cerr << "FAIL: expected tensorium_rhs_grid_scf to have 8 args "
+                 "(nx,ny,nz,dx,dy,dz,beta,beta_rhs), got "
               << rhsGrid.getNumArguments() << "\n";
     return false;
   }
@@ -2255,7 +2283,11 @@ static bool testSchwarzschildRhsGridAffineLowering() {
     return false;
   }
 
-  const unsigned expectedArgs = 6 + rhs.getNumArguments();
+  auto writeArgs = parseI64ArrayAttr(
+      rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrWriteArgIndices));
+  const unsigned expectedArgs =
+      6 + rhs.getNumArguments() + static_cast<unsigned>(writeArgs.size());
   if (rhsGrid.getNumArguments() != expectedArgs) {
     std::cerr << "FAIL: tensorium_rhs_grid_affine must have " << expectedArgs
               << " args, got " << rhsGrid.getNumArguments() << "\n";
@@ -2279,9 +2311,16 @@ static bool testSchwarzschildRhsGridAffineLowering() {
   for (unsigned i = 6; i < expectedArgs; ++i) {
     auto memTy =
         llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(i).getType());
+    auto layout = memTy
+                      ? llvm::dyn_cast<::mlir::StridedLayoutAttr>(
+                            memTy.getLayout())
+                      : ::mlir::StridedLayoutAttr{};
     if (!memTy || memTy.getRank() != 1 ||
         memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
-        !memTy.getElementType().isF64()) {
+        !memTy.getElementType().isF64() || !layout ||
+        !::mlir::ShapedType::isDynamic(layout.getOffset()) ||
+        layout.getStrides().size() != 1 ||
+        !::mlir::ShapedType::isDynamic(layout.getStrides()[0])) {
       std::cerr << "FAIL: tensorium_rhs_grid_affine arg " << i
                 << " must be memref<?xf64>\n";
       return false;
@@ -2290,11 +2329,22 @@ static bool testSchwarzschildRhsGridAffineLowering() {
 
   bool hasFor = false;
   bool hasStore = false;
+  bool hasAllocation = false;
+  bool storesOnlyToOutputs = true;
   bool hasTensoriumOp = false;
   std::string tensoriumOpName;
   rhsGrid.walk([&](::mlir::Operation *op) {
     hasFor |= llvm::isa<::mlir::affine::AffineForOp>(op);
     hasStore |= (op->getName().getStringRef() == "memref.store");
+    hasAllocation |= llvm::isa<::mlir::memref::AllocOp,
+                               ::mlir::memref::CopyOp>(op);
+    if (auto store = llvm::dyn_cast<::mlir::memref::StoreOp>(op)) {
+      const unsigned outputBase = 6 + rhs.getNumArguments();
+      bool isOutput = false;
+      for (unsigned arg = outputBase; arg < expectedArgs; ++arg)
+        isOutput |= store.getMemRef() == rhsGrid.getArgument(arg);
+      storesOnlyToOutputs &= isOutput;
+    }
     if (op != rhsGrid.getOperation() &&
         op->getName().getDialectNamespace() == "tensorium") {
       hasTensoriumOp = true;
@@ -2308,6 +2358,11 @@ static bool testSchwarzschildRhsGridAffineLowering() {
   }
   if (!hasStore) {
     std::cerr << "FAIL: tensorium_rhs_grid_affine must contain memref.store\n";
+    return false;
+  }
+  if (hasAllocation || !storesOnlyToOutputs) {
+    std::cerr << "FAIL: tensorium_rhs_grid_affine must write only separate "
+                 "output buffers and must not allocate snapshots\n";
     return false;
   }
   if (hasTensoriumOp) {
@@ -2410,7 +2465,7 @@ static bool testGeneratedKernelABIMetadata() {
       !expectEqVec(initPointCoords, {"r", "theta", "phi"}) ||
       !expectEqVec(initPointOutputs, {"alpha", "gamma", "gammaU"}) ||
       initPointWrites != std::vector<int64_t>({4, 5, 6})) {
-    std::cerr << "FAIL: init_point ABI metadata does not match expected ABI v1\n";
+    std::cerr << "FAIL: init_point ABI metadata does not match expected ABI v2\n";
     return false;
   }
 
@@ -2422,7 +2477,7 @@ static bool testGeneratedKernelABIMetadata() {
           tensorium_mlir::abi::kAttrWriteArgIndices));
   if (!expectEqVec(initGridOutputs, {"alpha", "gamma", "gammaU"}) ||
       initGridWrites != std::vector<int64_t>({4, 5, 6})) {
-    std::cerr << "FAIL: init_grid_affine ABI metadata does not match expected ABI v1\n";
+    std::cerr << "FAIL: init_grid_affine ABI metadata does not match expected ABI v2\n";
     return false;
   }
 
@@ -2437,6 +2492,8 @@ static bool testGeneratedKernelABIMetadata() {
   auto rhsGridWrites = parseI64ArrayAttr(
       rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrWriteArgIndices));
+  auto rhsGridHalo = rhsGrid->getAttrOfType<::mlir::IntegerAttr>(
+      tensorium_mlir::abi::kAttrHaloWidth);
   if (!expectEqVec(rhsFieldNames,
                    {"alpha", "phi", "H", "gamma", "gammaU", "K"})) {
     std::cerr << "FAIL: unexpected tensorium_rhs field order in ABI metadata\n";
@@ -2444,7 +2501,8 @@ static bool testGeneratedKernelABIMetadata() {
   }
   if (rhsGridFieldNames != rhsFieldNames ||
       !expectEqVec(rhsGridOutputs, {"H", "K"}) ||
-      rhsGridWrites != std::vector<int64_t>({8, 11})) {
+      rhsGridWrites != std::vector<int64_t>({12, 13}) || !rhsGridHalo ||
+      rhsGridHalo.getInt() != 4) {
     std::cerr << "FAIL: rhs_grid_affine ABI metadata mismatch\n";
     return false;
   }
@@ -2525,10 +2583,10 @@ static bool testLoweredGridLLVMABISignature() {
     std::cerr << "FAIL: missing LLVM signature for tensorium_rhs_grid_affine\n";
     return false;
   }
-  if (rhsGridTypes.size() != 36 || rhsGridTypes[0] != "i64" ||
+  if (rhsGridTypes.size() != 46 || rhsGridTypes[0] != "i64" ||
       rhsGridTypes[1] != "i64" || rhsGridTypes[2] != "i64" ||
       rhsGridTypes[3] != "double" || rhsGridTypes[4] != "double" ||
-      rhsGridTypes[5] != "double" || !checkMemrefGroups(rhsGridTypes, 6, 6)) {
+      rhsGridTypes[5] != "double" || !checkMemrefGroups(rhsGridTypes, 6, 8)) {
     std::cerr << "FAIL: tensorium_rhs_grid_affine LLVM ABI signature mismatch\n";
     return false;
   }
@@ -3814,6 +3872,53 @@ static bool testConstraintMLIRLoweringFailsExplicitly() {
   return false;
 }
 
+static bool testConstraintEvolutionMLIROmitsAnalyticInit() {
+  ::mlir::MLIRContext ctx;
+  tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
+  opts.enableInitStdLoweringPass = true;
+  opts.enableInitGridAffinePass = true;
+  opts.enableRhsGridAffinePass = true;
+  opts.enableStencilLoweringPass = false;
+
+  auto module = buildMLIRModuleFromFileWithOpts(
+      "tests/fixtures/gr/ctt_bssn_handoff.tn", CompilationMode::Executable,
+      ctx, opts);
+
+  if (module->lookupSymbol<::mlir::func::FuncOp>(
+          tensorium_mlir::abi::kSymbolInit) ||
+      module->lookupSymbol<::mlir::func::FuncOp>(
+          tensorium_mlir::abi::kSymbolInitPoint) ||
+      module->lookupSymbol<::mlir::func::FuncOp>(
+          tensorium_mlir::abi::kSymbolInitGridAffine)) {
+    std::cerr << "FAIL: constraint-backed evolution emitted an analytic init "
+                 "kernel\n";
+    return false;
+  }
+
+  auto rhsGrid = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolRhsGridAffine);
+  if (!rhsGrid) {
+    std::cerr << "FAIL: constraint-backed evolution did not emit an RHS grid "
+                 "kernel\n";
+    return false;
+  }
+
+  auto entry = module->lookupSymbol<::mlir::func::FuncOp>(
+      tensorium_mlir::abi::kSymbolEntry);
+  bool callsInit = false;
+  if (entry) {
+    entry.walk([&](::mlir::func::CallOp call) {
+      callsInit |= call.getCallee() == tensorium_mlir::abi::kSymbolInit;
+    });
+  }
+  if (callsInit) {
+    std::cerr << "FAIL: constraint-backed tensorium_entry still calls "
+                 "tensorium_init\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testBrillLindquistRadialConstraintSolve() {
   auto result = tensorium::api::parseAndValidateFile(
       "tests/fixtures/gr/brill_lindquist_radial_solve.tn");
@@ -4620,6 +4725,8 @@ int main() {
        &testConstraintDifferentialCanonicalization},
       {"testConstraintMLIRLoweringFailsExplicitly",
        &testConstraintMLIRLoweringFailsExplicitly},
+      {"testConstraintEvolutionMLIROmitsAnalyticInit",
+       &testConstraintEvolutionMLIROmitsAnalyticInit},
       {"testBrillLindquistRadialConstraintSolve",
        &testBrillLindquistRadialConstraintSolve},
       {"testBrillLindquistMultidomainConstraintSolve",

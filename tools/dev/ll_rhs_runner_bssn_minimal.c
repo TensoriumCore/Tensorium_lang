@@ -16,7 +16,15 @@ extern void tensorium_rhs_grid_affine(
     double *datilde_alloc, double *datilde_aligned, int64_t datilde_offset,
     int64_t datilde_size, int64_t datilde_stride, double *alpha_alloc,
     double *alpha_aligned, int64_t alpha_offset, int64_t alpha_size,
-    int64_t alpha_stride);
+    int64_t alpha_stride, double *k_rhs_alloc, double *k_rhs_aligned,
+    int64_t k_rhs_offset, int64_t k_rhs_size, int64_t k_rhs_stride,
+    double *atilde_rhs_alloc, double *atilde_rhs_aligned,
+    int64_t atilde_rhs_offset, int64_t atilde_rhs_size,
+    int64_t atilde_rhs_stride, double *ricci_rhs_alloc,
+    double *ricci_rhs_aligned, int64_t ricci_rhs_offset, int64_t ricci_rhs_size,
+    int64_t ricci_rhs_stride, double *datilde_rhs_alloc,
+    double *datilde_rhs_aligned, int64_t datilde_rhs_offset,
+    int64_t datilde_rhs_size, int64_t datilde_rhs_stride);
 
 static int almost_equal(double got, double expected, double rel_tol,
                         double abs_tol) {
@@ -33,7 +41,9 @@ static int64_t flat_index(int64_t i, int64_t j, int64_t k, int64_t ny,
 
 static int comp2(int i, int j) { return i * 3 + j; }
 static int comp3(int i, int j, int k) { return (i * 3 + j) * 3 + k; }
-static int comp4(int i, int j, int k, int l) { return ((i * 3 + j) * 3 + k) * 3 + l; }
+static int comp4(int i, int j, int k, int l) {
+  return ((i * 3 + j) * 3 + k) * 3 + l;
+}
 
 static double init_riemann_component(int i, int j, int k, int l) {
   return (double)(1000 * i + 100 * j + 10 * k + l + 1);
@@ -62,7 +72,12 @@ int main(void) {
   double *riemann = (double *)calloc((size_t)(81 * n), sizeof(double));
   double *datilde = (double *)calloc((size_t)(27 * n), sizeof(double));
   double *alpha = (double *)calloc((size_t)n, sizeof(double));
-  if (!k || !atilde || !gamma || !ricci || !riemann || !datilde || !alpha) {
+  double *kRhs = (double *)calloc((size_t)n, sizeof(double));
+  double *atildeRhs = (double *)calloc((size_t)(9 * n), sizeof(double));
+  double *ricciRhs = (double *)calloc((size_t)(9 * n), sizeof(double));
+  double *datildeRhs = (double *)calloc((size_t)(27 * n), sizeof(double));
+  if (!k || !atilde || !gamma || !ricci || !riemann || !datilde || !alpha ||
+      !kRhs || !atildeRhs || !ricciRhs || !datildeRhs) {
     fprintf(stderr, "allocation failure\n");
     free(k);
     free(atilde);
@@ -71,6 +86,10 @@ int main(void) {
     free(riemann);
     free(datilde);
     free(alpha);
+    free(kRhs);
+    free(atildeRhs);
+    free(ricciRhs);
+    free(datildeRhs);
     return 2;
   }
 
@@ -99,16 +118,17 @@ int main(void) {
     }
   }
 
-  tensorium_rhs_grid_affine(nx, ny, nz, dr, dtheta, dphi, k, k, 0, n, 1,
-                            atilde, atilde, 0, 9 * n, 1, gamma, gamma, 0,
-                            9 * n, 1, ricci, ricci, 0, 9 * n, 1, riemann,
-                            riemann, 0, 81 * n, 1, datilde, datilde, 0, 27 * n,
-                            1, alpha, alpha, 0, n, 1);
+  tensorium_rhs_grid_affine(
+      nx, ny, nz, dr, dtheta, dphi, k, k, 0, n, 1, atilde, atilde, 0, 9 * n, 1,
+      gamma, gamma, 0, 9 * n, 1, ricci, ricci, 0, 9 * n, 1, riemann, riemann, 0,
+      81 * n, 1, datilde, datilde, 0, 27 * n, 1, alpha, alpha, 0, n, 1, kRhs,
+      kRhs, 0, n, 1, atildeRhs, atildeRhs, 0, 9 * n, 1, ricciRhs, ricciRhs, 0,
+      9 * n, 1, datildeRhs, datildeRhs, 0, 27 * n, 1);
 
   int ok = 1;
 
   const double expectedK = -alpha0 * k0 * k0 + alpha0 * (1.0 + 5.0 + 9.0);
-  const double gotK = k[cidx];
+  const double gotK = kRhs[cidx];
   printf("[ll-smoke] BSSN minimal center dt(K) got=%.17g expected=%.17g\n",
          gotK, expectedK);
   ok &= almost_equal(gotK, expectedK, 1e-12, 1e-12);
@@ -117,7 +137,7 @@ int main(void) {
     for (int j = 0; j < 3; ++j) {
       const int c2 = comp2(i, j);
       const double expectedAtilde = alpha0 * (double)(c2 + 1);
-      const double gotAtilde = atilde[(int64_t)c2 * n + cidx];
+      const double gotAtilde = atildeRhs[(int64_t)c2 * n + cidx];
       if (i == 0 && j < 3) {
         printf("[ll-smoke] BSSN minimal center dt(Atilde)[0,%d] got=%.17g "
                "expected=%.17g\n",
@@ -129,7 +149,7 @@ int main(void) {
       for (int s = 0; s < 3; ++s) {
         expectedRicci += init_riemann_component(s, i, s, j);
       }
-      const double gotRicci = ricci[(int64_t)c2 * n + cidx];
+      const double gotRicci = ricciRhs[(int64_t)c2 * n + cidx];
       if (i == 0 && j < 3) {
         printf("[ll-smoke] BSSN minimal center dt(Ricci)[0,%d] got=%.17g "
                "expected=%.17g\n",
@@ -142,7 +162,7 @@ int main(void) {
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
       for (int k2 = 0; k2 < 3; ++k2) {
-        const double got = datilde[(int64_t)comp3(i, j, k2) * n + cidx];
+        const double got = datildeRhs[(int64_t)comp3(i, j, k2) * n + cidx];
         ok &= almost_equal(got, 0.0, 1e-12, 1e-12);
       }
     }
@@ -156,6 +176,10 @@ int main(void) {
   free(riemann);
   free(datilde);
   free(alpha);
+  free(kRhs);
+  free(atildeRhs);
+  free(ricciRhs);
+  free(datildeRhs);
 
   if (!ok) {
     fprintf(stderr, "BSSN minimal RHS mismatch\n");

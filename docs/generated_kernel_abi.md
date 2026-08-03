@@ -1,4 +1,4 @@
-# Tensorium Generated Kernel ABI (v1)
+# Tensorium Generated Kernel ABI (v2)
 
 This document freezes the ABI contract used by generated functions:
 
@@ -16,7 +16,7 @@ Source of truth in code: `include/tensorium_mlir/Target/MLIRGen/GeneratedKernelA
 ## Versioning
 
 - ABI version attribute: `tensorium.abi.version`
-- Current value: `1`
+- Current value: `2`
 - Memory layout attribute: `tensorium.abi.memory_layout = "soa_component_major"`
 - Memref ABI attribute: `tensorium.abi.memref_abi = "strided_memref_rank1_f64"`
 
@@ -33,6 +33,8 @@ Generated functions expose argument-order metadata:
 - `tensorium.abi.output_names`: written output field names
 - `tensorium.abi.write_arg_indices`: absolute argument indices (in function
   signature) written by the kernel
+- `tensorium.abi.halo_width`: number of grid points excluded on every side of
+  each axis by an RHS kernel
 
 ## C/C++ low-level memref contract
 
@@ -76,13 +78,21 @@ LLVM-level:
 ### `tensorium_rhs_grid_{scf,affine}`
 
 MLIR-level:
-- `(nx:index, ny:index, nz:index, dx:f64, dy:f64, dz:f64, params..., fields...) -> ()`
-- each field is `memref<?xf64>`.
+- `(nx:index, ny:index, nz:index, dx:f64, dy:f64, dz:f64, params..., inputs..., outputs...) -> ()`
+- every input and output is a dynamically strided rank-one `f64` memref,
+- `tensorium.abi.field_names` names the input memrefs,
+- `tensorium.abi.output_names` names the output memrefs,
+- `tensorium.abi.write_arg_indices` contains the absolute function argument
+  index of each output memref.
 
 LLVM-level:
 - prefix: `i64,i64,i64,double,double,double`,
 - then scalar params (`double`),
-- then one 5-argument memref descriptor per field buffer.
+- then one 5-argument memref descriptor per input field,
+- then one 5-argument memref descriptor per output field.
+
+This output suffix is the incompatible change from ABI v1. Host code must not
+pass only the input descriptors or expect input state to be overwritten.
 
 ## Memory layout contract (SoA, component-major)
 
@@ -94,13 +104,53 @@ where:
 - `component` is row-major over tensor indices,
 - `pointLinearIndex` is row-major over `(x,y,z)` grid index.
 
+The memref descriptor then maps a logical flattened index to storage as:
+
+- `address = aligned + offset + flat * stride`
+
+ABI v2 generated grid functions honor both `offset` and `stride`. The
+`allocated` pointer is retained for the standard memref descriptor contract;
+loads and stores use `aligned`.
+
 Examples:
 - covariant/convariant 2-tensor uses 9 components.
 - rank-3 tensor uses 27 components.
 
 ## RHS read/write semantics
 
-`tensorium_rhs_grid_*` snapshots all field buffers before stencil reads, then
-writes `dt_assign` targets to original field buffers. This guarantees read
-consistency within one RHS sweep and avoids write-after-read hazards.
+`tensorium_rhs_grid_*` treats every field listed by `field_names` as read-only
+state and writes each `dt_assign` result to the separate output memref with the
+same name in `output_names`. Inputs and outputs must not alias. The generated
+kernel performs no heap allocation and does not make whole-grid snapshots.
 
+For a field of tensor rank `r` in three spatial dimensions, the caller must
+provide at least `3^r * nx * ny * nz` logical elements. Scalar fields need
+`nx * ny * nz`. ABI v2 checks every descriptor's logical `size` and the minimum
+grid extent before entering the loop nest. If any descriptor is too short or
+an axis cannot contain both halos, the void kernel returns without writing any
+output. The caller remains responsible for ensuring that the pointer and
+physical allocation really cover the declared offset, size, and stride.
+
+The kernel writes the half-open region
+`[halo,nx-halo) x [halo,ny-halo) x [halo,nz-halo)`. The uniform halo is exposed
+as `tensorium.abi.halo_width` and is computed from explicit reference offsets
+and nested centered derivatives in the RHS expression graph. Second-order
+centered derivatives use radius one and fourth-order centered derivatives use
+radius two per nesting level. Output values in the excluded boundary region
+are left untouched. Algebraic RHS kernels have a zero halo and therefore write
+every grid point, including boundaries.
+
+## Constraint-backed initial data
+
+A module whose `initial_data` block is a constraint problem does not emit
+`tensorium_init`, `tensorium_init_point`, or `tensorium_init_grid_*`. Those
+symbols are reserved for analytic initial-data expressions. The host must run
+the constraint solver, convert the result to evolution buffers, and then call
+the generated RHS kernel.
+
+## Native ABI regression test
+
+`tools/dev/test_rhs_abi_v2_ll.sh` assembles and verifies generated LLVM IR,
+then compiles and runs it at both `-O0` and `-O2`. Its C runner checks nonzero
+offsets, non-unit strides, separate outputs, unchanged input state, untouched
+padding, undersized-descriptor rejection, and zero-halo boundary writes.

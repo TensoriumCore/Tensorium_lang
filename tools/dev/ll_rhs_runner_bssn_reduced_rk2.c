@@ -12,7 +12,10 @@ extern void tensorium_rhs_grid_affine(
     int64_t gamma_stride, double *atilde_alloc, double *atilde_aligned,
     int64_t atilde_offset, int64_t atilde_size, int64_t atilde_stride,
     double *alpha_alloc, double *alpha_aligned, int64_t alpha_offset,
-    int64_t alpha_size, int64_t alpha_stride);
+    int64_t alpha_size, int64_t alpha_stride, double *chi_rhs_alloc,
+    double *chi_rhs_aligned, int64_t chi_rhs_offset, int64_t chi_rhs_size,
+    int64_t chi_rhs_stride, double *gamma_rhs_alloc, double *gamma_rhs_aligned,
+    int64_t gamma_rhs_offset, int64_t gamma_rhs_size, int64_t gamma_rhs_stride);
 
 static int almost_equal(double got, double expected, double rel_tol,
                         double abs_tol) {
@@ -30,19 +33,14 @@ static int64_t flat_index(int64_t i, int64_t j, int64_t k, int64_t ny,
 static void eval_rhs(int64_t nx, int64_t ny, int64_t nz, double dr,
                      double dtheta, double dphi, const double *chi_state,
                      const double *gamma_state, const double *atilde,
-                     const double *alpha, double *chi_rhs, double *gamma_rhs,
-                     double *chi_work, double *gamma_work) {
+                     const double *alpha, double *chi_rhs, double *gamma_rhs) {
   const int64_t n = nx * ny * nz;
-  memcpy(chi_work, chi_state, (size_t)n * sizeof(double));
-  memcpy(gamma_work, gamma_state, (size_t)(9 * n) * sizeof(double));
-
-  tensorium_rhs_grid_affine(nx, ny, nz, dr, dtheta, dphi, chi_work, chi_work, 0,
-                            n, 1, gamma_work, gamma_work, 0, 9 * n, 1,
-                            (double *)atilde, (double *)atilde, 0, 9 * n, 1,
-                            (double *)alpha, (double *)alpha, 0, n, 1);
-
-  memcpy(chi_rhs, chi_work, (size_t)n * sizeof(double));
-  memcpy(gamma_rhs, gamma_work, (size_t)(9 * n) * sizeof(double));
+  tensorium_rhs_grid_affine(
+      nx, ny, nz, dr, dtheta, dphi, (double *)chi_state, (double *)chi_state, 0,
+      n, 1, (double *)gamma_state, (double *)gamma_state, 0, 9 * n, 1,
+      (double *)atilde, (double *)atilde, 0, 9 * n, 1, (double *)alpha,
+      (double *)alpha, 0, n, 1, chi_rhs, chi_rhs, 0, n, 1, gamma_rhs, gamma_rhs,
+      0, 9 * n, 1);
 }
 
 int main(void) {
@@ -75,11 +73,8 @@ int main(void) {
   double *k2_gamma = (double *)calloc((size_t)(9 * n), sizeof(double));
   double *mid_chi = (double *)calloc((size_t)n, sizeof(double));
   double *mid_gamma = (double *)calloc((size_t)(9 * n), sizeof(double));
-  double *chi_work = (double *)calloc((size_t)n, sizeof(double));
-  double *gamma_work = (double *)calloc((size_t)(9 * n), sizeof(double));
-
   if (!chi || !gamma || !atilde || !alpha || !k1_chi || !k1_gamma || !k2_chi ||
-      !k2_gamma || !mid_chi || !mid_gamma || !chi_work || !gamma_work) {
+      !k2_gamma || !mid_chi || !mid_gamma) {
     fprintf(stderr, "allocation failure\n");
     free(chi);
     free(gamma);
@@ -91,8 +86,6 @@ int main(void) {
     free(k2_gamma);
     free(mid_chi);
     free(mid_gamma);
-    free(chi_work);
-    free(gamma_work);
     return 2;
   }
 
@@ -107,7 +100,7 @@ int main(void) {
 
   for (int step = 0; step < steps; ++step) {
     eval_rhs(nx, ny, nz, dr, dtheta, dphi, chi, gamma, atilde, alpha, k1_chi,
-             k1_gamma, chi_work, gamma_work);
+             k1_gamma);
 
     for (int64_t p = 0; p < n; ++p) {
       mid_chi[p] = chi[p] + 0.5 * dt * k1_chi[p];
@@ -120,7 +113,7 @@ int main(void) {
     }
 
     eval_rhs(nx, ny, nz, dr, dtheta, dphi, mid_chi, mid_gamma, atilde, alpha,
-             k2_chi, k2_gamma, chi_work, gamma_work);
+             k2_chi, k2_gamma);
 
     for (int64_t p = 0; p < n; ++p) {
       chi[p] += dt * k2_chi[p];
@@ -138,8 +131,9 @@ int main(void) {
   const double expectedChi = chi0 * pow(factor, (double)steps);
   const double gotChi = chi[cidx];
 
-  printf("[ll-smoke] BSSN reduced RK2 center chi(%d) got=%.17g expected=%.17g\n",
-         steps, gotChi, expectedChi);
+  printf(
+      "[ll-smoke] BSSN reduced RK2 center chi(%d) got=%.17g expected=%.17g\n",
+      steps, gotChi, expectedChi);
 
   int ok = almost_equal(gotChi, expectedChi, 1e-12, 1e-12);
 
@@ -166,8 +160,6 @@ int main(void) {
   free(k2_gamma);
   free(mid_chi);
   free(mid_gamma);
-  free(chi_work);
-  free(gamma_work);
 
   if (!ok) {
     fprintf(stderr, "BSSN reduced RK2 mismatch\n");

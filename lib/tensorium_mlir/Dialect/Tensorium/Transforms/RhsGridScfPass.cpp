@@ -18,6 +18,7 @@
 #include <cmath>
 #include <functional>
 #include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/StringSet.h>
 #include <optional>
@@ -127,6 +128,104 @@ static LogicalResult collectRhsWriteArgIndices(func::FuncOp rhs,
   return success();
 }
 
+static unsigned computeValueHalo(Value value, unsigned derivativeRadius,
+                                 llvm::DenseMap<Value, unsigned> &memo) {
+  if (!value || isa<BlockArgument>(value))
+    return 0;
+  if (auto it = memo.find(value); it != memo.end())
+    return it->second;
+
+  Operation *op = value.getDefiningOp();
+  if (!op)
+    return 0;
+
+  unsigned halo = 0;
+  for (Value operand : op->getOperands())
+    halo = std::max(halo, computeValueHalo(operand, derivativeRadius, memo));
+
+  if (auto ref = dyn_cast<RefOp>(op)) {
+    if (auto offsets = ref.getOffsetsAttr()) {
+      for (Attribute attr : offsets) {
+        if (auto offset = dyn_cast<IntegerAttr>(attr)) {
+          const int64_t value = offset.getInt();
+          const int64_t magnitude = value < 0 ? -value : value;
+          halo = std::max(halo, static_cast<unsigned>(magnitude));
+        }
+      }
+    }
+  } else if (isa<DerivOp>(op)) {
+    halo += derivativeRadius;
+  }
+
+  memo[value] = halo;
+  return halo;
+}
+
+static unsigned computeRhsHalo(func::FuncOp rhs, int derivativeOrder) {
+  llvm::DenseMap<Value, unsigned> memo;
+  const unsigned derivativeRadius = derivativeOrder == 4 ? 2u : 1u;
+  unsigned halo = 0;
+  rhs.walk([&](DtAssignOp dt) {
+    halo =
+        std::max(halo, computeValueHalo(dt.getRhs(), derivativeRadius, memo));
+  });
+  return halo;
+}
+
+struct RhsStencilPoint {
+  int offset;
+  double weight;
+};
+
+static std::vector<RhsStencilPoint> getRhsStencil(int derivativeOrder) {
+  if (derivativeOrder == 4) {
+    return {
+        {-2, 1.0 / 12.0}, {-1, -2.0 / 3.0}, {1, 2.0 / 3.0}, {2, -1.0 / 12.0}};
+  }
+  return {{-1, -0.5}, {1, 0.5}};
+}
+
+static Value buildRhsBufferGuard(OpBuilder &b, Location loc, func::FuncOp rhs,
+                                 Value nx, Value ny, Value nz,
+                                 unsigned haloWidth,
+                                 ArrayRef<Value> inputFieldMemrefs,
+                                 ArrayRef<Value> outputFieldMemrefs,
+                                 ArrayRef<int64_t> writeFieldArgIndices) {
+  Value minExtent = b.create<arith::ConstantIndexOp>(
+      loc, static_cast<int64_t>(2 * haloWidth));
+  Value valid = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, nx,
+                                        minExtent);
+  for (Value extent : {ny, nz}) {
+    Value extentValid = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sge, extent, minExtent);
+    valid = b.create<arith::AndIOp>(loc, valid, extentValid);
+  }
+
+  Value nPoints = b.create<arith::MulIOp>(loc, nx, ny);
+  nPoints = b.create<arith::MulIOp>(loc, nPoints, nz);
+  Value zero = b.create<arith::ConstantIndexOp>(loc, 0);
+  auto addMemrefCheck = [&](Value memref, FieldType fieldType) {
+    Value components = b.create<arith::ConstantIndexOp>(
+        loc, static_cast<int64_t>(powU(3, fieldType.getRank())));
+    Value required = b.create<arith::MulIOp>(loc, components, nPoints);
+    Value size = b.create<memref::DimOp>(loc, memref, zero);
+    Value enough = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sge, size, required);
+    valid = b.create<arith::AndIOp>(loc, valid, enough);
+  };
+
+  for (unsigned i = 0; i < rhs.getNumArguments(); ++i) {
+    addMemrefCheck(inputFieldMemrefs[i],
+                   cast<FieldType>(rhs.getArgument(i).getType()));
+  }
+  for (int64_t fieldIdx : writeFieldArgIndices) {
+    const unsigned index = static_cast<unsigned>(fieldIdx);
+    addMemrefCheck(outputFieldMemrefs[index],
+                   cast<FieldType>(rhs.getArgument(index).getType()));
+  }
+  return valid;
+}
+
 static bool parseEinsumOutIndices(EinsumOp op, std::vector<std::string> &out) {
   out.clear();
   if (auto outAttr = op->getAttrOfType<ArrayAttr>("tin.idx.out")) {
@@ -193,13 +292,14 @@ public:
                 Value ny, Value nz, Value dx, Value dy, Value dz, Value ix,
                 Value iy, Value iz, llvm::ArrayRef<Value> inputFieldMemrefs,
                 llvm::ArrayRef<Value> outputFieldMemrefs,
-                const llvm::StringMap<Value> &paramScalarsIn)
+                const llvm::StringMap<Value> &paramScalarsIn,
+                int derivativeOrder)
       : b(b), loc(loc), srcRhs(srcRhs), nx(nx), ny(ny), nz(nz), dx(dx), dy(dy),
         dz(dz), ix(ix), iy(iy), iz(iz),
         inputFieldMemrefs(inputFieldMemrefs.begin(), inputFieldMemrefs.end()),
         outputFieldMemrefs(outputFieldMemrefs.begin(),
                            outputFieldMemrefs.end()),
-        paramScalars(paramScalarsIn) {
+        paramScalars(paramScalarsIn), derivativeOrder(derivativeOrder) {
     nPoints = b.create<arith::MulIOp>(loc, nx, ny);
     nPoints = b.create<arith::MulIOp>(loc, nPoints, nz);
   }
@@ -211,7 +311,8 @@ public:
       return failure();
     }
 
-    if (fieldArg.getArgNumber() >= outputFieldMemrefs.size()) {
+    if (fieldArg.getArgNumber() >= outputFieldMemrefs.size() ||
+        !outputFieldMemrefs[fieldArg.getArgNumber()]) {
       dt.emitError("rhs-grid-scf: dt_assign field argument index out of range");
       return failure();
     }
@@ -430,41 +531,47 @@ private:
       out.indices.push_back(derivIdxAttr.getValue().str());
       out.comps.assign(in0->comps.size() * spatialDim, Value());
 
-      Value two = b.create<arith::ConstantFloatOp>(
-          loc, APFloat(2.0), llvm::cast<FloatType>(b.getF64Type()));
+      const auto stencil = getRhsStencil(derivativeOrder);
       for (unsigned axis = 0; axis < spatialDim; ++axis) {
-        Shift3 plus = shift;
-        Shift3 minus = shift;
-        if (axis == 0) {
-          ++plus.x;
-          --minus.x;
-        } else if (axis == 1) {
-          ++plus.y;
-          --minus.y;
-        } else {
-          ++plus.z;
-          --minus.z;
-        }
-
-        auto plusVal = evalValue(deriv.getIn(), plus);
-        auto minusVal = evalValue(deriv.getIn(), minus);
-        if (failed(plusVal) || failed(minusVal))
-          return failure();
-        if (plusVal->comps.size() != minusVal->comps.size() ||
-            plusVal->comps.size() != in0->comps.size()) {
-          deriv.emitError(
-              "rhs-grid-scf: inconsistent deriv operand component size");
-          return failure();
-        }
-
         Value spacing = axis == 0 ? dx : (axis == 1 ? dy : dz);
-        Value denom = b.create<arith::MulFOp>(loc, two, spacing);
+        SmallVector<TensorScalars, 4> shiftedValues;
+        SmallVector<Value, 4> weights;
+        shiftedValues.reserve(stencil.size());
+        weights.reserve(stencil.size());
+        for (const RhsStencilPoint &point : stencil) {
+          Shift3 shifted = shift;
+          if (axis == 0)
+            shifted.x += point.offset;
+          else if (axis == 1)
+            shifted.y += point.offset;
+          else
+            shifted.z += point.offset;
+
+          auto shiftedValue = evalValue(deriv.getIn(), shifted);
+          if (failed(shiftedValue) ||
+              shiftedValue->comps.size() != in0->comps.size()) {
+            deriv.emitError(
+                "rhs-grid-scf: inconsistent deriv operand component size");
+            return failure();
+          }
+          shiftedValues.push_back(std::move(*shiftedValue));
+          weights.push_back(b.create<arith::ConstantFloatOp>(
+              loc, APFloat(point.weight),
+              llvm::cast<FloatType>(b.getF64Type())));
+        }
 
         for (std::size_t c = 0; c < in0->comps.size(); ++c) {
-          Value diff = b.create<arith::SubFOp>(loc, plusVal->comps[c],
-                                               minusVal->comps[c]);
+          Value weightedSum;
+          for (std::size_t point = 0; point < shiftedValues.size(); ++point) {
+            Value term = b.create<arith::MulFOp>(
+                loc, shiftedValues[point].comps[c], weights[point]);
+            weightedSum = weightedSum
+                              ? b.create<arith::AddFOp>(loc, weightedSum, term)
+                                    .getResult()
+                              : term;
+          }
           out.comps[c * spatialDim + axis] =
-              b.create<arith::DivFOp>(loc, diff, denom);
+              b.create<arith::DivFOp>(loc, weightedSum, spacing);
         }
       }
       return out;
@@ -745,12 +852,17 @@ private:
   llvm::StringMap<Value> paramScalars;
   Value nPoints;
   SmallVector<PendingStore> pendingStores;
+  int derivativeOrder;
   static constexpr unsigned spatialDim = 3;
 };
 
 struct RhsGridScfPass
     : public PassWrapper<RhsGridScfPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RhsGridScfPass)
+
+  RhsGridScfPass() = default;
+  explicit RhsGridScfPass(int derivativeOrder)
+      : derivativeOrder(derivativeOrder) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<TensoriumDialect, func::FuncDialect, arith::ArithDialect,
@@ -772,7 +884,10 @@ struct RhsGridScfPass
     Location loc = rhs.getLoc();
     Type idxTy = b.getIndexType();
     Type f64 = b.getF64Type();
-    Type dynMemF64 = MemRefType::get({ShapedType::kDynamic}, f64);
+    auto stridedLayout = StridedLayoutAttr::get(
+        &getContext(), ShapedType::kDynamic, {ShapedType::kDynamic});
+    Type dynMemF64 =
+        MemRefType::get({ShapedType::kDynamic}, f64, stridedLayout);
     std::vector<std::string> paramNames = collectRhsParamNames(rhs);
     std::vector<std::string> fieldNames = parseStringArrayAttr(
         rhs->getAttrOfType<ArrayAttr>(tensorium_mlir::abi::kAttrFieldNames));
@@ -787,6 +902,7 @@ struct RhsGridScfPass
       signalPassFailure();
       return;
     }
+    const unsigned haloWidth = computeRhsHalo(rhs, derivativeOrder);
 
     SmallVector<Type> args;
     args.push_back(idxTy); // nx
@@ -801,6 +917,15 @@ struct RhsGridScfPass
       if (!isa<FieldType>(argTy)) {
         rhs.emitError(
             "rhs-grid-scf: expected tensorium.field arg in tensorium_rhs");
+        signalPassFailure();
+        return;
+      }
+      args.push_back(dynMemF64);
+    }
+    for (int64_t fieldIdx : writeFieldArgIndices) {
+      if (fieldIdx < 0 ||
+          static_cast<unsigned>(fieldIdx) >= rhs.getNumArguments()) {
+        rhs.emitError("rhs-grid-scf: output field argument index out of range");
         signalPassFailure();
         return;
       }
@@ -826,6 +951,8 @@ struct RhsGridScfPass
                    makeStringArrayAttr(b, paramNames));
     outFn->setAttr(tensorium_mlir::abi::kAttrFieldNames,
                    makeStringArrayAttr(b, fieldNames));
+    outFn->setAttr(tensorium_mlir::abi::kAttrHaloWidth,
+                   b.getI64IntegerAttr(haloWidth));
     Block *entry = outFn.addEntryBlock();
     b.setInsertionPointToEnd(entry);
 
@@ -838,12 +965,13 @@ struct RhsGridScfPass
     const unsigned paramBase = 6;
     const unsigned fieldBase =
         paramBase + static_cast<unsigned>(paramNames.size());
+    const unsigned outputBase = fieldBase + rhs.getNumArguments();
     std::vector<int64_t> writeArgIndices;
     writeArgIndices.reserve(writeFieldArgIndices.size());
     std::vector<std::string> writeFieldNames;
     writeFieldNames.reserve(writeFieldArgIndices.size());
-    for (int64_t fieldIdx : writeFieldArgIndices) {
-      writeArgIndices.push_back(static_cast<int64_t>(fieldBase) + fieldIdx);
+    for (auto [outputIdx, fieldIdx] : llvm::enumerate(writeFieldArgIndices)) {
+      writeArgIndices.push_back(static_cast<int64_t>(outputBase + outputIdx));
       if (fieldIdx >= 0 &&
           static_cast<std::size_t>(fieldIdx) < fieldNames.size())
         writeFieldNames.push_back(
@@ -863,28 +991,30 @@ struct RhsGridScfPass
     for (unsigned i = 0; i < rhs.getNumArguments(); ++i)
       fieldMemrefs.push_back(entry->getArgument(fieldBase + i));
 
-    SmallVector<Value> snapshotMemrefs;
-    snapshotMemrefs.reserve(fieldMemrefs.size());
-    Value zeroIdx = b.create<arith::ConstantIndexOp>(loc, 0);
-    for (Value mem : fieldMemrefs) {
-      Value size = b.create<memref::DimOp>(loc, mem, zeroIdx);
-      auto snap = b.create<memref::AllocOp>(
-          loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
-      b.create<memref::CopyOp>(loc, mem, snap);
-      snapshotMemrefs.push_back(snap);
+    SmallVector<Value> outputFieldMemrefs(rhs.getNumArguments());
+    for (auto [outputIdx, fieldIdx] : llvm::enumerate(writeFieldArgIndices)) {
+      outputFieldMemrefs[static_cast<unsigned>(fieldIdx)] =
+          entry->getArgument(outputBase + outputIdx);
     }
 
     Value c1 = b.create<arith::ConstantIndexOp>(loc, 1);
-    Value c2 = b.create<arith::ConstantIndexOp>(loc, 2);
-    Value ubX = b.create<arith::SubIOp>(loc, nx, c2);
-    Value ubY = b.create<arith::SubIOp>(loc, ny, c2);
-    Value ubZ = b.create<arith::SubIOp>(loc, nz, c2);
+    Value cHalo =
+        b.create<arith::ConstantIndexOp>(loc, static_cast<int64_t>(haloWidth));
+    Value buffersValid = buildRhsBufferGuard(
+        b, loc, rhs, nx, ny, nz, haloWidth, fieldMemrefs,
+        outputFieldMemrefs, writeFieldArgIndices);
+    Value rawUbX = b.create<arith::SubIOp>(loc, nx, cHalo);
+    Value rawUbY = b.create<arith::SubIOp>(loc, ny, cHalo);
+    Value rawUbZ = b.create<arith::SubIOp>(loc, nz, cHalo);
+    Value ubX = b.create<arith::SelectOp>(loc, buffersValid, rawUbX, cHalo);
+    Value ubY = b.create<arith::SelectOp>(loc, buffersValid, rawUbY, cHalo);
+    Value ubZ = b.create<arith::SelectOp>(loc, buffersValid, rawUbZ, cHalo);
 
-    auto loopX = b.create<scf::ForOp>(loc, c2, ubX, c1);
+    auto loopX = b.create<scf::ForOp>(loc, cHalo, ubX, c1);
     b.setInsertionPointToStart(loopX.getBody());
-    auto loopY = b.create<scf::ForOp>(loc, c2, ubY, c1);
+    auto loopY = b.create<scf::ForOp>(loc, cHalo, ubY, c1);
     b.setInsertionPointToStart(loopY.getBody());
-    auto loopZ = b.create<scf::ForOp>(loc, c2, ubZ, c1);
+    auto loopZ = b.create<scf::ForOp>(loc, cHalo, ubZ, c1);
 
     {
       OpBuilder ib = OpBuilder::atBlockBegin(loopZ.getBody());
@@ -893,7 +1023,8 @@ struct RhsGridScfPass
       Value iz = loopZ.getInductionVar();
 
       RhsScalarizer scalarizer(ib, loc, rhs, nx, ny, nz, dx, dy, dz, ix, iy, iz,
-                               snapshotMemrefs, fieldMemrefs, paramScalars);
+                               fieldMemrefs, outputFieldMemrefs, paramScalars,
+                               derivativeOrder);
 
       for (Operation &op : rhs.getBody().front().without_terminator()) {
         if (auto dt = dyn_cast<DtAssignOp>(&op)) {
@@ -907,17 +1038,21 @@ struct RhsGridScfPass
     }
 
     b.setInsertionPointAfter(loopX);
-    for (Value snap : snapshotMemrefs)
-      b.create<memref::DeallocOp>(loc, snap);
     b.create<func::ReturnOp>(loc);
 
     module.push_back(outFn);
   }
+
+  int derivativeOrder = 2;
 };
 
 struct RhsGridAffinePass
     : public PassWrapper<RhsGridAffinePass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RhsGridAffinePass)
+
+  RhsGridAffinePass() = default;
+  explicit RhsGridAffinePass(int derivativeOrder)
+      : derivativeOrder(derivativeOrder) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<TensoriumDialect, affine::AffineDialect, func::FuncDialect,
@@ -939,7 +1074,10 @@ struct RhsGridAffinePass
     Location loc = rhs.getLoc();
     Type idxTy = b.getIndexType();
     Type f64 = b.getF64Type();
-    Type dynMemF64 = MemRefType::get({ShapedType::kDynamic}, f64);
+    auto stridedLayout = StridedLayoutAttr::get(
+        &getContext(), ShapedType::kDynamic, {ShapedType::kDynamic});
+    Type dynMemF64 =
+        MemRefType::get({ShapedType::kDynamic}, f64, stridedLayout);
     std::vector<std::string> paramNames = collectRhsParamNames(rhs);
     std::vector<std::string> fieldNames = parseStringArrayAttr(
         rhs->getAttrOfType<ArrayAttr>(tensorium_mlir::abi::kAttrFieldNames));
@@ -954,6 +1092,7 @@ struct RhsGridAffinePass
       signalPassFailure();
       return;
     }
+    const unsigned haloWidth = computeRhsHalo(rhs, derivativeOrder);
 
     SmallVector<Type> args;
     args.push_back(idxTy); // nx
@@ -968,6 +1107,16 @@ struct RhsGridAffinePass
       if (!isa<FieldType>(argTy)) {
         rhs.emitError(
             "rhs-grid-affine: expected tensorium.field arg in tensorium_rhs");
+        signalPassFailure();
+        return;
+      }
+      args.push_back(dynMemF64);
+    }
+    for (int64_t fieldIdx : writeFieldArgIndices) {
+      if (fieldIdx < 0 ||
+          static_cast<unsigned>(fieldIdx) >= rhs.getNumArguments()) {
+        rhs.emitError(
+            "rhs-grid-affine: output field argument index out of range");
         signalPassFailure();
         return;
       }
@@ -993,6 +1142,8 @@ struct RhsGridAffinePass
                    makeStringArrayAttr(b, paramNames));
     outFn->setAttr(tensorium_mlir::abi::kAttrFieldNames,
                    makeStringArrayAttr(b, fieldNames));
+    outFn->setAttr(tensorium_mlir::abi::kAttrHaloWidth,
+                   b.getI64IntegerAttr(haloWidth));
     Block *entry = outFn.addEntryBlock();
     b.setInsertionPointToEnd(entry);
 
@@ -1005,12 +1156,13 @@ struct RhsGridAffinePass
     const unsigned paramBase = 6;
     const unsigned fieldBase =
         paramBase + static_cast<unsigned>(paramNames.size());
+    const unsigned outputBase = fieldBase + rhs.getNumArguments();
     std::vector<int64_t> writeArgIndices;
     writeArgIndices.reserve(writeFieldArgIndices.size());
     std::vector<std::string> writeFieldNames;
     writeFieldNames.reserve(writeFieldArgIndices.size());
-    for (int64_t fieldIdx : writeFieldArgIndices) {
-      writeArgIndices.push_back(static_cast<int64_t>(fieldBase) + fieldIdx);
+    for (auto [outputIdx, fieldIdx] : llvm::enumerate(writeFieldArgIndices)) {
+      writeArgIndices.push_back(static_cast<int64_t>(outputBase + outputIdx));
       if (fieldIdx >= 0 &&
           static_cast<std::size_t>(fieldIdx) < fieldNames.size())
         writeFieldNames.push_back(
@@ -1030,23 +1182,26 @@ struct RhsGridAffinePass
     for (unsigned i = 0; i < rhs.getNumArguments(); ++i)
       fieldMemrefs.push_back(entry->getArgument(fieldBase + i));
 
-    SmallVector<Value> snapshotMemrefs;
-    snapshotMemrefs.reserve(fieldMemrefs.size());
-    Value zeroIdx = b.create<arith::ConstantIndexOp>(loc, 0);
-    for (Value mem : fieldMemrefs) {
-      Value size = b.create<memref::DimOp>(loc, mem, zeroIdx);
-      auto snap = b.create<memref::AllocOp>(
-          loc, MemRefType::get({ShapedType::kDynamic}, f64), ValueRange{size});
-      b.create<memref::CopyOp>(loc, mem, snap);
-      snapshotMemrefs.push_back(snap);
+    SmallVector<Value> outputFieldMemrefs(rhs.getNumArguments());
+    for (auto [outputIdx, fieldIdx] : llvm::enumerate(writeFieldArgIndices)) {
+      outputFieldMemrefs[static_cast<unsigned>(fieldIdx)] =
+          entry->getArgument(outputBase + outputIdx);
     }
 
-    Value c2 = b.create<arith::ConstantIndexOp>(loc, 2);
-    Value ubX = b.create<arith::SubIOp>(loc, nx, c2);
-    Value ubY = b.create<arith::SubIOp>(loc, ny, c2);
-    Value ubZ = b.create<arith::SubIOp>(loc, nz, c2);
+    Value cHalo =
+        b.create<arith::ConstantIndexOp>(loc, static_cast<int64_t>(haloWidth));
+    Value buffersValid = buildRhsBufferGuard(
+        b, loc, rhs, nx, ny, nz, haloWidth, fieldMemrefs,
+        outputFieldMemrefs, writeFieldArgIndices);
+    Value rawUbX = b.create<arith::SubIOp>(loc, nx, cHalo);
+    Value rawUbY = b.create<arith::SubIOp>(loc, ny, cHalo);
+    Value rawUbZ = b.create<arith::SubIOp>(loc, nz, cHalo);
+    Value ubX = b.create<arith::SelectOp>(loc, buffersValid, rawUbX, cHalo);
+    Value ubY = b.create<arith::SelectOp>(loc, buffersValid, rawUbY, cHalo);
+    Value ubZ = b.create<arith::SelectOp>(loc, buffersValid, rawUbZ, cHalo);
 
-    AffineMap lbMap = AffineMap::getConstantMap(2, &getContext());
+    AffineMap lbMap = AffineMap::getConstantMap(static_cast<int64_t>(haloWidth),
+                                                &getContext());
     AffineExpr s0 = b.getAffineSymbolExpr(0);
     AffineMap ubMap = AffineMap::get(0, 1, s0);
 
@@ -1066,7 +1221,8 @@ struct RhsGridAffinePass
       Value iz = loopZ.getInductionVar();
 
       RhsScalarizer scalarizer(ib, loc, rhs, nx, ny, nz, dx, dy, dz, ix, iy, iz,
-                               snapshotMemrefs, fieldMemrefs, paramScalars);
+                               fieldMemrefs, outputFieldMemrefs, paramScalars,
+                               derivativeOrder);
 
       for (Operation &op : rhs.getBody().front().without_terminator()) {
         if (auto dt = dyn_cast<DtAssignOp>(&op)) {
@@ -1080,22 +1236,22 @@ struct RhsGridAffinePass
     }
 
     b.setInsertionPointAfter(loopX);
-    for (Value snap : snapshotMemrefs)
-      b.create<memref::DeallocOp>(loc, snap);
     b.create<func::ReturnOp>(loc);
 
     module.push_back(outFn);
   }
+
+  int derivativeOrder = 2;
 };
 
 } // namespace
 
-std::unique_ptr<::mlir::Pass> createTensoriumRhsGridScfPass() {
-  return std::make_unique<RhsGridScfPass>();
+std::unique_ptr<::mlir::Pass> createTensoriumRhsGridScfPass(int order) {
+  return std::make_unique<RhsGridScfPass>(order);
 }
 
-std::unique_ptr<::mlir::Pass> createTensoriumRhsGridAffinePass() {
-  return std::make_unique<RhsGridAffinePass>();
+std::unique_ptr<::mlir::Pass> createTensoriumRhsGridAffinePass(int order) {
+  return std::make_unique<RhsGridAffinePass>(order);
 }
 
 } // namespace tensorium::mlir

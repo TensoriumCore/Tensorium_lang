@@ -8,12 +8,11 @@ extern void tensorium_init_grid_affine(
     int64_t x_size, int64_t x_stride, double *y_alloc, double *y_aligned,
     int64_t y_offset, int64_t y_size, int64_t y_stride, double *z_alloc,
     double *z_aligned, int64_t z_offset, int64_t z_size, int64_t z_stride,
-    double *alpha_alloc, double *alpha_aligned,
-    int64_t alpha_offset, int64_t alpha_size, int64_t alpha_stride,
-    double *gamma_alloc, double *gamma_aligned, int64_t gamma_offset,
-    int64_t gamma_size, int64_t gamma_stride, double *gammaU_alloc,
-    double *gammaU_aligned, int64_t gammaU_offset, int64_t gammaU_size,
-    int64_t gammaU_stride);
+    double *alpha_alloc, double *alpha_aligned, int64_t alpha_offset,
+    int64_t alpha_size, int64_t alpha_stride, double *gamma_alloc,
+    double *gamma_aligned, int64_t gamma_offset, int64_t gamma_size,
+    int64_t gamma_stride, double *gammaU_alloc, double *gammaU_aligned,
+    int64_t gammaU_offset, int64_t gammaU_size, int64_t gammaU_stride);
 
 extern void tensorium_rhs_grid_affine(
     int64_t nx, int64_t ny, int64_t nz, double dr, double dtheta, double dphi,
@@ -23,7 +22,10 @@ extern void tensorium_rhs_grid_affine(
     int64_t gammaU_stride, double *chr_alloc, double *chr_aligned,
     int64_t chr_offset, int64_t chr_size, int64_t chr_stride,
     double *ricci_alloc, double *ricci_aligned, int64_t ricci_offset,
-    int64_t ricci_size, int64_t ricci_stride);
+    int64_t ricci_size, int64_t ricci_stride, double *chr_rhs_alloc,
+    double *chr_rhs_aligned, int64_t chr_rhs_offset, int64_t chr_rhs_size,
+    int64_t chr_rhs_stride, double *ricci_rhs_alloc, double *ricci_rhs_aligned,
+    int64_t ricci_rhs_offset, int64_t ricci_rhs_size, int64_t ricci_rhs_stride);
 
 static int almost_equal(double got, double expected, double rel_tol,
                         double abs_tol) {
@@ -84,9 +86,12 @@ int main(void) {
   double *alpha = (double *)malloc((size_t)n * sizeof(double));
   double *gamma = (double *)malloc((size_t)(9 * n) * sizeof(double));
   double *gammaU = (double *)malloc((size_t)(9 * n) * sizeof(double));
-  double *chr = (double *)malloc((size_t)(27 * n) * sizeof(double));
-  double *ricci = (double *)malloc((size_t)(9 * n) * sizeof(double));
-  if (!x || !y || !z || !alpha || !gamma || !gammaU || !chr || !ricci) {
+  double *chr = (double *)calloc((size_t)(27 * n), sizeof(double));
+  double *ricci = (double *)calloc((size_t)(9 * n), sizeof(double));
+  double *chrRhs = (double *)malloc((size_t)(27 * n) * sizeof(double));
+  double *ricciRhs = (double *)malloc((size_t)(9 * n) * sizeof(double));
+  if (!x || !y || !z || !alpha || !gamma || !gammaU || !chr || !ricci ||
+      !chrRhs || !ricciRhs) {
     fprintf(stderr, "allocation failure\n");
     return 2;
   }
@@ -106,9 +111,10 @@ int main(void) {
                              0, n, 1, alpha, alpha, 0, n, 1, gamma, gamma, 0,
                              9 * n, 1, gammaU, gammaU, 0, 9 * n, 1);
 
-  tensorium_rhs_grid_affine(nx, ny, nz, dr, dtheta, dphi, gamma, gamma, 0,
-                            9 * n, 1, gammaU, gammaU, 0, 9 * n, 1, chr, chr, 0,
-                            27 * n, 1, ricci, ricci, 0, 9 * n, 1);
+  tensorium_rhs_grid_affine(
+      nx, ny, nz, dr, dtheta, dphi, gamma, gamma, 0, 9 * n, 1, gammaU, gammaU,
+      0, 9 * n, 1, chr, chr, 0, 27 * n, 1, ricci, ricci, 0, 9 * n, 1, chrRhs,
+      chrRhs, 0, 27 * n, 1, ricciRhs, ricciRhs, 0, 9 * n, 1);
 
   double g_cov[4][4] = {{0.0}};
   double gamma_cov[3][3] = {{0.0}};
@@ -123,20 +129,21 @@ int main(void) {
     for (int j = 0; j < 3; ++j) {
       gamma_cov[i][j] = gamma[(int64_t)comp2(i, j) * n + cidx];
       gamma_con[i][j] = gammaU[(int64_t)comp2(i, j) * n + cidx];
-      ricci_cov[i][j] = ricci[(int64_t)comp2(i, j) * n + cidx];
+      ricci_cov[i][j] = ricciRhs[(int64_t)comp2(i, j) * n + cidx];
       g_cov[i + 1][j + 1] = gamma_cov[i][j];
     }
   }
   for (int j = 0; j < 3; ++j) {
     for (int k = 0; k < 3; ++k) {
-      chr_r[j][k] = chr[(int64_t)comp3(0, j, k) * n + cidx];
-      chr_th[j][k] = chr[(int64_t)comp3(1, j, k) * n + cidx];
-      chr_ph[j][k] = chr[(int64_t)comp3(2, j, k) * n + cidx];
+      chr_r[j][k] = chrRhs[(int64_t)comp3(0, j, k) * n + cidx];
+      chr_th[j][k] = chrRhs[(int64_t)comp3(1, j, k) * n + cidx];
+      chr_ph[j][k] = chrRhs[(int64_t)comp3(2, j, k) * n + cidx];
     }
   }
 
   printf("[ll-smoke] Minkowski Ricci center point (Cartesian)\n");
-  printf("  center coords: x=%.17g y=%.17g z=%.17g\n", x[cidx], y[cidx], z[cidx]);
+  printf("  center coords: x=%.17g y=%.17g z=%.17g\n", x[cidx], y[cidx],
+         z[cidx]);
   print_matrix4("g_uv (reconstructed)", g_cov);
   printf("alpha = %.17g\n", alpha[cidx]);
   print_matrix3("Gamma_ij (cov)", gamma_cov);
@@ -148,12 +155,12 @@ int main(void) {
 
   const double expected_chr = 0.0;
 
-  const double got_r_rr = chr[(int64_t)comp3(0, 0, 0) * n + cidx];
-  const double got_r_thth = chr[(int64_t)comp3(0, 1, 1) * n + cidx];
-  const double got_r_phph = chr[(int64_t)comp3(0, 2, 2) * n + cidx];
-  const double got_th_rth = chr[(int64_t)comp3(1, 0, 1) * n + cidx];
-  const double got_ph_rph = chr[(int64_t)comp3(2, 0, 2) * n + cidx];
-  const double got_ph_thph = chr[(int64_t)comp3(2, 1, 2) * n + cidx];
+  const double got_r_rr = chrRhs[(int64_t)comp3(0, 0, 0) * n + cidx];
+  const double got_r_thth = chrRhs[(int64_t)comp3(0, 1, 1) * n + cidx];
+  const double got_r_phph = chrRhs[(int64_t)comp3(0, 2, 2) * n + cidx];
+  const double got_th_rth = chrRhs[(int64_t)comp3(1, 0, 1) * n + cidx];
+  const double got_ph_rph = chrRhs[(int64_t)comp3(2, 0, 2) * n + cidx];
+  const double got_ph_thph = chrRhs[(int64_t)comp3(2, 1, 2) * n + cidx];
 
   printf("Christoffel^r_rr      got=%.17g expected=0\n", got_r_rr);
   printf("Christoffel^r_yy      got=%.17g expected=0\n", got_r_thth);
@@ -193,6 +200,8 @@ int main(void) {
   free(gammaU);
   free(chr);
   free(ricci);
+  free(chrRhs);
+  free(ricciRhs);
 
   if (!ok) {
     fprintf(stderr, "Ricci/Christoffel LLVM smoke mismatch beyond tolerance\n");

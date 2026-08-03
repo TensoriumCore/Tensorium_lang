@@ -52,7 +52,9 @@ struct InitGridScfPass
     Location loc = initPoint.getLoc();
     Type f64 = b.getF64Type();
 
-    auto dynMemTy = MemRefType::get({ShapedType::kDynamic}, f64);
+    auto stridedLayout = StridedLayoutAttr::get(
+        &getContext(), ShapedType::kDynamic, {ShapedType::kDynamic});
+    auto dynMemTy = MemRefType::get({ShapedType::kDynamic}, f64, stridedLayout);
 
     std::vector<std::string> paramNames = parseStringArrayAttr(
         initPoint->getAttrOfType<ArrayAttr>("tensorium.init.param_names"));

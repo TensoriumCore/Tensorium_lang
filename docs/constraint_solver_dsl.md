@@ -359,9 +359,11 @@ For example, from `build`:
 ```
 
 This emits `tensorium_rhs_grid_affine` after solving the same module's CTT
-problem. The generated analytic initialization entry point is not the
-constraint solver: a host must call `solveRadialConstraintProblem` followed by
-`initializeBssnFromRadialCtt`, then pass those buffers to the generated RHS.
+problem. The compiler deliberately emits no `tensorium_init`,
+`tensorium_init_point`, or `tensorium_init_grid_*` for this constraint-backed
+module. A host must call `solveRadialConstraintProblem` followed by
+`initializeBssnFromRadialCtt`, then pass those state buffers and separate RHS
+output buffers to the generated ABI v2 kernel.
 
 This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
 interval under spherical symmetry and a conformally flat ansatz. It is not yet

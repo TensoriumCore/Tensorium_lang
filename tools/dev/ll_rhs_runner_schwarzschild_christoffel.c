@@ -5,15 +5,15 @@
 
 extern void tensorium_init_grid_affine(
     double M, double *r_alloc, double *r_aligned, int64_t r_offset,
-    int64_t r_size, int64_t r_stride, double *theta_alloc, double *theta_aligned,
-    int64_t theta_offset, int64_t theta_size, int64_t theta_stride,
-    double *phi_alloc, double *phi_aligned, int64_t phi_offset, int64_t phi_size,
-    int64_t phi_stride, double *alpha_alloc, double *alpha_aligned,
-    int64_t alpha_offset, int64_t alpha_size, int64_t alpha_stride,
-    double *gamma_alloc, double *gamma_aligned, int64_t gamma_offset,
-    int64_t gamma_size, int64_t gamma_stride, double *gammaU_alloc,
-    double *gammaU_aligned, int64_t gammaU_offset, int64_t gammaU_size,
-    int64_t gammaU_stride);
+    int64_t r_size, int64_t r_stride, double *theta_alloc,
+    double *theta_aligned, int64_t theta_offset, int64_t theta_size,
+    int64_t theta_stride, double *phi_alloc, double *phi_aligned,
+    int64_t phi_offset, int64_t phi_size, int64_t phi_stride,
+    double *alpha_alloc, double *alpha_aligned, int64_t alpha_offset,
+    int64_t alpha_size, int64_t alpha_stride, double *gamma_alloc,
+    double *gamma_aligned, int64_t gamma_offset, int64_t gamma_size,
+    int64_t gamma_stride, double *gammaU_alloc, double *gammaU_aligned,
+    int64_t gammaU_offset, int64_t gammaU_size, int64_t gammaU_stride);
 
 extern void tensorium_rhs_grid_affine(
     int64_t nx, int64_t ny, int64_t nz, double dr, double dtheta, double dphi,
@@ -21,7 +21,9 @@ extern void tensorium_rhs_grid_affine(
     int64_t gamma_size, int64_t gamma_stride, double *gammaU_alloc,
     double *gammaU_aligned, int64_t gammaU_offset, int64_t gammaU_size,
     int64_t gammaU_stride, double *chr_alloc, double *chr_aligned,
-    int64_t chr_offset, int64_t chr_size, int64_t chr_stride);
+    int64_t chr_offset, int64_t chr_size, int64_t chr_stride,
+    double *chr_rhs_alloc, double *chr_rhs_aligned, int64_t chr_rhs_offset,
+    int64_t chr_rhs_size, int64_t chr_rhs_stride);
 
 static int almost_equal(double got, double expected, double rel_tol,
                         double abs_tol) {
@@ -68,8 +70,9 @@ int main(void) {
   double *alpha = (double *)malloc((size_t)n * sizeof(double));
   double *gamma = (double *)malloc((size_t)(9 * n) * sizeof(double));
   double *gammaU = (double *)malloc((size_t)(9 * n) * sizeof(double));
-  double *chr = (double *)malloc((size_t)(27 * n) * sizeof(double));
-  if (!r || !theta || !phi || !alpha || !gamma || !gammaU || !chr) {
+  double *chr = (double *)calloc((size_t)(27 * n), sizeof(double));
+  double *chrRhs = (double *)malloc((size_t)(27 * n) * sizeof(double));
+  if (!r || !theta || !phi || !alpha || !gamma || !gammaU || !chr || !chrRhs) {
     fprintf(stderr, "allocation failure\n");
     return 2;
   }
@@ -91,7 +94,7 @@ int main(void) {
 
   tensorium_rhs_grid_affine(nx, ny, nz, dr, dtheta, dphi, gamma, gamma, 0,
                             9 * n, 1, gammaU, gammaU, 0, 9 * n, 1, chr, chr, 0,
-                            27 * n, 1);
+                            27 * n, 1, chrRhs, chrRhs, 0, 27 * n, 1);
 
   const char *upper_name[3] = {"r", "theta", "phi"};
   printf("[ll-smoke] Schwarzschild Christoffel center point M=%.17g r=%.17g "
@@ -103,7 +106,7 @@ int main(void) {
     for (int j = 0; j < 3; ++j) {
       for (int k = 0; k < 3; ++k) {
         const int comp = comp_index(iu, j, k);
-        mat[j][k] = chr[(int64_t)comp * n + cidx];
+        mat[j][k] = chrRhs[(int64_t)comp * n + cidx];
       }
     }
     char label[64];
@@ -119,12 +122,12 @@ int main(void) {
   const double expected_ph_rph = 1.0 / r0;
   const double expected_ph_thph = cos(theta0) / sin(theta0);
 
-  const double got_r_rr = chr[(int64_t)comp_index(0, 0, 0) * n + cidx];
-  const double got_r_thth = chr[(int64_t)comp_index(0, 1, 1) * n + cidx];
-  const double got_r_phph = chr[(int64_t)comp_index(0, 2, 2) * n + cidx];
-  const double got_th_rth = chr[(int64_t)comp_index(1, 0, 1) * n + cidx];
-  const double got_ph_rph = chr[(int64_t)comp_index(2, 0, 2) * n + cidx];
-  const double got_ph_thph = chr[(int64_t)comp_index(2, 1, 2) * n + cidx];
+  const double got_r_rr = chrRhs[(int64_t)comp_index(0, 0, 0) * n + cidx];
+  const double got_r_thth = chrRhs[(int64_t)comp_index(0, 1, 1) * n + cidx];
+  const double got_r_phph = chrRhs[(int64_t)comp_index(0, 2, 2) * n + cidx];
+  const double got_th_rth = chrRhs[(int64_t)comp_index(1, 0, 1) * n + cidx];
+  const double got_ph_rph = chrRhs[(int64_t)comp_index(2, 0, 2) * n + cidx];
+  const double got_ph_thph = chrRhs[(int64_t)comp_index(2, 1, 2) * n + cidx];
 
   printf("Gamma^r_rr          got=%.17g expected=%.17g\n", got_r_rr,
          expected_r_rr);
@@ -158,6 +161,7 @@ int main(void) {
   free(gamma);
   free(gammaU);
   free(chr);
+  free(chrRhs);
 
   if (!ok) {
     fprintf(stderr, "Christoffel mismatch beyond tolerance\n");
