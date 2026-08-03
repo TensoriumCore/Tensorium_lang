@@ -42,6 +42,18 @@ struct LocalScopeGuard {
 
   ~LocalScopeGuard() { locals = std::move(saved); }
 };
+
+struct BoolScopeGuard {
+  bool &value;
+  bool saved;
+
+  BoolScopeGuard(bool &valueIn, bool replacement)
+      : value(valueIn), saved(valueIn) {
+    value = replacement;
+  }
+
+  ~BoolScopeGuard() { value = saved; }
+};
 } // namespace
 
 void SemanticAnalyzer::validateSpatialIndex(const std::string &idx) {
@@ -253,8 +265,11 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       }
     }
 
+    const bool radialConstraintCall =
+        analyzingConstraintProblem && isRadialConstraintBuiltin(c->callee);
     if (mode == CompilationMode::Executable &&
-        !isExecutableBuiltin(c->callee) && !externDecl) {
+        !isExecutableBuiltin(c->callee) && !radialConstraintCall &&
+        !externDecl) {
       throw std::runtime_error(
           "executable mode requires implementation for function '" + c->callee +
           "'");
@@ -531,6 +546,7 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
 IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
     const ConstraintProblemDecl &problem) {
   LocalScopeGuard localsScope(locals, std::unordered_map<std::string, bool>{});
+  BoolScopeGuard constraintScope(analyzingConstraintProblem, true);
   coordIndex.clear();
 
   if (!problem.domains.empty()) {

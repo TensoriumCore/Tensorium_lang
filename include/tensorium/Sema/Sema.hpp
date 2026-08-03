@@ -27,6 +27,7 @@ class SemanticAnalyzer {
   std::unordered_map<std::string, int> indexUseCount;
   std::unordered_set<std::string> lhsIndices;
   bool simulationMissing = false;
+  bool analyzingConstraintProblem = false;
   std::vector<std::string> warnings;
   int metricFieldCount = 0;
   int inverseMetricFieldCount = 0;

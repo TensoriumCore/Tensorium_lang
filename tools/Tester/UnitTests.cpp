@@ -4035,6 +4035,57 @@ static bool testScalarVectorRadialConstraintSolve() {
   return true;
 }
 
+static bool testCttRadialVacuumConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/ctt_radial_vacuum_solve.tn");
+  constexpr double amplitude = 0.2;
+  tensorium::solver::ConstraintSolveRequest request;
+  request.parameters["amplitude"] = amplitude;
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module, request);
+
+  if (!solution.converged || solution.iterations < 2 ||
+      solution.iterations > 8) {
+    std::cerr << "FAIL: radial CTT vacuum solve did not converge "
+                 "nonlinearly; iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+  if (solution.domains.size() != 2 ||
+      solution.domains[0].name != "inner_shell" ||
+      solution.domains[1].name != "outer_shell" ||
+      solution.unknownLayouts.size() != 2 ||
+      solution.unknownLayouts[0].name != "psi" ||
+      solution.unknownLayouts[1].name != "w") {
+    std::cerr << "FAIL: radial CTT solution layout is incorrect\n";
+    return false;
+  }
+
+  const auto &psi = solution.unknowns.at("psi");
+  const auto &w = solution.unknowns.at("w");
+  if (psi.size() != solution.coordinates.size() ||
+      w.size() != solution.coordinates.size()) {
+    std::cerr << "FAIL: radial CTT solution has incorrect buffer sizes\n";
+    return false;
+  }
+
+  double maxPsiError = 0.0;
+  double maxWError = 0.0;
+  for (size_t i = 0; i < solution.coordinates.size(); ++i) {
+    maxPsiError = std::max(maxPsiError, std::abs(psi[i] - 1.0));
+    const double expectedW = amplitude / std::sqrt(solution.coordinates[i]);
+    maxWError = std::max(maxWError, std::abs(w[i] - expectedW));
+  }
+  if (maxPsiError > 1.0e-9 || maxWError > 1.0e-9) {
+    std::cerr << "FAIL: radial CTT exact-solution errors: psi="
+              << maxPsiError << " w=" << maxWError
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct NamedTest {
     const char *name;
@@ -4125,6 +4176,8 @@ int main() {
        &testCoupledNonlinearRadialConstraintSolve},
       {"testScalarVectorRadialConstraintSolve",
        &testScalarVectorRadialConstraintSolve},
+      {"testCttRadialVacuumConstraintSolve",
+       &testCttRadialVacuumConstraintSolve},
   };
 
   bool ok = true;

@@ -123,6 +123,8 @@ The current numerical backend supports:
 - Chebyshev-Lobatto collocation;
 - the radial spherical Laplacian
   `d2/dr2 + (2/r) d/dr`;
+- `radial_derivative(f) = df/dr`;
+- the flat conformal vector Laplacian for a radial vector amplitude;
 - algebraic nonlinearities, powers, and radial derivatives;
 - global `inner` and `outer` Dirichlet conditions;
 - automatic `C0` and `C1` matching at every declared interface;
@@ -180,6 +182,70 @@ compactified exterior domain. It converges from unequal seeds to the exact
 constant solution `psi = w = 1` and exercises the cross-unknown Jacobian
 entries.
 
+## Physical radial CTT system
+
+The backend now executes a coupled vacuum conformal transverse-traceless
+(CTT) system, rather than only equations shaped like constraints. For a flat
+conformal metric, no freely specified transverse-traceless tensor, and a
+spherically symmetric vector potential
+
+```text
+V^i = w(r) n^i,
+```
+
+the radial amplitude of the conformal vector Laplacian is
+
+```text
+(Delta_L V)^i = (4/3) [w'' + 2 w'/r - 2 w/r^2] n^i.
+```
+
+Tensorium exposes this full geometric operator, including the `4/3` factor,
+as `radial_conformal_vector_laplacian(w)`. The longitudinal tensor also obeys
+
+```text
+(L V)_ij (L V)^ij = (8/3) (w' - w/r)^2.
+```
+
+Consequently the conformally flat vacuum CTT equations reduce to
+
+```text
+laplacian(psi)
+  + (1/3) (w' - w/r)^2 psi^(-7)
+  - (1/12) K^2 psi^5 = 0
+
+radial_conformal_vector_laplacian(w)
+  - (2/3) psi^6 K' = 0.
+```
+
+These are the spherical reduction of the standard CTT Hamiltonian and
+momentum equations. The coefficient and sign conventions follow equations
+(10)--(12) of [Assumpcao et al., *NRPyElliptic: A fast numerical-relativity
+elliptic solver*](https://doi.org/10.1103/PhysRevD.105.104037).
+
+The regression fixture prescribes
+`K(r) = 3 * amplitude * r^(-3/2)`. It has the exact coupled solution
+
+```text
+psi(r) = 1
+w(r) = amplitude * r^(-1/2),
+```
+
+because both the Hamiltonian terms and the momentum terms cancel pairwise.
+It is solved on two matched shells from deliberately perturbed seeds:
+
+```sh
+./tools/driver/Tensorium_cc \
+  --solve-constraints --param amplitude=0.2 \
+  ../tests/fixtures/gr/ctt_radial_vacuum_solve.tn
+```
+
+This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
+interval under spherical symmetry and a conformally flat ansatz. It is not yet
+a complete asymptotically flat data set or generic CTT/XCTS: the conformal
+metric is fixed, `w` is a radial vector amplitude rather than three independent
+angular fields, and the solver does not yet reconstruct and export the
+physical `gamma_ij` and `K_ij` tensors.
+
 ## Rank-one component layout
 
 Rank-one equations preserve their free index through semantic analysis and
@@ -226,9 +292,10 @@ constrained initial_data DSL
   -> multidomain radial maps and Chebyshev-Lobatto collocation [implemented]
   -> compactified exterior and C0/C1 matching [implemented]
   -> coupled scalar/rank-one component layout and Jacobian [implemented]
+  -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] covariant vector operators, contractions, and rank-two unknowns
-  -> [next] export gamma_ij, K_ij, alpha, and beta^i
+  -> [next] reconstruct and export physical gamma_ij and K_ij
+  -> [next] generic covariant contractions and rank-two unknowns
 ```
 
 The physical target includes the 3+1 constraint equations

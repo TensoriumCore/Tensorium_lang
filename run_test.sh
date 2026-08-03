@@ -148,10 +148,11 @@ CONSTRAINT_INITIAL_DATA_VALID_TESTS=(
 )
 
 CONSTRAINT_SOLVE_TESTS=(
-  "tests/fixtures/gr/brill_lindquist_radial_solve.tn|49|1|1"
-  "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn|42|2|1"
-  "tests/fixtures/gr/coupled_nonlinear_radial_solve.tn|22|2|5"
-  "tests/fixtures/gr/scalar_vector_radial_solve.tn|22|2|3"
+  "tests/fixtures/gr/brill_lindquist_radial_solve.tn|49|1|1|mass=1"
+  "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn|42|2|1|mass=1"
+  "tests/fixtures/gr/coupled_nonlinear_radial_solve.tn|22|2|5|mass=1"
+  "tests/fixtures/gr/scalar_vector_radial_solve.tn|22|2|3|mass=1"
+  "tests/fixtures/gr/ctt_radial_vacuum_solve.tn|50|2|4|amplitude=0.2"
 )
 
 GR_FIXTURES=(
@@ -469,10 +470,10 @@ for f in "${CONSTRAINT_INITIAL_DATA_VALID_TESTS[@]}"; do
 done
 
 for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
-  IFS='|' read -r f expected_points expected_domains expected_iterations <<< "$spec"
+  IFS='|' read -r f expected_points expected_domains expected_iterations parameter <<< "$spec"
   echo "[CONSTRAINT SOLVE OK EXPECTED] $f"
   OUT_FILE="$OUT/$(basename "$f").solve.txt"
-  "$BIN" --solve-constraints --param mass=1 "$f" > "$OUT_FILE"
+  "$BIN" --solve-constraints --param "$parameter" "$f" > "$OUT_FILE"
   if ! grep -q "converged=true iterations=$expected_iterations" "$OUT_FILE"; then
     echo "ERROR: expected $expected_iterations Newton iterations for $f"
     cat "$OUT_FILE"

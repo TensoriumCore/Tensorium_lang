@@ -1,0 +1,58 @@
+# Coupled conformal transverse-traceless vacuum constraints in spherical
+# symmetry. The vector potential is V^i = w(r) n^i and the prescribed mean
+# curvature is K(r) = 3 * amplitude * r^(-3/2).
+params { amplitude }
+
+initial_data CttRadialVacuum {
+  domain inner_shell {
+    coordinates = spherical
+    topology = shell
+    resolution = [25]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+
+  domain outer_shell {
+    coordinates = spherical
+    topology = shell
+    resolution = [25]
+    basis = chebyshev
+    bounds = [2, 4]
+  }
+
+  interface inner_shell -> outer_shell
+
+  unknown scalar psi
+  unknown scalar w
+
+  # For flat conformal metric and no freely specified TT tensor,
+  # Atilde_ij Atilde^ij = (8/3) * (w' - w/r)^2.
+  equation scalar hamiltonian =
+      laplacian(psi)
+      + (1 / 3) * (radial_derivative(w) - w / r)^2 * psi^(-7)
+      - (3 / 4) * amplitude^2 * r^(-3) * psi^5
+
+  equation scalar momentum =
+      radial_conformal_vector_laplacian(w)
+      + 3 * amplitude * r^(-2.5) * psi^6
+
+  boundary inner {
+    psi = 1
+    w = amplitude
+  }
+
+  boundary outer {
+    psi = 1
+    w = amplitude / 2
+  }
+
+  seed psi = 0.8
+  seed w = 0.75 * amplitude * r^(-0.5)
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-11
+    max_iterations = 15
+  }
+}
