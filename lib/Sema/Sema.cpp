@@ -219,8 +219,11 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       }
     }
 
+    const bool radialConstraintCall =
+        analyzingConstraintProblem && isRadialConstraintBuiltin(c->callee);
     if (mode == CompilationMode::Executable &&
-        !isExecutableBuiltin(c->callee) && !externDecl) {
+        !isExecutableBuiltin(c->callee) && !radialConstraintCall &&
+        !externDecl) {
       throw std::runtime_error(
           "executable mode requires implementation for function '" + c->callee +
           "'");

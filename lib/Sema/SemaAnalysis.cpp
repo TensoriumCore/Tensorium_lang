@@ -22,6 +22,18 @@ struct LocalScopeGuard {
   ~LocalScopeGuard() { locals = std::move(saved); }
 };
 
+struct BoolScopeGuard {
+  bool &value;
+  bool saved;
+
+  BoolScopeGuard(bool &valueIn, bool replacement)
+      : value(valueIn), saved(valueIn) {
+    value = replacement;
+  }
+
+  ~BoolScopeGuard() { value = saved; }
+};
+
 static TensorKind deduceKind(int up, int down) {
   if (up == 0 && down == 0)
     return TensorKind::Scalar;
@@ -320,6 +332,7 @@ IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
     const ConstraintProblemDecl &problem) {
   LocalScopeGuard localsScope(
       locals, std::unordered_map<std::string, TensorTypeDesc>{});
+  BoolScopeGuard constraintScope(analyzingConstraintProblem, true);
   coordIndex.clear();
   locals.clear();
 

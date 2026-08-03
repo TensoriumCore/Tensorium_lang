@@ -30,4 +30,9 @@ bool isExecutableBuiltin(std::string_view name) {
   return false;
 }
 
+bool isRadialConstraintBuiltin(std::string_view name) {
+  return name == "radial_derivative" ||
+         name == "radial_conformal_vector_laplacian";
+}
+
 } // namespace tensorium

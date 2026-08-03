@@ -5,5 +5,6 @@
 namespace tensorium {
 
 bool isExecutableBuiltin(std::string_view name);
+bool isRadialConstraintBuiltin(std::string_view name);
 
 }

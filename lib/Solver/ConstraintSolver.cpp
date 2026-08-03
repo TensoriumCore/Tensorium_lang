@@ -182,6 +182,40 @@ DualGrid applyRadialLaplacian(const DualGrid &input, const RadialGrid &grid) {
   return result;
 }
 
+DualGrid applyRadialDerivative(const DualGrid &input, const RadialGrid &grid) {
+  return {applyMatrix(grid.firstDerivative, grid.size, input.value),
+          applyMatrix(grid.firstDerivative, grid.size, input.tangent)};
+}
+
+// Flat conformal vector Laplacian for a spherically symmetric vector
+// V^i = w(r) n^i. The returned scalar is the radial amplitude of
+// (Delta_L V)^i = (4/3) (w'' + 2 w'/r - 2 w/r^2) n^i.
+DualGrid applyRadialConformalVectorLaplacian(const DualGrid &input,
+                                             const RadialGrid &grid) {
+  DualGrid result;
+  const auto first = applyMatrix(grid.firstDerivative, grid.size, input.value);
+  const auto second =
+      applyMatrix(grid.secondDerivative, grid.size, input.value);
+  const auto tangentFirst =
+      applyMatrix(grid.firstDerivative, grid.size, input.tangent);
+  const auto tangentSecond =
+      applyMatrix(grid.secondDerivative, grid.size, input.tangent);
+  result.value.resize(grid.size);
+  result.tangent.resize(grid.size);
+  for (std::size_t i = 0; i < grid.size; ++i) {
+    const double inverseRadius = 1.0 / grid.radius[i];
+    const double inverseRadiusSquared = inverseRadius * inverseRadius;
+    result.value[i] =
+        (4.0 / 3.0) * (second[i] + 2.0 * inverseRadius * first[i] -
+                       2.0 * inverseRadiusSquared * input.value[i]);
+    result.tangent[i] =
+        (4.0 / 3.0) *
+        (tangentSecond[i] + 2.0 * inverseRadius * tangentFirst[i] -
+         2.0 * inverseRadiusSquared * input.tangent[i]);
+  }
+  return result;
+}
+
 DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
                   const UnknownState &unknowns,
                   const ComponentEnvironment &componentEnvironment,
@@ -285,6 +319,10 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
                                  componentEnvironment, parameters);
     if (call->callee == "laplacian")
       return applyRadialLaplacian(argument, grid);
+    if (call->callee == "radial_derivative")
+      return applyRadialDerivative(argument, grid);
+    if (call->callee == "radial_conformal_vector_laplacian")
+      return applyRadialConformalVectorLaplacian(argument, grid);
 
     DualGrid result = constantGrid(grid.size, 0.0);
     for (std::size_t i = 0; i < grid.size; ++i) {
