@@ -5720,6 +5720,201 @@ static bool testCttRadialVacuumConstraintSolve() {
   return true;
 }
 
+static bool testCttPhysicalGridHandoff() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/ctt_radial_vacuum_solve.tn");
+  constexpr double amplitude = 0.2;
+  tensorium::solver::ConstraintSolveRequest request;
+  request.parameters["amplitude"] = amplitude;
+  const auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module, request);
+  if (!solution.converged || !solution.physicalCtt) {
+    std::cerr << "FAIL: CTT handoff prerequisite solve failed\n";
+    return false;
+  }
+
+  auto makePointers = [](std::array<std::vector<double>, 9> &storage,
+                         std::size_t pointCount) {
+    std::array<double *, 9> pointers{};
+    for (std::size_t component = 0; component < storage.size(); ++component) {
+      storage[component].assign(pointCount, 0.0);
+      pointers[component] = storage[component].data();
+    }
+    return pointers;
+  };
+
+  const std::array<double, 4> radius = {1.0, 1.5, 2.5, 4.0};
+  const std::array<double, 4> theta = {0.5, 1.0, 1.25, 0.75};
+  const std::array<double, 4> phi = {0.0, 0.25, 0.5, 1.0};
+  std::array<std::vector<double>, 9> sphericalGamma;
+  std::array<std::vector<double>, 9> sphericalGammaU;
+  std::array<std::vector<double>, 9> sphericalK;
+  std::vector<double> sphericalMean(radius.size(), 0.0);
+  tensorium::solver::CttTargetGrid sphericalTarget;
+  sphericalTarget.coordinates =
+      tensorium::solver::CttTargetCoordinates::Spherical;
+  sphericalTarget.pointCount = radius.size();
+  sphericalTarget.coordinateComponents = {radius.data(), theta.data(),
+                                          phi.data()};
+  tensorium::solver::CttEvolutionBuffers sphericalOutputs;
+  sphericalOutputs.spatialMetric =
+      makePointers(sphericalGamma, radius.size());
+  sphericalOutputs.inverseSpatialMetric =
+      makePointers(sphericalGammaU, radius.size());
+  sphericalOutputs.extrinsicCurvature =
+      makePointers(sphericalK, radius.size());
+  sphericalOutputs.meanCurvature = sphericalMean.data();
+  tensorium::solver::interpolateRadialCttToGrid(
+      solution, sphericalTarget, sphericalOutputs);
+
+  double maxSphericalError = 0.0;
+  for (std::size_t point = 0; point < radius.size(); ++point) {
+    const double r2 = radius[point] * radius[point];
+    const double sinTheta = std::sin(theta[point]);
+    const double azimuthScale = r2 * sinTheta * sinTheta;
+    const double radialPower = amplitude * std::pow(radius[point], -1.5);
+    const std::array<double, 9> expectedGamma = {
+        1.0, 0.0, 0.0, 0.0, r2, 0.0, 0.0, 0.0, azimuthScale};
+    const std::array<double, 9> expectedGammaU = {
+        1.0, 0.0, 0.0, 0.0, 1.0 / r2, 0.0, 0.0, 0.0,
+        1.0 / azimuthScale};
+    const std::array<double, 9> expectedK = {
+        -radialPower, 0.0, 0.0, 0.0, 2.0 * r2 * radialPower,
+        0.0,          0.0, 0.0, 2.0 * azimuthScale * radialPower};
+    for (std::size_t component = 0; component < 9; ++component) {
+      maxSphericalError = std::max(
+          maxSphericalError,
+          std::abs(sphericalGamma[component][point] -
+                   expectedGamma[component]));
+      maxSphericalError = std::max(
+          maxSphericalError,
+          std::abs(sphericalGammaU[component][point] -
+                   expectedGammaU[component]));
+      maxSphericalError = std::max(
+          maxSphericalError,
+          std::abs(sphericalK[component][point] - expectedK[component]));
+    }
+    maxSphericalError =
+        std::max(maxSphericalError,
+                 std::abs(sphericalMean[point] - 3.0 * radialPower));
+  }
+
+  const std::array<double, 3> x = {1.0, 0.0, 1.0};
+  const std::array<double, 3> y = {0.0, 2.0, 2.0};
+  const std::array<double, 3> z = {0.0, 0.0, 2.0};
+  std::array<std::vector<double>, 9> cartesianGamma;
+  std::array<std::vector<double>, 9> cartesianGammaU;
+  std::array<std::vector<double>, 9> cartesianK;
+  tensorium::solver::CttTargetGrid cartesianTarget;
+  cartesianTarget.coordinates =
+      tensorium::solver::CttTargetCoordinates::Cartesian;
+  cartesianTarget.pointCount = x.size();
+  cartesianTarget.coordinateComponents = {x.data(), y.data(), z.data()};
+  tensorium::solver::CttEvolutionBuffers cartesianOutputs;
+  cartesianOutputs.spatialMetric = makePointers(cartesianGamma, x.size());
+  cartesianOutputs.inverseSpatialMetric =
+      makePointers(cartesianGammaU, x.size());
+  cartesianOutputs.extrinsicCurvature = makePointers(cartesianK, x.size());
+  tensorium::solver::interpolateRadialCttToGrid(
+      solution, cartesianTarget, cartesianOutputs);
+
+  double maxCartesianError = 0.0;
+  for (std::size_t point = 0; point < x.size(); ++point) {
+    const double r = std::sqrt(x[point] * x[point] + y[point] * y[point] +
+                               z[point] * z[point]);
+    const std::array<double, 3> radialUnit = {x[point] / r, y[point] / r,
+                                              z[point] / r};
+    const double radialPower = amplitude * std::pow(r, -1.5);
+    for (std::size_t i = 0; i < 3; ++i) {
+      for (std::size_t j = 0; j < 3; ++j) {
+        const std::size_t component = 3 * i + j;
+        const double delta = i == j ? 1.0 : 0.0;
+        const double expectedK =
+            2.0 * radialPower * delta -
+            3.0 * radialPower * radialUnit[i] * radialUnit[j];
+        maxCartesianError = std::max(
+            maxCartesianError,
+            std::abs(cartesianGamma[component][point] - delta));
+        maxCartesianError = std::max(
+            maxCartesianError,
+            std::abs(cartesianGammaU[component][point] - delta));
+        maxCartesianError = std::max(
+            maxCartesianError,
+            std::abs(cartesianK[component][point] - expectedK));
+      }
+    }
+  }
+
+  tensorium::solver::ConstraintSolution compactSolution;
+  compactSolution.converged = true;
+  compactSolution.coordinates.resize(5);
+  const double pi = std::acos(-1.0);
+  for (std::size_t i = 0; i < compactSolution.coordinates.size(); ++i) {
+    const double spectral = -std::cos(pi * static_cast<double>(i) / 4.0);
+    compactSolution.coordinates[i] =
+        i + 1 == compactSolution.coordinates.size()
+            ? std::numeric_limits<double>::infinity()
+            : 4.0 / (1.0 - spectral);
+  }
+  compactSolution.domains.push_back({"infinity", 0, 5, true});
+  tensorium::solver::RadialCttPhysicalSolution compactPhysical;
+  for (double r : compactSolution.coordinates) {
+    const double inverseRadius = std::isinf(r) ? 0.0 : 1.0 / r;
+    compactPhysical.meanCurvature.push_back(5.0 * inverseRadius);
+    compactPhysical.spatialMetricRadial.push_back(1.0 + inverseRadius);
+    compactPhysical.spatialMetricTangential.push_back(1.0 + inverseRadius);
+    compactPhysical.extrinsicCurvatureRadial.push_back(inverseRadius);
+    compactPhysical.extrinsicCurvatureTangential.push_back(2.0 * inverseRadius);
+  }
+  compactSolution.physicalCtt = std::move(compactPhysical);
+
+  const std::array<double, 2> compactRadius = {3.0, 10.0};
+  const std::array<double, 2> compactTheta = {0.75, 1.25};
+  const std::array<double, 2> compactPhi = {0.0, 0.5};
+  std::array<std::vector<double>, 9> compactGamma;
+  std::array<std::vector<double>, 9> compactGammaU;
+  std::array<std::vector<double>, 9> compactK;
+  std::vector<double> compactMean(compactRadius.size(), 0.0);
+  tensorium::solver::CttTargetGrid compactTarget;
+  compactTarget.coordinates =
+      tensorium::solver::CttTargetCoordinates::Spherical;
+  compactTarget.pointCount = compactRadius.size();
+  compactTarget.coordinateComponents = {
+      compactRadius.data(), compactTheta.data(), compactPhi.data()};
+  tensorium::solver::CttEvolutionBuffers compactOutputs;
+  compactOutputs.spatialMetric =
+      makePointers(compactGamma, compactRadius.size());
+  compactOutputs.inverseSpatialMetric =
+      makePointers(compactGammaU, compactRadius.size());
+  compactOutputs.extrinsicCurvature =
+      makePointers(compactK, compactRadius.size());
+  compactOutputs.meanCurvature = compactMean.data();
+  tensorium::solver::interpolateRadialCttToGrid(
+      compactSolution, compactTarget, compactOutputs);
+
+  double maxCompactifiedError = 0.0;
+  for (std::size_t point = 0; point < compactRadius.size(); ++point) {
+    const double inverseRadius = 1.0 / compactRadius[point];
+    maxCompactifiedError =
+        std::max(maxCompactifiedError,
+                 std::abs(compactGamma[0][point] - (1.0 + inverseRadius)));
+    maxCompactifiedError =
+        std::max(maxCompactifiedError,
+                 std::abs(compactK[0][point] - inverseRadius));
+    maxCompactifiedError =
+        std::max(maxCompactifiedError,
+                 std::abs(compactMean[point] - 5.0 * inverseRadius));
+  }
+  if (maxSphericalError > 2.0e-9 || maxCartesianError > 2.0e-9 ||
+      maxCompactifiedError > 1.0e-12) {
+    std::cerr << "FAIL: CTT physical grid handoff errors: spherical="
+              << maxSphericalError << " cartesian=" << maxCartesianError
+              << " compactified=" << maxCompactifiedError << "\n";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct NamedTest {
     const char *name;
@@ -5842,6 +6037,7 @@ int main() {
        &testScalarVectorRadialConstraintSolve},
       {"testCttRadialVacuumConstraintSolve",
        &testCttRadialVacuumConstraintSolve},
+      {"testCttPhysicalGridHandoff", &testCttPhysicalGridHandoff},
   };
 
   bool ok = true;

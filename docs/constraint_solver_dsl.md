@@ -288,12 +288,47 @@ mean curvature, and the four reconstructed physical profiles. Interface
 points occur once for each adjacent domain, preserving the spectral domain
 layout.
 
+## Evolution-grid handoff
+
+`interpolateRadialCttToGrid` transfers a converged reconstructed CTT solution
+from its multidomain spectral grid to an arbitrary target grid. It selects the
+source shell for every target radius and evaluates each physical profile with
+Chebyshev-Lobatto barycentric interpolation. The same interpolation applies to
+finite shells and to the compactified exterior coordinate.
+
+The public API accepts `CttTargetGrid` and writes `CttEvolutionBuffers`.
+Spatial metric, inverse spatial metric, and extrinsic curvature buffers use a
+structure-of-arrays layout with nine component pointers each. Components are
+row-major, so component `3*i + j` stores tensor entry `(i,j)` for all target
+points. This is the same component-major convention used by generated tensor
+kernels. Mean curvature is an optional scalar output buffer.
+
+For `CttTargetCoordinates::Spherical`, the three input coordinates are
+`(r, theta, phi)`. The handoff writes the spherical coordinate-basis tensors
+shown above, including the radial scale and angular scale factors. For
+`CttTargetCoordinates::Cartesian`, the input is `(x, y, z)`. With
+`n_i = x_i/r`, a radial/tangential profile pair is lifted as
+
+```text
+gamma_ij = gamma_tangential delta_ij
+         + (gamma_radial - gamma_tangential) n_i n_j
+
+K_ij = k_tangential delta_ij
+     + (k_radial - k_tangential) n_i n_j.
+```
+
+All target coordinates must be finite. Radii must also be positive and covered
+by the solved domains.
+The handoff deliberately does not construct lapse or shift: those are gauge
+variables and are not determined by the CTT constraint equations.
+
 This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
 interval under spherical symmetry and a conformally flat ansatz. It is not yet
 a complete asymptotically flat data set or generic CTT/XCTS: the conformal
 metric is fixed and `w` is a radial vector amplitude rather than three
-independent angular fields. The reconstructed tensors are radial profiles;
-interpolation onto an evolution grid is still a separate step.
+independent angular fields. The reconstructed radial tensors can now be
+interpolated into full spherical or Cartesian evolution buffers, but the
+constraint solve itself remains spherically symmetric.
 
 ## Rank-one component layout
 
@@ -343,8 +378,8 @@ constrained initial_data DSL
   -> coupled scalar/rank-one component layout and Jacobian [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
+  -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] interpolate physical profiles into evolution-field buffers
   -> [next] generic covariant contractions and rank-two unknowns
 ```
 

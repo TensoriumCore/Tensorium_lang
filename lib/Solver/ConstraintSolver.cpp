@@ -779,6 +779,74 @@ RadialCttPhysicalSolution reconstructRadialCtt(
   return physical;
 }
 
+const ConstraintDomainSolution &
+selectInterpolationDomain(const ConstraintSolution &solution, double radius) {
+  if (!std::isfinite(radius) || radius <= 0.0)
+    fail("CTT target-grid radii must be finite and strictly positive");
+  for (const auto &domain : solution.domains) {
+    if (domain.pointCount < 2 ||
+        domain.offset + domain.pointCount > solution.coordinates.size())
+      fail("invalid domain metadata in CTT solution");
+    const double lower = solution.coordinates[domain.offset];
+    const double upper =
+        solution.coordinates[domain.offset + domain.pointCount - 1];
+    double scale = std::max({1.0, std::abs(radius), std::abs(lower)});
+    if (std::isfinite(upper))
+      scale = std::max(scale, std::abs(upper));
+    const double tolerance =
+        64.0 * std::numeric_limits<double>::epsilon() * scale;
+    if (radius + tolerance < lower)
+      continue;
+    if (domain.compactified || radius <= upper + tolerance)
+      return domain;
+  }
+  fail("target radius lies outside the solved CTT domains");
+}
+
+double interpolateDomainProfile(const ConstraintSolution &solution,
+                                const ConstraintDomainSolution &domain,
+                                const std::vector<double> &profile,
+                                double radius) {
+  if (profile.size() != solution.coordinates.size())
+    fail("CTT profile size does not match solution coordinates");
+  const std::size_t n = domain.pointCount;
+  const double lower = solution.coordinates[domain.offset];
+  double spectralCoordinate = 0.0;
+  if (domain.compactified) {
+    spectralCoordinate = 1.0 - 2.0 * lower / radius;
+  } else {
+    const double upper = solution.coordinates[domain.offset + n - 1];
+    spectralCoordinate =
+        (2.0 * radius - lower - upper) / (upper - lower);
+  }
+  spectralCoordinate = std::clamp(spectralCoordinate, -1.0, 1.0);
+
+  const double pi = std::acos(-1.0);
+  double numerator = 0.0;
+  double denominator = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    const double node =
+        -std::cos(pi * static_cast<double>(i) / static_cast<double>(n - 1));
+    const double distance = spectralCoordinate - node;
+    if (std::abs(distance) <=
+        32.0 * std::numeric_limits<double>::epsilon())
+      return profile[domain.offset + i];
+    const double endpointScale = (i == 0 || i + 1 == n) ? 0.5 : 1.0;
+    const double weight = (i % 2 == 0 ? 1.0 : -1.0) * endpointScale;
+    const double term = weight / distance;
+    numerator += term * profile[domain.offset + i];
+    denominator += term;
+  }
+  return numerator / denominator;
+}
+
+void storeSymmetricTensor(const std::array<double *, 9> &output,
+                          std::size_t point,
+                          const std::array<double, 9> &value) {
+  for (std::size_t component = 0; component < value.size(); ++component)
+    output[component][point] = value[component];
+}
+
 } // namespace
 
 ConstraintSolution
@@ -924,6 +992,108 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
         problem, layout, componentLayout, unknown, request.parameters);
   }
   return solution;
+}
+
+void interpolateRadialCttToGrid(const ConstraintSolution &solution,
+                                const CttTargetGrid &target,
+                                const CttEvolutionBuffers &outputs) {
+  if (!solution.converged)
+    fail("cannot interpolate an unconverged constraint solution");
+  if (!solution.physicalCtt)
+    fail("constraint solution has no reconstructed CTT physical fields");
+  if (target.pointCount == 0)
+    fail("CTT target grid must contain at least one point");
+  for (const double *coordinate : target.coordinateComponents)
+    if (!coordinate)
+      fail("CTT target grid has a null coordinate component");
+  for (std::size_t component = 0; component < 9; ++component) {
+    if (!outputs.spatialMetric[component] ||
+        !outputs.inverseSpatialMetric[component] ||
+        !outputs.extrinsicCurvature[component])
+      fail("CTT evolution output has a null tensor component");
+  }
+
+  const auto &physical = *solution.physicalCtt;
+  for (std::size_t point = 0; point < target.pointCount; ++point) {
+    for (const double *coordinate : target.coordinateComponents)
+      if (!std::isfinite(coordinate[point]))
+        fail("CTT target-grid coordinates must be finite");
+    double radius = 0.0;
+    std::array<double, 3> radialUnit{};
+    double theta = 0.0;
+    if (target.coordinates == CttTargetCoordinates::Spherical) {
+      radius = target.coordinateComponents[0][point];
+      theta = target.coordinateComponents[1][point];
+    } else {
+      const double x = target.coordinateComponents[0][point];
+      const double y = target.coordinateComponents[1][point];
+      const double z = target.coordinateComponents[2][point];
+      radius = std::sqrt(x * x + y * y + z * z);
+      if (radius > 0.0)
+        radialUnit = {x / radius, y / radius, z / radius};
+    }
+
+    const auto &domain = selectInterpolationDomain(solution, radius);
+    const double gammaRadial = interpolateDomainProfile(
+        solution, domain, physical.spatialMetricRadial, radius);
+    const double gammaTangential = interpolateDomainProfile(
+        solution, domain, physical.spatialMetricTangential, radius);
+    const double kRadial = interpolateDomainProfile(
+        solution, domain, physical.extrinsicCurvatureRadial, radius);
+    const double kTangential = interpolateDomainProfile(
+        solution, domain, physical.extrinsicCurvatureTangential, radius);
+    const double meanCurvature = interpolateDomainProfile(
+        solution, domain, physical.meanCurvature, radius);
+    if (gammaRadial <= 0.0 || gammaTangential <= 0.0 ||
+        !std::isfinite(gammaRadial) || !std::isfinite(gammaTangential) ||
+        !std::isfinite(kRadial) || !std::isfinite(kTangential) ||
+        !std::isfinite(meanCurvature))
+      fail("interpolated CTT physical tensor is invalid");
+
+    std::array<double, 9> gamma{};
+    std::array<double, 9> gammaInverse{};
+    std::array<double, 9> extrinsic{};
+    if (target.coordinates == CttTargetCoordinates::Spherical) {
+      const double radiusSquared = radius * radius;
+      const double sinTheta = std::sin(theta);
+      const double azimuthScale = radiusSquared * sinTheta * sinTheta;
+      gamma[0] = gammaRadial;
+      gamma[4] = radiusSquared * gammaTangential;
+      gamma[8] = azimuthScale * gammaTangential;
+      gammaInverse[0] = 1.0 / gammaRadial;
+      gammaInverse[4] = 1.0 / (radiusSquared * gammaTangential);
+      gammaInverse[8] =
+          azimuthScale == 0.0
+              ? std::numeric_limits<double>::infinity()
+              : 1.0 / (azimuthScale * gammaTangential);
+      extrinsic[0] = kRadial;
+      extrinsic[4] = radiusSquared * kTangential;
+      extrinsic[8] = azimuthScale * kTangential;
+    } else {
+      for (std::size_t i = 0; i < 3; ++i) {
+        for (std::size_t j = 0; j < 3; ++j) {
+          const std::size_t component = 3 * i + j;
+          const double delta = i == j ? 1.0 : 0.0;
+          const double radialProjector = radialUnit[i] * radialUnit[j];
+          gamma[component] =
+              gammaTangential * delta +
+              (gammaRadial - gammaTangential) * radialProjector;
+          gammaInverse[component] =
+              delta / gammaTangential +
+              (1.0 / gammaRadial - 1.0 / gammaTangential) *
+                  radialProjector;
+          extrinsic[component] =
+              kTangential * delta +
+              (kRadial - kTangential) * radialProjector;
+        }
+      }
+    }
+    storeSymmetricTensor(outputs.spatialMetric, point, gamma);
+    storeSymmetricTensor(outputs.inverseSpatialMetric, point, gammaInverse);
+    storeSymmetricTensor(outputs.extrinsicCurvature, point, extrinsic);
+    if (outputs.meanCurvature)
+      outputs.meanCurvature[point] = meanCurvature;
+  }
 }
 
 } // namespace tensorium::solver
