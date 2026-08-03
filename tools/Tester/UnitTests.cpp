@@ -4,6 +4,7 @@
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Solver/ConstraintSolver.hpp"
 #include "tensorium/Validation/IRCanonicalize.hpp"
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
@@ -5536,6 +5537,42 @@ static bool testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero() {
   return true;
 }
 
+static bool testCoupledNonlinearRadialConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/coupled_nonlinear_radial_solve.tn");
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module);
+  if (!solution.converged || solution.iterations < 2 ||
+      solution.iterations > 8) {
+    std::cerr << "FAIL: coupled radial Newton solve did not converge "
+                 "iteratively; iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+  if (solution.unknowns.size() != 2 ||
+      !solution.unknowns.count("psi") || !solution.unknowns.count("w")) {
+    std::cerr << "FAIL: coupled radial solution is missing an unknown\n";
+    return false;
+  }
+
+  double maxError = 0.0;
+  for (const auto &entry : solution.unknowns) {
+    if (entry.second.size() != solution.coordinates.size()) {
+      std::cerr << "FAIL: coupled unknown has incorrect point count\n";
+      return false;
+    }
+    for (double value : entry.second)
+      maxError = std::max(maxError, std::abs(value - 1.0));
+  }
+  if (maxError > 1.0e-9) {
+    std::cerr << "FAIL: coupled radial solution max error=" << maxError
+              << "\n";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct NamedTest {
     const char *name;
@@ -5652,6 +5689,8 @@ int main() {
       {"testSchwarzschildChristoffelMLIRStructure",
        &testSchwarzschildChristoffelMLIRStructure},
       {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
+      {"testCoupledNonlinearRadialConstraintSolve",
+       &testCoupledNonlinearRadialConstraintSolve},
   };
 
   bool ok = true;

@@ -19,6 +19,7 @@ target_link_libraries(Tensorium_unittests
     tensoriumCompilerAPI
     tensoriumParse
     tensoriumLowering
+    tensoriumSolver
     tensoriumValidation
     tensoriumMlirRuntime
     tensoriumMlirCodegen

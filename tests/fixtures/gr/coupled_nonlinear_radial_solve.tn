@@ -1,0 +1,47 @@
+# Coupled nonlinear scalar system used to validate off-diagonal automatic
+# Jacobian blocks in the radial constraint solver.
+initial_data CoupledNonlinearRadial {
+  domain near {
+    coordinates = spherical
+    topology = shell
+    resolution = [13]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+
+  domain infinity {
+    coordinates = spherical
+    topology = compactified
+    resolution = [9]
+    basis = chebyshev
+    bounds = [2]
+  }
+
+  interface near -> infinity
+
+  unknown scalar psi
+  unknown scalar w
+
+  equation scalar hamiltonian = laplacian(psi) + psi * w - 1
+  equation scalar momentum = laplacian(w) + psi^2 - 1
+
+  boundary inner {
+    psi = 1
+    w = 1
+  }
+
+  boundary outer {
+    psi = 1
+    w = 1
+  }
+
+  seed psi = 0.5
+  seed w = 0.75
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-10
+    max_iterations = 15
+  }
+}
