@@ -255,6 +255,13 @@ struct ConstraintSolveIR {
   int maxIterations = 30;
 };
 
+struct ConstraintCttReconstructionIR {
+  bool enabled = false;
+  std::string conformalFactor;
+  std::string radialVectorPotential;
+  std::unique_ptr<ExprIR> meanCurvature;
+};
+
 struct ConstraintProblemIR {
   std::string name;
   std::vector<SpectralDomainIR> domains;
@@ -263,6 +270,7 @@ struct ConstraintProblemIR {
   std::vector<ConstraintBoundaryIR> boundaries;
   std::vector<ConstraintInterfaceIR> interfaces;
   std::vector<ConstraintAssignmentIR> seeds;
+  ConstraintCttReconstructionIR cttReconstruction;
   ConstraintSolveIR solve;
 };
 

@@ -375,6 +375,22 @@ IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
   IndexedConstraintProblem out;
   out.name = problem.name;
 
+  if (problem.cttReconstruction.enabled) {
+    out.cttReconstruction.enabled = true;
+    out.cttReconstruction.conformalFactor =
+        problem.cttReconstruction.conformalFactor;
+    out.cttReconstruction.radialVectorPotential =
+        problem.cttReconstruction.radialVectorPotential;
+    out.cttReconstruction.meanCurvature =
+        transformExpr(problem.cttReconstruction.meanCurvature.get());
+    const TensorType meanCurvatureType =
+        checker.infer(out.cttReconstruction.meanCurvature.get());
+    if (!meanCurvatureType.isScalar()) {
+      throw std::runtime_error(
+          "reconstruct ctt mean_curvature must be a scalar expression");
+    }
+  }
+
   for (const auto &equation : problem.equations) {
     IndexedConstraintEquation indexed;
     indexed.name = equation.name;

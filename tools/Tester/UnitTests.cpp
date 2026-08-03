@@ -5664,6 +5664,59 @@ static bool testCttRadialVacuumConstraintSolve() {
               << " residual=" << solution.residualNorm << "\n";
     return false;
   }
+
+  if (!solution.physicalCtt) {
+    std::cerr << "FAIL: radial CTT physical fields were not reconstructed\n";
+    return false;
+  }
+  const auto &physical = *solution.physicalCtt;
+  if (physical.basis != "flat_spherical_orthonormal_coframe" ||
+      physical.conformalFactorUnknown != "psi" ||
+      physical.radialVectorPotentialUnknown != "w" ||
+      physical.meanCurvature.size() != solution.coordinates.size() ||
+      physical.spatialMetricRadial.size() != solution.coordinates.size() ||
+      physical.spatialMetricTangential.size() != solution.coordinates.size() ||
+      physical.extrinsicCurvatureRadial.size() !=
+          solution.coordinates.size() ||
+      physical.extrinsicCurvatureTangential.size() !=
+          solution.coordinates.size()) {
+    std::cerr << "FAIL: radial CTT physical field layout is incorrect\n";
+    return false;
+  }
+
+  double maxPhysicalError = 0.0;
+  double maxTraceError = 0.0;
+  for (size_t i = 0; i < solution.coordinates.size(); ++i) {
+    const double radialPower =
+        amplitude * std::pow(solution.coordinates[i], -1.5);
+    const double expectedMeanCurvature = 3.0 * radialPower;
+    maxPhysicalError =
+        std::max(maxPhysicalError,
+                 std::abs(physical.meanCurvature[i] - expectedMeanCurvature));
+    maxPhysicalError = std::max(
+        maxPhysicalError, std::abs(physical.spatialMetricRadial[i] - 1.0));
+    maxPhysicalError = std::max(
+        maxPhysicalError, std::abs(physical.spatialMetricTangential[i] - 1.0));
+    maxPhysicalError = std::max(
+        maxPhysicalError,
+        std::abs(physical.extrinsicCurvatureRadial[i] + radialPower));
+    maxPhysicalError = std::max(
+        maxPhysicalError,
+        std::abs(physical.extrinsicCurvatureTangential[i] -
+                 2.0 * radialPower));
+    const double reconstructedTrace =
+        (physical.extrinsicCurvatureRadial[i] +
+         2.0 * physical.extrinsicCurvatureTangential[i]) /
+        physical.spatialMetricRadial[i];
+    maxTraceError =
+        std::max(maxTraceError,
+                 std::abs(reconstructedTrace - physical.meanCurvature[i]));
+  }
+  if (maxPhysicalError > 2.0e-9 || maxTraceError > 2.0e-9) {
+    std::cerr << "FAIL: radial CTT reconstructed field errors: physical="
+              << maxPhysicalError << " trace=" << maxTraceError << "\n";
+    return false;
+  }
   return true;
 }
 

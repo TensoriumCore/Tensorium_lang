@@ -301,6 +301,15 @@ void printProgram(const Program &prog) {
       for (const auto &interface : problem.interfaces)
         std::cout << "    interface " << interface.innerDomain << " -> "
                   << interface.outerDomain << "\n";
+      if (problem.cttReconstruction.enabled) {
+        std::cout << "    reconstruct ctt conformal_factor="
+                  << problem.cttReconstruction.conformalFactor
+                  << " radial_vector="
+                  << problem.cttReconstruction.radialVectorPotential
+                  << " mean_curvature=";
+        printExpr(problem.cttReconstruction.meanCurvature.get());
+        std::cout << "\n";
+      }
       std::cout << "    solve nonlinear=" << problem.solve.nonlinear
                 << " linear=" << problem.solve.linear
                 << " tolerance=" << problem.solve.tolerance

@@ -698,6 +698,87 @@ std::vector<double> solveDense(Matrix matrix, std::vector<double> rhs,
   return solution;
 }
 
+RadialCttPhysicalSolution reconstructRadialCtt(
+    const backend::ConstraintProblemIR &problem,
+    const RadialDomainLayout &domainLayout,
+    const ComponentSystemLayout &componentLayout,
+    const std::vector<double> &unknown,
+    const std::unordered_map<std::string, double> &parameters) {
+  const auto &reconstruction = problem.cttReconstruction;
+  auto findScalarLayout =
+      [&](const std::string &name,
+          const std::string &role) -> const UnknownComponentLayout & {
+    auto it = std::find_if(
+        componentLayout.unknowns.begin(), componentLayout.unknowns.end(),
+        [&](const UnknownComponentLayout &layout) {
+          return layout.name == name;
+        });
+    if (it == componentLayout.unknowns.end())
+      fail("CTT reconstruction " + role + " unknown '" + name +
+           "' is missing from the component layout");
+    if (it->componentCount != 1)
+      fail("CTT reconstruction " + role + " must be scalar");
+    return *it;
+  };
+
+  const auto &psiLayout = findScalarLayout(reconstruction.conformalFactor,
+                                           "conformal factor");
+  const auto &wLayout = findScalarLayout(reconstruction.radialVectorPotential,
+                                         "radial vector potential");
+  const std::vector<double> zeroTangent(unknown.size(), 0.0);
+  const auto localStates = buildLocalStates(
+      problem, domainLayout, componentLayout, unknown, zeroTangent);
+
+  RadialCttPhysicalSolution physical;
+  physical.conformalFactorUnknown = reconstruction.conformalFactor;
+  physical.radialVectorPotentialUnknown =
+      reconstruction.radialVectorPotential;
+  physical.meanCurvature.reserve(domainLayout.totalSize);
+  physical.spatialMetricRadial.reserve(domainLayout.totalSize);
+  physical.spatialMetricTangential.reserve(domainLayout.totalSize);
+  physical.extrinsicCurvatureRadial.reserve(domainLayout.totalSize);
+  physical.extrinsicCurvatureTangential.reserve(domainLayout.totalSize);
+
+  for (std::size_t domainIndex = 0;
+       domainIndex < domainLayout.grids.size(); ++domainIndex) {
+    const auto &grid = domainLayout.grids[domainIndex];
+    const auto &state = localStates[domainIndex];
+    const auto &psi = state.at(psiLayout.name).components.front().value;
+    const auto &w = state.at(wLayout.name).components.front().value;
+    const auto wPrime = applyMatrix(grid.firstDerivative, grid.size, w);
+    const auto meanCurvature =
+        evalExpr(reconstruction.meanCurvature.get(), grid, state, {}, parameters)
+            .value;
+
+    for (std::size_t i = 0; i < grid.size; ++i) {
+      if (!std::isfinite(psi[i]) || psi[i] <= 0.0)
+        fail("CTT reconstruction requires a finite positive conformal factor");
+      if (!std::isfinite(meanCurvature[i]))
+        fail("CTT reconstruction mean curvature is non-finite");
+      const double inverseRadius = 1.0 / grid.radius[i];
+      const double longitudinalAmplitude = wPrime[i] - w[i] * inverseRadius;
+      const double psiSquared = psi[i] * psi[i];
+      const double psiFourth = psiSquared * psiSquared;
+      const double inversePsiSquared = 1.0 / psiSquared;
+      const double traceContribution =
+          (1.0 / 3.0) * psiFourth * meanCurvature[i];
+      const double radialExtrinsic =
+          inversePsiSquared * (4.0 / 3.0) * longitudinalAmplitude +
+          traceContribution;
+      const double tangentialExtrinsic =
+          inversePsiSquared * (-2.0 / 3.0) * longitudinalAmplitude +
+          traceContribution;
+
+      physical.meanCurvature.push_back(meanCurvature[i]);
+      physical.spatialMetricRadial.push_back(psiFourth);
+      physical.spatialMetricTangential.push_back(psiFourth);
+      physical.extrinsicCurvatureRadial.push_back(radialExtrinsic);
+      physical.extrinsicCurvatureTangential.push_back(tangentialExtrinsic);
+    }
+  }
+  return physical;
+}
+
 } // namespace
 
 ConstraintSolution
@@ -837,6 +918,10 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
         unknownLayout.name,
         domainSlice(unknown, offset,
                     unknownLayout.componentCount * layout.totalSize));
+  }
+  if (problem.cttReconstruction.enabled) {
+    solution.physicalCtt = reconstructRadialCtt(
+        problem, layout, componentLayout, unknown, request.parameters);
   }
   return solution;
 }

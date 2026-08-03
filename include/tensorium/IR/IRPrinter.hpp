@@ -328,6 +328,15 @@ inline void printModuleIR(const ModuleIR &m) {
       printExprIR(seed.rhs.get());
       std::cout << "\n";
     }
+    if (problem.cttReconstruction.enabled) {
+      std::cout << "    Reconstruct CTT: conformal_factor="
+                << problem.cttReconstruction.conformalFactor
+                << " radial_vector="
+                << problem.cttReconstruction.radialVectorPotential
+                << " mean_curvature=";
+      printExprIR(problem.cttReconstruction.meanCurvature.get());
+      std::cout << "\n";
+    }
     std::cout << "    Solve: nonlinear=" << problem.solve.nonlinear
               << " linear=" << problem.solve.linear
               << " tolerance=" << problem.solve.tolerance

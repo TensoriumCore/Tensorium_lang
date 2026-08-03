@@ -3,6 +3,7 @@
 #include "tensorium/Backend/DomainIR.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -28,6 +29,17 @@ struct ConstraintUnknownSolution {
   std::size_t pointsPerComponent = 0;
 };
 
+struct RadialCttPhysicalSolution {
+  std::string basis = "flat_spherical_orthonormal_coframe";
+  std::string conformalFactorUnknown;
+  std::string radialVectorPotentialUnknown;
+  std::vector<double> meanCurvature;
+  std::vector<double> spatialMetricRadial;
+  std::vector<double> spatialMetricTangential;
+  std::vector<double> extrinsicCurvatureRadial;
+  std::vector<double> extrinsicCurvatureTangential;
+};
+
 struct ConstraintSolution {
   bool converged = false;
   std::size_t iterations = 0;
@@ -36,6 +48,7 @@ struct ConstraintSolution {
   std::vector<ConstraintDomainSolution> domains;
   std::vector<ConstraintUnknownSolution> unknownLayouts;
   std::unordered_map<std::string, std::vector<double>> unknowns;
+  std::optional<RadialCttPhysicalSolution> physicalCtt;
   std::vector<double> residualHistory;
 };
 

@@ -503,6 +503,8 @@ void canonicalizeEinsteinIR(backend::ModuleIR &module) {
         canonicalizeExpr(condition.rhs);
     for (auto &seed : problem.seeds)
       canonicalizeExpr(seed.rhs);
+    if (problem.cttReconstruction.enabled)
+      canonicalizeExpr(problem.cttReconstruction.meanCurvature);
   }
 }
 } // namespace tensorium::validation

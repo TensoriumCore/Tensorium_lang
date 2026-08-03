@@ -32,6 +32,7 @@ class Parser {
   ConstraintEquationDecl parseConstraintEquation();
   ConstraintBoundaryDecl parseConstraintBoundary();
   ConstraintInterfaceDecl parseConstraintInterface();
+  ConstraintCttReconstructionDecl parseConstraintCttReconstruction();
   ConstraintSolveConfig parseConstraintSolve();
   EvolutionEq parseEvolutionEq();
   EvolutionDecl parseEvolution();

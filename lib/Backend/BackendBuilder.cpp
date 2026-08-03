@@ -724,6 +724,17 @@ ModuleIR BackendBuilder::build(const Program &prog,
     for (const auto &seed : indexed.seeds)
       out.seeds.push_back(lowerAssignment(seed));
 
+    if (indexed.cttReconstruction.enabled) {
+      out.cttReconstruction.enabled = true;
+      out.cttReconstruction.conformalFactor =
+          indexed.cttReconstruction.conformalFactor;
+      out.cttReconstruction.radialVectorPotential =
+          indexed.cttReconstruction.radialVectorPotential;
+      out.cttReconstruction.meanCurvature =
+          lowerIndexedExpr(indexed.cttReconstruction.meanCurvature.get(), true,
+                           hasConnectionTensor);
+    }
+
     out.solve.nonlinear = problem.solve.nonlinear;
     out.solve.linear = problem.solve.linear;
     out.solve.tolerance = problem.solve.tolerance;

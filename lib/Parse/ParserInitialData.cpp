@@ -104,6 +104,15 @@ InitialDataDecl Parser::parseInitialData() {
       continue;
     }
 
+    if (cur.type == TokenType::Identifier && cur.text == "reconstruct") {
+      if (init.constraintProblem.cttReconstruction.enabled)
+        syntaxError("duplicate reconstruct block in initial_data");
+      init.hasConstraintProblem = true;
+      init.constraintProblem.cttReconstruction =
+          parseConstraintCttReconstruction();
+      continue;
+    }
+
     if (cur.type == TokenType::Identifier && cur.text == "solve") {
       if (init.constraintProblem.hasSolve)
         syntaxError("duplicate solve block in initial_data");
@@ -483,6 +492,66 @@ ConstraintInterfaceDecl Parser::parseConstraintInterface() {
   interface.outerDomain = cur.text;
   advance();
   return interface;
+}
+
+ConstraintCttReconstructionDecl Parser::parseConstraintCttReconstruction() {
+  if (cur.type != TokenType::Identifier || cur.text != "reconstruct")
+    syntaxError("expected reconstruct block");
+  advance();
+  if (cur.type != TokenType::Identifier || cur.text != "ctt")
+    syntaxError("reconstruct currently expects the 'ctt' formulation");
+  advance();
+  expect(TokenType::LBrace);
+
+  ConstraintCttReconstructionDecl reconstruction;
+  reconstruction.enabled = true;
+  bool hasConformalFactor = false;
+  bool hasRadialVector = false;
+  bool hasMeanCurvature = false;
+  while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+    if (cur.type == TokenType::Semicolon) {
+      advance();
+      continue;
+    }
+    if (cur.type != TokenType::Identifier)
+      syntaxError("reconstruct ctt expects a property name");
+    const std::string key = cur.text;
+    advance();
+    expect(TokenType::Equals);
+
+    if (key == "conformal_factor" || key == "radial_vector") {
+      if (cur.type != TokenType::Identifier)
+        syntaxError("reconstruct ctt property '" + key +
+                    "' expects an unknown name");
+      if (key == "conformal_factor") {
+        if (hasConformalFactor)
+          syntaxError("duplicate conformal_factor in reconstruct ctt");
+        reconstruction.conformalFactor = cur.text;
+        hasConformalFactor = true;
+      } else {
+        if (hasRadialVector)
+          syntaxError("duplicate radial_vector in reconstruct ctt");
+        reconstruction.radialVectorPotential = cur.text;
+        hasRadialVector = true;
+      }
+      advance();
+      continue;
+    }
+    if (key == "mean_curvature") {
+      if (hasMeanCurvature)
+        syntaxError("duplicate mean_curvature in reconstruct ctt");
+      reconstruction.meanCurvature = parseExpr();
+      hasMeanCurvature = true;
+      continue;
+    }
+    syntaxError("unknown reconstruct ctt property '" + key + "'");
+  }
+  expect(TokenType::RBrace);
+  if (!hasConformalFactor || !hasRadialVector || !hasMeanCurvature) {
+    syntaxError("reconstruct ctt requires conformal_factor, radial_vector "
+                "and mean_curvature");
+  }
+  return reconstruction;
 }
 
 ConstraintSolveConfig Parser::parseConstraintSolve() {

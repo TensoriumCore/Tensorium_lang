@@ -49,6 +49,12 @@ initial_data CttRadialVacuum {
   seed psi = 0.8
   seed w = 0.75 * amplitude * r^(-0.5)
 
+  reconstruct ctt {
+    conformal_factor = psi
+    radial_vector = w
+    mean_curvature = 3 * amplitude * r^(-1.5)
+  }
+
   solve {
     nonlinear = newton
     linear = direct

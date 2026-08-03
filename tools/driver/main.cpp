@@ -59,6 +59,7 @@ static void printUsage(std::ostream &os) {
      << "  --mlir-no-canonicalize        disable post-generation canonicalizer\n"
      << "  --mlir-no-cse                 disable post-generation CSE\n"
      << "  --mlir-pass-timing            report per-pass MLIR/LLVM lowering timings\n"
+     << "  --export-constraint-csv PATH export reconstructed radial CTT data\n"
      << "  --mlir-best-effort            do not fail on Tensorium MLIR pipeline errors\n";
 }
 
@@ -128,6 +129,40 @@ static int parseIntOption(const std::string &option,
   } catch (...) {
     throw std::runtime_error(option + " expects an integer value");
   }
+}
+
+static void writeConstraintCsv(
+    const std::string &path,
+    const tensorium::solver::ConstraintSolution &solution) {
+  if (!solution.physicalCtt)
+    throw std::runtime_error(
+        "constraint CSV export requires a reconstruct ctt block");
+  const auto &physical = *solution.physicalCtt;
+  const auto &conformalFactor =
+      solution.unknowns.at(physical.conformalFactorUnknown);
+  const auto &radialVector =
+      solution.unknowns.at(physical.radialVectorPotentialUnknown);
+
+  std::ofstream file(path);
+  if (!file)
+    throw std::runtime_error("cannot open constraint CSV output: " + path);
+  file << std::setprecision(17);
+  file << "domain,r,conformal_factor,radial_vector,mean_curvature,"
+          "gamma_radial,gamma_tangential,k_radial,k_tangential\n";
+  for (const auto &domain : solution.domains) {
+    for (std::size_t local = 0; local < domain.pointCount; ++local) {
+      const std::size_t i = domain.offset + local;
+      file << domain.name << ',' << solution.coordinates[i] << ','
+           << conformalFactor[i] << ',' << radialVector[i] << ','
+           << physical.meanCurvature[i] << ','
+           << physical.spatialMetricRadial[i] << ','
+           << physical.spatialMetricTangential[i] << ','
+           << physical.extrinsicCurvatureRadial[i] << ','
+           << physical.extrinsicCurvatureTangential[i] << '\n';
+    }
+  }
+  if (!file.good())
+    throw std::runtime_error("failed to write constraint CSV output: " + path);
 }
 
 static void printIndexedType(const IndexedExpr *e) {
@@ -209,6 +244,7 @@ int main(int argc, char **argv) {
   bool dumpBackendExpr = false;
   bool runCpu = false;
   bool solveConstraints = false;
+  std::string constraintCsvPath;
   std::unordered_map<std::string, double> constraintParameters;
   size_t steps = 10;
   double initScalar = 1.0;
@@ -258,6 +294,19 @@ int main(int argc, char **argv) {
     } else if (arg == "--run-cpu") {
       runCpu = true;
     } else if (arg == "--solve-constraints") {
+      solveConstraints = true;
+    } else if (arg == "--export-constraint-csv" ||
+               arg.rfind("--export-constraint-csv=", 0) == 0) {
+      if (arg == "--export-constraint-csv") {
+        if (i + 1 >= argc)
+          throw std::runtime_error("--export-constraint-csv expects a path");
+        constraintCsvPath = argv[++i];
+      } else {
+        constraintCsvPath =
+            arg.substr(std::string("--export-constraint-csv=").size());
+      }
+      if (constraintCsvPath.empty())
+        throw std::runtime_error("--export-constraint-csv expects a path");
       solveConstraints = true;
     } else if (arg == "--param" || arg.rfind("--param=", 0) == 0) {
       std::string assignment;
@@ -433,6 +482,14 @@ int main(int argc, char **argv) {
     printDiagnostic(std::cerr, "<command line>", {}, DiagnosticLevel::Error,
                     "--emit-mlir/--emit-llvm/--emit-host-header require exactly one input file",
                     {}, "E9002", opts);
+    return 1;
+  }
+  if (!constraintCsvPath.empty() && files.size() != 1) {
+    PrintDiagnosticOptions opts;
+    opts.colorMode = colorMode;
+    printDiagnostic(std::cerr, "<command line>", {}, DiagnosticLevel::Error,
+                    "--export-constraint-csv requires exactly one input file",
+                    {}, "E9003", opts);
     return 1;
   }
 
@@ -650,6 +707,25 @@ int main(int argc, char **argv) {
                         << "\n";
             }
           }
+        }
+        if (solution.physicalCtt) {
+          const auto &physical = *solution.physicalCtt;
+          std::cout << "[ConstraintSolve] physical_ctt basis="
+                    << physical.basis
+                    << " points=" << physical.meanCurvature.size()
+                    << " gamma_radial_inner="
+                    << physical.spatialMetricRadial.front()
+                    << " gamma_radial_outer="
+                    << physical.spatialMetricRadial.back()
+                    << " k_radial_inner="
+                    << physical.extrinsicCurvatureRadial.front()
+                    << " k_radial_outer="
+                    << physical.extrinsicCurvatureRadial.back() << "\n";
+        }
+        if (!constraintCsvPath.empty()) {
+          writeConstraintCsv(constraintCsvPath, solution);
+          std::cout << "[ConstraintSolve] exported_csv=" << constraintCsvPath
+                    << "\n";
         }
       }
 
