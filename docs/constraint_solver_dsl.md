@@ -118,14 +118,15 @@ The current numerical backend supports:
 
 - one or more spherical shell domains in declaration order;
 - an optional compactified final domain;
-- one scalar unknown and one scalar residual;
+- one or more scalar unknowns with the same number of scalar residuals;
 - Chebyshev-Lobatto collocation;
 - the radial spherical Laplacian
   `d2/dr2 + (2/r) d/dr`;
 - algebraic nonlinearities, powers, and radial derivatives;
 - global `inner` and `outer` Dirichlet conditions;
 - automatic `C0` and `C1` matching at every declared interface;
-- forward-mode automatic differentiation of the discrete residual;
+- forward-mode automatic differentiation of the complete coupled residual,
+  including off-diagonal Jacobian blocks;
 - damped Newton iteration and a pivoted dense linear solve.
 
 Run the Brill-Lindquist radial validation problem from `build`:
@@ -154,6 +155,30 @@ This problem joins `[1,4]` to `[4,infinity]`. It imposes both value and radial
 derivative continuity at `r = 4`, applies `psi(infinity) = 1`, and reproduces
 `psi = 1 + mass/(2*r)` with a maximum error below `1e-9`.
 
+For a coupled system, unknowns and equations are paired by declaration order.
+Every global boundary must constrain every unknown. For example, the coupled
+regression problem contains
+
+```tensorium
+unknown scalar psi
+unknown scalar w
+
+equation scalar hamiltonian = laplacian(psi) + psi * w - 1
+equation scalar momentum = laplacian(w) + psi^2 - 1
+```
+
+Run it with:
+
+```sh
+./tools/driver/Tensorium_cc --solve-constraints \
+  ../tests/fixtures/gr/coupled_nonlinear_radial_solve.tn
+```
+
+This fixture solves both unknowns simultaneously across a finite shell and a
+compactified exterior domain. It converges from unequal seeds to the exact
+constant solution `psi = w = 1` and exercises the cross-unknown Jacobian
+entries.
+
 ## Pipeline status
 
 ```text
@@ -163,9 +188,9 @@ constrained initial_data DSL
   -> ConstraintProblemIR
   -> multidomain radial maps and Chebyshev-Lobatto collocation [implemented]
   -> compactified exterior and C0/C1 matching [implemented]
-  -> discrete residual and automatic Jacobian [implemented subset]
+  -> coupled scalar residual and automatic Jacobian [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] coupled scalar/vector/tensor systems
+  -> [next] vector/tensor unknowns and component-aware residual layout
   -> [next] export gamma_ij, K_ij, alpha, and beta^i
 ```
 

@@ -148,8 +148,9 @@ CONSTRAINT_INITIAL_DATA_VALID_TESTS=(
 )
 
 CONSTRAINT_SOLVE_TESTS=(
-  "tests/fixtures/gr/brill_lindquist_radial_solve.tn|49|1"
-  "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn|42|2"
+  "tests/fixtures/gr/brill_lindquist_radial_solve.tn|49|1|1"
+  "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn|42|2|1"
+  "tests/fixtures/gr/coupled_nonlinear_radial_solve.tn|22|2|5"
 )
 
 GR_FIXTURES=(
@@ -467,12 +468,12 @@ for f in "${CONSTRAINT_INITIAL_DATA_VALID_TESTS[@]}"; do
 done
 
 for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
-  IFS='|' read -r f expected_points expected_domains <<< "$spec"
+  IFS='|' read -r f expected_points expected_domains expected_iterations <<< "$spec"
   echo "[CONSTRAINT SOLVE OK EXPECTED] $f"
   OUT_FILE="$OUT/$(basename "$f").solve.txt"
   "$BIN" --solve-constraints --param mass=1 "$f" > "$OUT_FILE"
-  if ! grep -q "converged=true iterations=1" "$OUT_FILE"; then
-    echo "ERROR: expected one-step Newton convergence for $f"
+  if ! grep -q "converged=true iterations=$expected_iterations" "$OUT_FILE"; then
+    echo "ERROR: expected $expected_iterations Newton iterations for $f"
     cat "$OUT_FILE"
     exit 1
   fi

@@ -30,8 +30,8 @@ struct ConstraintSolution {
   std::vector<double> residualHistory;
 };
 
-// Scalar radial constraint backend with Chebyshev-Lobatto shell domains,
-// optional compactified infinity, C0/C1 interface matching, and Newton solve.
+// Coupled scalar radial constraint backend with Chebyshev-Lobatto shell
+// domains, optional compactified infinity, C0/C1 matching, and Newton solve.
 ConstraintSolution
 solveRadialConstraintProblem(const backend::ModuleIR &module,
                              const ConstraintSolveRequest &request = {});

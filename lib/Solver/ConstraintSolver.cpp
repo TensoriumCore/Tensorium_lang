@@ -25,6 +25,8 @@ struct DualGrid {
   std::vector<double> tangent;
 };
 
+using UnknownState = std::unordered_map<std::string, DualGrid>;
+
 [[noreturn]] void fail(const std::string &message) {
   throw std::runtime_error("constraint solver: " + message);
 }
@@ -173,9 +175,7 @@ DualGrid applyRadialLaplacian(const DualGrid &input, const RadialGrid &grid) {
 }
 
 DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
-                  const std::string &unknownName,
-                  const std::vector<double> &unknown,
-                  const std::vector<double> &unknownTangent,
+                  const UnknownState &unknowns,
                   const std::unordered_map<std::string, double> &parameters) {
   using backend::ExprIR;
   if (!expr)
@@ -189,10 +189,12 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
   case ExprIR::Kind::Var: {
     const auto *variable = static_cast<const backend::VarIR *>(expr);
     switch (variable->vkind) {
-    case backend::VarKind::Unknown:
-      if (variable->name != unknownName)
-        fail("unsupported additional unknown '" + variable->name + "'");
-      return {unknown, unknownTangent};
+    case backend::VarKind::Unknown: {
+      auto it = unknowns.find(variable->name);
+      if (it == unknowns.end())
+        fail("missing discrete values for unknown '" + variable->name + "'");
+      return it->second;
+    }
     case backend::VarKind::Param: {
       auto it = parameters.find(variable->name);
       if (it == parameters.end())
@@ -211,10 +213,8 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
   }
   case ExprIR::Kind::Binary: {
     const auto *binary = static_cast<const backend::BinaryIR *>(expr);
-    DualGrid lhs = evalExpr(binary->lhs.get(), grid, unknownName, unknown,
-                            unknownTangent, parameters);
-    DualGrid rhs = evalExpr(binary->rhs.get(), grid, unknownName, unknown,
-                            unknownTangent, parameters);
+    DualGrid lhs = evalExpr(binary->lhs.get(), grid, unknowns, parameters);
+    DualGrid rhs = evalExpr(binary->rhs.get(), grid, unknowns, parameters);
     DualGrid result = constantGrid(grid.size, 0.0);
     for (std::size_t i = 0; i < grid.size; ++i) {
       if (binary->op == "+") {
@@ -255,8 +255,8 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
     const auto *call = static_cast<const backend::CallIR *>(expr);
     if (call->args.size() != 1)
       fail("radial call '" + call->callee + "' expects one argument");
-    DualGrid argument = evalExpr(call->args[0].get(), grid, unknownName,
-                                 unknown, unknownTangent, parameters);
+    DualGrid argument =
+        evalExpr(call->args[0].get(), grid, unknowns, parameters);
     if (call->callee == "laplacian")
       return applyRadialLaplacian(argument, grid);
 
@@ -283,8 +283,7 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
   case ExprIR::Kind::PartialDerivative: {
     const auto *derivative =
         static_cast<const backend::PartialDerivativeIR *>(expr);
-    DualGrid input = evalExpr(derivative->in.get(), grid, unknownName, unknown,
-                              unknownTangent, parameters);
+    DualGrid input = evalExpr(derivative->in.get(), grid, unknowns, parameters);
     return {applyMatrix(grid.firstDerivative, grid.size, input.value),
             applyMatrix(grid.firstDerivative, grid.size, input.tangent)};
   }
@@ -384,75 +383,93 @@ std::vector<double> domainSlice(const std::vector<double> &values,
 
 DualGrid
 evaluateResidual(const backend::ConstraintProblemIR &problem,
-                 const backend::ConstraintEquationIR &equation,
                  const RadialDomainLayout &layout,
-                 const std::string &unknownName,
                  const std::vector<double> &unknown,
                  const std::vector<double> &unknownTangent,
                  const std::unordered_map<std::string, double> &parameters) {
-  if (unknown.size() != layout.totalSize ||
-      unknownTangent.size() != layout.totalSize)
+  const std::size_t dofCount = problem.unknowns.size() * layout.totalSize;
+  if (unknown.size() != dofCount || unknownTangent.size() != dofCount)
     fail("internal multidomain unknown size mismatch");
 
-  DualGrid residual = constantGrid(layout.totalSize, 0.0);
-  std::vector<std::vector<double>> localUnknowns;
-  std::vector<std::vector<double>> localTangents;
-  localUnknowns.reserve(layout.grids.size());
-  localTangents.reserve(layout.grids.size());
+  DualGrid residual = constantGrid(dofCount, 0.0);
+  std::vector<UnknownState> localStates(layout.grids.size());
   for (std::size_t domainIndex = 0; domainIndex < layout.grids.size();
        ++domainIndex) {
     const auto &grid = layout.grids[domainIndex];
-    const std::size_t offset = layout.offsets[domainIndex];
-    localUnknowns.push_back(domainSlice(unknown, offset, grid.size));
-    localTangents.push_back(domainSlice(unknownTangent, offset, grid.size));
-    DualGrid localResidual =
-        evalExpr(equation.residual.get(), grid, unknownName,
-                 localUnknowns.back(), localTangents.back(), parameters);
-    for (std::size_t i = 1; i + 1 < grid.size; ++i) {
-      residual.value[offset + i] = localResidual.value[i];
-      residual.tangent[offset + i] = localResidual.tangent[i];
+    for (std::size_t unknownIndex = 0; unknownIndex < problem.unknowns.size();
+         ++unknownIndex) {
+      const std::size_t offset =
+          unknownIndex * layout.totalSize + layout.offsets[domainIndex];
+      localStates[domainIndex].emplace(
+          problem.unknowns[unknownIndex].name,
+          DualGrid{domainSlice(unknown, offset, grid.size),
+                   domainSlice(unknownTangent, offset, grid.size)});
     }
   }
 
-  const auto &inner = getBoundaryCondition(problem, "inner", unknownName);
-  const auto &outer = getBoundaryCondition(problem, "outer", unknownName);
   const auto &firstGrid = layout.grids.front();
   const auto &lastGrid = layout.grids.back();
-  DualGrid innerValue =
-      evalExpr(inner.rhs.get(), firstGrid, unknownName, localUnknowns.front(),
-               localTangents.front(), parameters);
-  DualGrid outerValue =
-      evalExpr(outer.rhs.get(), lastGrid, unknownName, localUnknowns.back(),
-               localTangents.back(), parameters);
-  residual.value.front() =
-      localUnknowns.front().front() - innerValue.value.front();
-  residual.tangent.front() =
-      localTangents.front().front() - innerValue.tangent.front();
-  residual.value.back() = localUnknowns.back().back() - outerValue.value.back();
-  residual.tangent.back() =
-      localTangents.back().back() - outerValue.tangent.back();
+  for (std::size_t unknownIndex = 0; unknownIndex < problem.unknowns.size();
+       ++unknownIndex) {
+    const std::string &unknownName = problem.unknowns[unknownIndex].name;
+    const auto &equation = problem.equations[unknownIndex];
+    const std::size_t rowBase = unknownIndex * layout.totalSize;
 
-  for (std::size_t i = 0; i + 1 < layout.grids.size(); ++i) {
-    const auto &leftGrid = layout.grids[i];
-    const auto &rightGrid = layout.grids[i + 1];
-    const std::size_t leftRow = layout.offsets[i] + leftGrid.size - 1;
-    const std::size_t rightRow = layout.offsets[i + 1];
-    residual.value[leftRow] =
-        localUnknowns[i].back() - localUnknowns[i + 1].front();
-    residual.tangent[leftRow] =
-        localTangents[i].back() - localTangents[i + 1].front();
+    for (std::size_t domainIndex = 0; domainIndex < layout.grids.size();
+         ++domainIndex) {
+      const auto &grid = layout.grids[domainIndex];
+      const std::size_t offset = rowBase + layout.offsets[domainIndex];
+      DualGrid localResidual = evalExpr(equation.residual.get(), grid,
+                                        localStates[domainIndex], parameters);
+      for (std::size_t i = 1; i + 1 < grid.size; ++i) {
+        residual.value[offset + i] = localResidual.value[i];
+        residual.tangent[offset + i] = localResidual.tangent[i];
+      }
+    }
 
-    const auto leftDerivative =
-        applyMatrix(leftGrid.firstDerivative, leftGrid.size, localUnknowns[i]);
-    const auto rightDerivative = applyMatrix(
-        rightGrid.firstDerivative, rightGrid.size, localUnknowns[i + 1]);
-    const auto leftTangentDerivative =
-        applyMatrix(leftGrid.firstDerivative, leftGrid.size, localTangents[i]);
-    const auto rightTangentDerivative = applyMatrix(
-        rightGrid.firstDerivative, rightGrid.size, localTangents[i + 1]);
-    residual.value[rightRow] = leftDerivative.back() - rightDerivative.front();
-    residual.tangent[rightRow] =
-        leftTangentDerivative.back() - rightTangentDerivative.front();
+    const auto &inner = getBoundaryCondition(problem, "inner", unknownName);
+    const auto &outer = getBoundaryCondition(problem, "outer", unknownName);
+    const DualGrid innerValue =
+        evalExpr(inner.rhs.get(), firstGrid, localStates.front(), parameters);
+    const DualGrid outerValue =
+        evalExpr(outer.rhs.get(), lastGrid, localStates.back(), parameters);
+    const auto &firstUnknown = localStates.front().at(unknownName);
+    const auto &lastUnknown = localStates.back().at(unknownName);
+    residual.value[rowBase] =
+        firstUnknown.value.front() - innerValue.value.front();
+    residual.tangent[rowBase] =
+        firstUnknown.tangent.front() - innerValue.tangent.front();
+    residual.value[rowBase + layout.totalSize - 1] =
+        lastUnknown.value.back() - outerValue.value.back();
+    residual.tangent[rowBase + layout.totalSize - 1] =
+        lastUnknown.tangent.back() - outerValue.tangent.back();
+
+    for (std::size_t i = 0; i + 1 < layout.grids.size(); ++i) {
+      const auto &leftGrid = layout.grids[i];
+      const auto &rightGrid = layout.grids[i + 1];
+      const auto &leftUnknown = localStates[i].at(unknownName);
+      const auto &rightUnknown = localStates[i + 1].at(unknownName);
+      const std::size_t leftRow =
+          rowBase + layout.offsets[i] + leftGrid.size - 1;
+      const std::size_t rightRow = rowBase + layout.offsets[i + 1];
+      residual.value[leftRow] =
+          leftUnknown.value.back() - rightUnknown.value.front();
+      residual.tangent[leftRow] =
+          leftUnknown.tangent.back() - rightUnknown.tangent.front();
+
+      const auto leftDerivative = applyMatrix(leftGrid.firstDerivative,
+                                              leftGrid.size, leftUnknown.value);
+      const auto rightDerivative = applyMatrix(
+          rightGrid.firstDerivative, rightGrid.size, rightUnknown.value);
+      const auto leftTangentDerivative = applyMatrix(
+          leftGrid.firstDerivative, leftGrid.size, leftUnknown.tangent);
+      const auto rightTangentDerivative = applyMatrix(
+          rightGrid.firstDerivative, rightGrid.size, rightUnknown.tangent);
+      residual.value[rightRow] =
+          leftDerivative.back() - rightDerivative.front();
+      residual.tangent[rightRow] =
+          leftTangentDerivative.back() - rightTangentDerivative.front();
+    }
   }
   return residual;
 }
@@ -510,36 +527,53 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
   const auto &problem = *module.constraintProblem;
   if (problem.domains.empty())
     fail("radial backend requires at least one domain");
-  if (problem.unknowns.size() != 1 ||
-      !problem.unknowns.front().tensorType.isScalar())
-    fail("radial backend currently requires exactly one scalar unknown");
-  if (problem.equations.size() != 1 ||
-      !problem.equations.front().tensorType.isScalar())
-    fail("radial backend currently requires exactly one scalar equation");
+  if (problem.unknowns.empty() ||
+      problem.unknowns.size() != problem.equations.size())
+    fail("radial backend requires one scalar equation per scalar unknown");
+  for (const auto &unknownDecl : problem.unknowns)
+    if (!unknownDecl.tensorType.isScalar())
+      fail("radial backend currently supports only scalar unknowns");
+  for (const auto &equation : problem.equations)
+    if (!equation.tensorType.isScalar())
+      fail("radial backend currently supports only scalar equations");
   if (problem.solve.nonlinear != "newton" || problem.solve.linear != "direct")
     fail("radial backend currently requires newton with a direct linear solve");
 
-  const auto &unknownDecl = problem.unknowns.front();
-  const auto &equation = problem.equations.front();
   RadialDomainLayout layout = buildDomainLayout(problem);
-  const std::vector<double> zeroTangent(layout.totalSize, 0.0);
-  std::vector<double> unknown(layout.totalSize, 0.0);
+  const std::size_t dofCount = problem.unknowns.size() * layout.totalSize;
+  if (dofCount > 513)
+    fail("dense radial backend limits coupled systems to 513 scalar degrees "
+         "of freedom");
+  const std::vector<double> zeroTangent(dofCount, 0.0);
+  std::vector<double> unknown(dofCount, 0.0);
 
   for (const auto &seed : problem.seeds) {
-    if (seed.unknown != unknownDecl.name)
+    auto target = std::find_if(problem.unknowns.begin(), problem.unknowns.end(),
+                               [&](const backend::ConstraintUnknownIR &decl) {
+                                 return decl.name == seed.unknown;
+                               });
+    if (target == problem.unknowns.end())
       continue;
+    const std::size_t targetIndex =
+        static_cast<std::size_t>(target - problem.unknowns.begin());
     for (std::size_t domainIndex = 0; domainIndex < layout.grids.size();
          ++domainIndex) {
       const auto &grid = layout.grids[domainIndex];
-      const std::size_t offset = layout.offsets[domainIndex];
-      auto localUnknown = domainSlice(unknown, offset, grid.size);
-      std::vector<double> localZero(grid.size, 0.0);
-      auto localSeed = evalExpr(seed.rhs.get(), grid, unknownDecl.name,
-                                localUnknown, localZero, request.parameters)
-                           .value;
+      UnknownState localState;
+      for (std::size_t unknownIndex = 0; unknownIndex < problem.unknowns.size();
+           ++unknownIndex) {
+        const std::size_t offset =
+            unknownIndex * layout.totalSize + layout.offsets[domainIndex];
+        localState.emplace(problem.unknowns[unknownIndex].name,
+                           DualGrid{domainSlice(unknown, offset, grid.size),
+                                    std::vector<double>(grid.size, 0.0)});
+      }
+      const std::size_t offset =
+          targetIndex * layout.totalSize + layout.offsets[domainIndex];
+      auto localSeed =
+          evalExpr(seed.rhs.get(), grid, localState, request.parameters).value;
       std::copy(localSeed.begin(), localSeed.end(), unknown.begin() + offset);
     }
-    break;
   }
 
   ConstraintSolution solution;
@@ -556,9 +590,8 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
       static_cast<std::size_t>(problem.solve.maxIterations);
 
   for (std::size_t iteration = 0; iteration <= maxIterations; ++iteration) {
-    DualGrid residual =
-        evaluateResidual(problem, equation, layout, unknownDecl.name, unknown,
-                         zeroTangent, request.parameters);
+    DualGrid residual = evaluateResidual(problem, layout, unknown, zeroTangent,
+                                         request.parameters);
     const double norm = infinityNorm(residual.value);
     solution.residualHistory.push_back(norm);
     solution.residualNorm = norm;
@@ -572,33 +605,32 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
     if (iteration == maxIterations)
       break;
 
-    Matrix jacobian(layout.totalSize * layout.totalSize, 0.0);
-    for (std::size_t col = 0; col < layout.totalSize; ++col) {
-      std::vector<double> direction(layout.totalSize, 0.0);
+    Matrix jacobian(dofCount * dofCount, 0.0);
+    for (std::size_t col = 0; col < dofCount; ++col) {
+      std::vector<double> direction(dofCount, 0.0);
       direction[col] = 1.0;
-      DualGrid differentiated =
-          evaluateResidual(problem, equation, layout, unknownDecl.name, unknown,
-                           direction, request.parameters);
-      for (std::size_t row = 0; row < layout.totalSize; ++row)
-        at(jacobian, layout.totalSize, row, col) = differentiated.tangent[row];
+      DualGrid differentiated = evaluateResidual(problem, layout, unknown,
+                                                 direction, request.parameters);
+      for (std::size_t row = 0; row < dofCount; ++row)
+        at(jacobian, dofCount, row, col) = differentiated.tangent[row];
     }
 
-    std::vector<double> rhs(layout.totalSize);
-    for (std::size_t i = 0; i < layout.totalSize; ++i)
+    std::vector<double> rhs(dofCount);
+    for (std::size_t i = 0; i < dofCount; ++i)
       rhs[i] = -residual.value[i];
     const std::vector<double> update =
-        solveDense(std::move(jacobian), std::move(rhs), layout.totalSize);
+        solveDense(std::move(jacobian), std::move(rhs), dofCount);
 
     bool accepted = false;
     double damping = 1.0;
     for (int lineSearch = 0; lineSearch < 16; ++lineSearch) {
       std::vector<double> candidate = unknown;
-      for (std::size_t i = 0; i < layout.totalSize; ++i)
+      for (std::size_t i = 0; i < dofCount; ++i)
         candidate[i] += damping * update[i];
-      const double candidateNorm = infinityNorm(
-          evaluateResidual(problem, equation, layout, unknownDecl.name,
-                           candidate, zeroTangent, request.parameters)
-              .value);
+      const double candidateNorm =
+          infinityNorm(evaluateResidual(problem, layout, candidate, zeroTangent,
+                                        request.parameters)
+                           .value);
       if (std::isfinite(candidateNorm) && candidateNorm < norm) {
         unknown = std::move(candidate);
         accepted = true;
@@ -610,7 +642,12 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
       break;
   }
 
-  solution.unknowns.emplace(unknownDecl.name, std::move(unknown));
+  for (std::size_t unknownIndex = 0; unknownIndex < problem.unknowns.size();
+       ++unknownIndex) {
+    const std::size_t offset = unknownIndex * layout.totalSize;
+    solution.unknowns.emplace(problem.unknowns[unknownIndex].name,
+                              domainSlice(unknown, offset, layout.totalSize));
+  }
   return solution;
 }
 
