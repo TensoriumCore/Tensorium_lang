@@ -145,6 +145,9 @@ void canonicalizeDifferentialIR(backend::ModuleIR &module) {
         canonicalizeExpr(condition.rhs, connectionAvailable);
     for (auto &seed : problem.seeds)
       canonicalizeExpr(seed.rhs, connectionAvailable);
+    if (problem.cttReconstruction.enabled)
+      canonicalizeExpr(problem.cttReconstruction.meanCurvature,
+                       connectionAvailable);
   }
 }
 

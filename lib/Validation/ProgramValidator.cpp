@@ -171,6 +171,10 @@ ValidationResult validation::validateProgram(const ModuleIR &m) {
         validateAssignment(condition, "boundary '" + boundary.region + "'");
     for (const auto &seed : problem.seeds)
       validateAssignment(seed, "constraint seed");
+    if (problem.cttReconstruction.enabled) {
+      validateLocalUseOrder(problem.cttReconstruction.meanCurvature.get(),
+                            noLocals, res, "CTT reconstruction");
+    }
   }
 
   return res;

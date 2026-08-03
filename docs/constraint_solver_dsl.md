@@ -233,18 +233,67 @@ w(r) = amplitude * r^(-1/2),
 because both the Hamiltonian terms and the momentum terms cancel pairwise.
 It is solved on two matched shells from deliberately perturbed seeds:
 
+```tensorium
+reconstruct ctt {
+  conformal_factor = psi
+  radial_vector = w
+  mean_curvature = 3 * amplitude * r^(-1.5)
+}
+```
+
+The reconstruction block identifies the solved conformal factor and radial
+vector potential and supplies the prescribed mean-curvature expression. It
+then creates physical spatial-metric and extrinsic-curvature profiles.
+
 ```sh
 ./tools/driver/Tensorium_cc \
   --solve-constraints --param amplitude=0.2 \
   ../tests/fixtures/gr/ctt_radial_vacuum_solve.tn
 ```
 
+The profiles use the flat spherical orthonormal coframe
+`(dr, r dtheta, r sin(theta) dphi)`. If `q = w' - w/r`, the stored diagonal
+profiles are
+
+```text
+gamma_radial     = psi^4
+gamma_tangential = psi^4
+k_radial         = psi^(-2) (4/3) q + (1/3) psi^4 K
+k_tangential     = psi^(-2) (-2/3) q + (1/3) psi^4 K.
+```
+
+They convert to the spherical coordinate basis as
+
+```text
+gamma_rr       = gamma_radial
+gamma_thetatheta = r^2 gamma_tangential
+gamma_phiphi     = r^2 sin(theta)^2 gamma_tangential
+
+K_rr           = k_radial
+K_thetatheta     = r^2 k_tangential
+K_phiphi         = r^2 sin(theta)^2 k_tangential.
+```
+
+Export all collocation points to a CSV file with:
+
+```sh
+./tools/driver/Tensorium_cc \
+  --export-constraint-csv ctt_initial_data.csv \
+  --param amplitude=0.2 \
+  ../tests/fixtures/gr/ctt_radial_vacuum_solve.tn
+```
+
+The CSV records the domain name, radius, solved `psi` and `w`, prescribed
+mean curvature, and the four reconstructed physical profiles. Interface
+points occur once for each adjacent domain, preserving the spectral domain
+layout.
+
 This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
 interval under spherical symmetry and a conformally flat ansatz. It is not yet
 a complete asymptotically flat data set or generic CTT/XCTS: the conformal
-metric is fixed, `w` is a radial vector amplitude rather than three independent
-angular fields, and the solver does not yet reconstruct and export the
-physical `gamma_ij` and `K_ij` tensors.
+metric is fixed and `w` is a radial vector amplitude rather than three
+independent angular fields. The reconstructed tensors are radial profiles;
+interpolation onto an evolution grid is still a separate step.
 
 ## Rank-one component layout
 
@@ -293,8 +342,9 @@ constrained initial_data DSL
   -> compactified exterior and C0/C1 matching [implemented]
   -> coupled scalar/rank-one component layout and Jacobian [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
+  -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] reconstruct and export physical gamma_ij and K_ij
+  -> [next] interpolate physical profiles into evolution-field buffers
   -> [next] generic covariant contractions and rank-two unknowns
 ```
 

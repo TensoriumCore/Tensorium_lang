@@ -495,7 +495,25 @@ for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
     cat "$OUT_FILE"
     exit 1
   fi
+  if [[ "$f" == *"ctt_radial_vacuum_solve.tn"* ]] &&
+     ! grep -q "physical_ctt basis=flat_spherical_orthonormal_coframe points=50" "$OUT_FILE"; then
+    echo "ERROR: expected reconstructed CTT physical fields for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
 done
+
+CTT_CSV="$OUT/ctt_radial_physical.csv"
+"$BIN" --export-constraint-csv "$CTT_CSV" --param amplitude=0.2 \
+  tests/fixtures/gr/ctt_radial_vacuum_solve.tn > /dev/null
+if [[ $(wc -l < "$CTT_CSV") -ne 51 ]]; then
+  echo "ERROR: expected header plus 50 CTT physical CSV rows"
+  exit 1
+fi
+if ! grep -q '^domain,r,conformal_factor,radial_vector,mean_curvature,gamma_radial,gamma_tangential,k_radial,k_tangential$' "$CTT_CSV"; then
+  echo "ERROR: unexpected CTT physical CSV schema"
+  exit 1
+fi
 
 echo
 echo "=============================="

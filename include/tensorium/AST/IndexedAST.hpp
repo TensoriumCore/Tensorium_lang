@@ -96,11 +96,19 @@ struct IndexedConstraintBoundary {
   std::vector<IndexedConstraintAssignment> conditions;
 };
 
+struct IndexedConstraintCttReconstruction {
+  bool enabled = false;
+  std::string conformalFactor;
+  std::string radialVectorPotential;
+  std::unique_ptr<IndexedExpr> meanCurvature;
+};
+
 struct IndexedConstraintProblem {
   std::string name;
   std::vector<IndexedConstraintEquation> equations;
   std::vector<IndexedConstraintBoundary> boundaries;
   std::vector<IndexedConstraintAssignment> seeds;
+  IndexedConstraintCttReconstruction cttReconstruction;
 };
 
 } // namespace tensorium

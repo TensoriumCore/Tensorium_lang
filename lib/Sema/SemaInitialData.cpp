@@ -432,6 +432,32 @@ void SemanticAnalyzer::validateConstraintProblem(
       validateSpatialIndex(index);
   }
 
+  if (problem.cttReconstruction.enabled) {
+    auto requireScalarUnknown = [&](const std::string &name,
+                                    const std::string &role) {
+      auto it = std::find_if(problem.unknowns.begin(), problem.unknowns.end(),
+                             [&](const ConstraintUnknownDecl &unknown) {
+                               return unknown.name == name;
+                             });
+      if (it == problem.unknowns.end()) {
+        throw std::runtime_error("reconstruct ctt " + role +
+                                 " references unknown symbol '" + name +
+                                 "'");
+      }
+      if (it->type.up != 0 || it->type.down != 0) {
+        throw std::runtime_error("reconstruct ctt " + role + " '" + name +
+                                 "' must be a scalar radial unknown");
+      }
+    };
+    requireScalarUnknown(problem.cttReconstruction.conformalFactor,
+                         "conformal_factor");
+    requireScalarUnknown(problem.cttReconstruction.radialVectorPotential,
+                         "radial_vector");
+    if (!problem.cttReconstruction.meanCurvature)
+      throw std::runtime_error(
+          "reconstruct ctt requires a mean_curvature expression");
+  }
+
   std::set<std::string> equationNames;
   for (const auto &equation : problem.equations) {
     if (!equationNames.insert(equation.name).second)

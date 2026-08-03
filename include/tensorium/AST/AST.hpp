@@ -225,6 +225,13 @@ struct ConstraintSolveConfig {
   int maxIterations = 30;
 };
 
+struct ConstraintCttReconstructionDecl {
+  bool enabled = false;
+  std::string conformalFactor;
+  std::string radialVectorPotential;
+  std::unique_ptr<Expr> meanCurvature;
+};
+
 struct ConstraintProblemDecl {
   std::string name;
   std::vector<SpectralDomainDecl> domains;
@@ -233,6 +240,7 @@ struct ConstraintProblemDecl {
   std::vector<ConstraintBoundaryDecl> boundaries;
   std::vector<ConstraintInterfaceDecl> interfaces;
   std::vector<Assignment> seeds;
+  ConstraintCttReconstructionDecl cttReconstruction;
   ConstraintSolveConfig solve;
   bool hasSolve = false;
 };

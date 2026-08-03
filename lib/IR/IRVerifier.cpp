@@ -171,6 +171,8 @@ ValidationResult verifyIR(const backend::ModuleIR &module) {
         verifyExpr(condition.rhs.get(), ctx);
     for (const auto &seed : problem.seeds)
       verifyExpr(seed.rhs.get(), ctx);
+    if (problem.cttReconstruction.enabled)
+      verifyExpr(problem.cttReconstruction.meanCurvature.get(), ctx);
   }
 
   return result;
