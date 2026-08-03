@@ -55,7 +55,7 @@ struct FieldIR {
   tensorium::ir::TensorType tensorType;
 };
 
-enum class VarKind { Field, Param, Local, Coord };
+enum class VarKind { Field, Param, Local, Coord, Unknown };
 
 struct ExprIR {
   enum class Kind {
@@ -156,8 +156,7 @@ struct InitBinaryIR final : InitExprIR {
   std::unique_ptr<InitExprIR> rhs;
   InitBinaryIR(char o, std::unique_ptr<InitExprIR> L,
                std::unique_ptr<InitExprIR> R)
-      : InitExprIR(Kind::Binary), op(o), lhs(std::move(L)),
-        rhs(std::move(R)) {}
+      : InitExprIR(Kind::Binary), op(o), lhs(std::move(L)), rhs(std::move(R)) {}
 };
 
 struct InitCallIR final : InitExprIR {
@@ -202,9 +201,66 @@ struct InitialDataIR {
   Split3P1BindingIR split3p1;
 };
 
+struct SpectralDomainIR {
+  std::string name;
+  std::string coordinates;
+  std::string topology;
+  std::vector<int> resolution;
+  std::string basis;
+  std::vector<double> bounds;
+};
+
+struct ConstraintUnknownIR {
+  std::string name;
+  tensorium::ir::TensorType tensorType;
+  std::vector<std::string> indices;
+};
+
+struct ConstraintEquationIR {
+  std::string name;
+  tensorium::ir::TensorType tensorType;
+  std::vector<std::string> indices;
+  std::unique_ptr<ExprIR> residual;
+};
+
+struct ConstraintAssignmentIR {
+  std::string unknown;
+  std::vector<std::string> indices;
+  std::unique_ptr<ExprIR> rhs;
+};
+
+struct ConstraintBoundaryIR {
+  std::string region;
+  std::vector<ConstraintAssignmentIR> conditions;
+};
+
+struct ConstraintInterfaceIR {
+  std::string innerDomain;
+  std::string outerDomain;
+};
+
+struct ConstraintSolveIR {
+  std::string nonlinear;
+  std::string linear;
+  double tolerance = 0.0;
+  int maxIterations = 0;
+};
+
+struct ConstraintProblemIR {
+  std::string name;
+  std::vector<SpectralDomainIR> domains;
+  std::vector<ConstraintUnknownIR> unknowns;
+  std::vector<ConstraintEquationIR> equations;
+  std::vector<ConstraintBoundaryIR> boundaries;
+  std::vector<ConstraintInterfaceIR> interfaces;
+  std::vector<ConstraintAssignmentIR> seeds;
+  ConstraintSolveIR solve;
+};
+
 struct ModuleIR {
   std::optional<SimulationIR> simulation;
   std::optional<InitialDataIR> initialData;
+  std::optional<ConstraintProblemIR> constraintProblem;
   std::vector<FieldIR> fields;
   std::vector<EvolutionIR> evolutions;
 };

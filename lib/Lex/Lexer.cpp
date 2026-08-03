@@ -86,8 +86,27 @@ Token Lexer::next() {
   if (isdigit((unsigned char)c) ||
       (c == '.' && isdigit((unsigned char)*(src + 1)))) {
     const char *start = src;
-    while (isdigit((unsigned char)*src) || *src == '.')
+    while (isdigit((unsigned char)*src))
       advanceChar();
+    if (*src == '.') {
+      advanceChar();
+      while (isdigit((unsigned char)*src))
+        advanceChar();
+    }
+    if (*src == 'e' || *src == 'E') {
+      const char *exponent = src;
+      const int exponentCol = col;
+      advanceChar();
+      if (*src == '+' || *src == '-')
+        advanceChar();
+      if (!isdigit((unsigned char)*src)) {
+        src = exponent;
+        col = exponentCol;
+      } else {
+        while (isdigit((unsigned char)*src))
+          advanceChar();
+      }
+    }
     return {TokenType::Number, std::string(start, src), tokLine, tokCol};
   }
 

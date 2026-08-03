@@ -16,24 +16,24 @@ using namespace mlir;
 namespace tensorium::mlir {
 namespace {
 
-static Value addScalar(OpBuilder &b, Location loc, FieldType scalarTy, Value lhs,
-                       Value rhs) {
-  return AddOp::create(b, loc, scalarTy, lhs, rhs).getRes();
+static Value addScalar(OpBuilder &b, Location loc, FieldType scalarTy,
+                       Value lhs, Value rhs) {
+  return b.create<AddOp>(loc, scalarTy, lhs, rhs).getRes();
 }
 
-static Value subScalar(OpBuilder &b, Location loc, FieldType scalarTy, Value lhs,
-                       Value rhs) {
-  return SubOp::create(b, loc, scalarTy, lhs, rhs).getRes();
+static Value subScalar(OpBuilder &b, Location loc, FieldType scalarTy,
+                       Value lhs, Value rhs) {
+  return b.create<SubOp>(loc, scalarTy, lhs, rhs).getRes();
 }
 
-static Value mulScalar(OpBuilder &b, Location loc, FieldType scalarTy, Value lhs,
-                       Value rhs) {
-  return MulOp::create(b, loc, scalarTy, lhs, rhs).getRes();
+static Value mulScalar(OpBuilder &b, Location loc, FieldType scalarTy,
+                       Value lhs, Value rhs) {
+  return b.create<MulOp>(loc, scalarTy, lhs, rhs).getRes();
 }
 
-static Value divScalar(OpBuilder &b, Location loc, FieldType scalarTy, Value lhs,
-                       Value rhs) {
-  return DivOp::create(b, loc, scalarTy, lhs, rhs).getRes();
+static Value divScalar(OpBuilder &b, Location loc, FieldType scalarTy,
+                       Value lhs, Value rhs) {
+  return b.create<DivOp>(loc, scalarTy, lhs, rhs).getRes();
 }
 
 struct MetricLoweringPass
@@ -70,24 +70,23 @@ struct MetricLoweringPass
       auto comps = metric.getComponents();
 
       // Spatial metric gamma_ij as 3x3 block of g_{mu,nu}.
-      std::array<Value, 9> gamma = {
-          comps[5],  comps[6],  comps[7],
-          comps[9],  comps[10], comps[11],
-          comps[13], comps[14], comps[15]};
+      std::array<Value, 9> gamma = {comps[5],  comps[6],  comps[7],
+                                    comps[9],  comps[10], comps[11],
+                                    comps[13], comps[14], comps[15]};
 
       // beta_i = g_{0i}.
       std::array<Value, 3> beta = {comps[1], comps[2], comps[3]};
 
-      Value gammaVal = BuildCovTensor2Op::create(
-                           b, loc,
-                           llvm::cast<FieldType>(decomp.getGamma().getType()),
-                           ValueRange(gamma))
-                           .getOut();
-      Value betaVal = BuildCovectorOp::create(
-                          b, loc,
-                          llvm::cast<FieldType>(decomp.getBeta().getType()),
-                          ValueRange(beta))
-                          .getOut();
+      Value gammaVal =
+          b.create<BuildCovTensor2Op>(
+               loc, llvm::cast<FieldType>(decomp.getGamma().getType()),
+               ValueRange(gamma))
+              .getOut();
+      Value betaVal =
+          b.create<BuildCovectorOp>(
+               loc, llvm::cast<FieldType>(decomp.getBeta().getType()),
+               ValueRange(beta))
+              .getOut();
 
       // Inverse gammaU = inverse(gamma) via adjugate/determinant.
       Value a = gamma[0], bb = gamma[1], c = gamma[2];
@@ -126,54 +125,57 @@ struct MetricLoweringPass
       Value aC00 = mulScalar(b, loc, scalarTy, a, c00);
       Value bC01 = mulScalar(b, loc, scalarTy, bb, c01);
       Value cC02 = mulScalar(b, loc, scalarTy, c, c02);
-      Value det = addScalar(b, loc, scalarTy, addScalar(b, loc, scalarTy, aC00, bC01), cC02);
+      Value det = addScalar(b, loc, scalarTy,
+                            addScalar(b, loc, scalarTy, aC00, bC01), cC02);
 
-      std::array<Value, 9> gammaU = {
-          divScalar(b, loc, scalarTy, c00, det),
-          divScalar(b, loc, scalarTy, c10, det),
-          divScalar(b, loc, scalarTy, c20, det),
-          divScalar(b, loc, scalarTy, c01, det),
-          divScalar(b, loc, scalarTy, c11, det),
-          divScalar(b, loc, scalarTy, c21, det),
-          divScalar(b, loc, scalarTy, c02, det),
-          divScalar(b, loc, scalarTy, c12, det),
-          divScalar(b, loc, scalarTy, c22, det)};
+      std::array<Value, 9> gammaU = {divScalar(b, loc, scalarTy, c00, det),
+                                     divScalar(b, loc, scalarTy, c10, det),
+                                     divScalar(b, loc, scalarTy, c20, det),
+                                     divScalar(b, loc, scalarTy, c01, det),
+                                     divScalar(b, loc, scalarTy, c11, det),
+                                     divScalar(b, loc, scalarTy, c21, det),
+                                     divScalar(b, loc, scalarTy, c02, det),
+                                     divScalar(b, loc, scalarTy, c12, det),
+                                     divScalar(b, loc, scalarTy, c22, det)};
 
-      Value gammaUVal = BuildConTensor2Op::create(
-                            b, loc,
-                            llvm::cast<FieldType>(decomp.getGammaU().getType()),
-                            ValueRange(gammaU))
-                            .getOut();
+      Value gammaUVal =
+          b.create<BuildConTensor2Op>(
+               loc, llvm::cast<FieldType>(decomp.getGammaU().getType()),
+               ValueRange(gammaU))
+              .getOut();
 
       // alpha = sqrt(beta_i * beta^i - g00), beta^i = gammaU^{ij} beta_j.
-      Value betaUp0 = addScalar(
-          b, loc, scalarTy,
-          addScalar(b, loc, scalarTy, mulScalar(b, loc, scalarTy, gammaU[0], beta[0]),
-                    mulScalar(b, loc, scalarTy, gammaU[1], beta[1])),
-          mulScalar(b, loc, scalarTy, gammaU[2], beta[2]));
-      Value betaUp1 = addScalar(
-          b, loc, scalarTy,
-          addScalar(b, loc, scalarTy, mulScalar(b, loc, scalarTy, gammaU[3], beta[0]),
-                    mulScalar(b, loc, scalarTy, gammaU[4], beta[1])),
-          mulScalar(b, loc, scalarTy, gammaU[5], beta[2]));
-      Value betaUp2 = addScalar(
-          b, loc, scalarTy,
-          addScalar(b, loc, scalarTy, mulScalar(b, loc, scalarTy, gammaU[6], beta[0]),
-                    mulScalar(b, loc, scalarTy, gammaU[7], beta[1])),
-          mulScalar(b, loc, scalarTy, gammaU[8], beta[2]));
+      Value betaUp0 =
+          addScalar(b, loc, scalarTy,
+                    addScalar(b, loc, scalarTy,
+                              mulScalar(b, loc, scalarTy, gammaU[0], beta[0]),
+                              mulScalar(b, loc, scalarTy, gammaU[1], beta[1])),
+                    mulScalar(b, loc, scalarTy, gammaU[2], beta[2]));
+      Value betaUp1 =
+          addScalar(b, loc, scalarTy,
+                    addScalar(b, loc, scalarTy,
+                              mulScalar(b, loc, scalarTy, gammaU[3], beta[0]),
+                              mulScalar(b, loc, scalarTy, gammaU[4], beta[1])),
+                    mulScalar(b, loc, scalarTy, gammaU[5], beta[2]));
+      Value betaUp2 =
+          addScalar(b, loc, scalarTy,
+                    addScalar(b, loc, scalarTy,
+                              mulScalar(b, loc, scalarTy, gammaU[6], beta[0]),
+                              mulScalar(b, loc, scalarTy, gammaU[7], beta[1])),
+                    mulScalar(b, loc, scalarTy, gammaU[8], beta[2]));
 
-      Value betaDot = addScalar(
-          b, loc, scalarTy,
-          addScalar(b, loc, scalarTy, mulScalar(b, loc, scalarTy, beta[0], betaUp0),
-                    mulScalar(b, loc, scalarTy, beta[1], betaUp1)),
-          mulScalar(b, loc, scalarTy, beta[2], betaUp2));
+      Value betaDot =
+          addScalar(b, loc, scalarTy,
+                    addScalar(b, loc, scalarTy,
+                              mulScalar(b, loc, scalarTy, beta[0], betaUp0),
+                              mulScalar(b, loc, scalarTy, beta[1], betaUp1)),
+                    mulScalar(b, loc, scalarTy, beta[2], betaUp2));
 
       Value alphaSq = subScalar(b, loc, scalarTy, betaDot, comps[0]);
-      Value alphaVal = SqrtOp::create(
-                           b, loc,
-                           llvm::cast<FieldType>(decomp.getAlpha().getType()),
-                           alphaSq)
-                           .getOut();
+      Value alphaVal =
+          b.create<SqrtOp>(
+               loc, llvm::cast<FieldType>(decomp.getAlpha().getType()), alphaSq)
+              .getOut();
 
       decomp.getAlpha().replaceAllUsesWith(alphaVal);
       decomp.getBeta().replaceAllUsesWith(betaVal);

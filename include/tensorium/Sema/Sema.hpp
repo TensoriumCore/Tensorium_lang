@@ -14,12 +14,14 @@ class SemanticAnalyzer {
   const Program &prog;
   CompilationMode mode;
   std::unordered_map<std::string, int> coordIndex;
-  // Active local scope for the block currently being analyzed (metric/evolution).
+  // Active local scope for the block currently being analyzed
+  // (metric/evolution).
   std::unordered_map<std::string, bool> locals;
   // Metric scalar aliases collected from metric assignments with scalar LHS.
   std::unordered_map<std::string, bool> metricScalarLocals;
   std::unordered_set<std::string> params;
   std::unordered_map<std::string, const FieldDecl *> fields;
+  std::unordered_map<std::string, const ConstraintUnknownDecl *> unknowns;
   std::unordered_map<std::string, const ExternDecl *> externSignatures;
   std::vector<FieldDecl> syntheticMetricFields;
   std::unordered_map<std::string, int> indexUseCount;
@@ -35,6 +37,7 @@ class SemanticAnalyzer {
   std::unique_ptr<IndexedExpr> transformExpr(const Expr *e);
   void validateSimulation(const SimulationConfig &sim);
   void validateInitialData(const InitialDataDecl &init);
+  void validateConstraintProblem(const ConstraintProblemDecl &problem);
   void validateInitialDataExpr(const Expr *expr, const std::string &context);
   void enforceMetricFieldRules(const FieldDecl &field);
   bool containsExplicitMetricAntisymmetry(const IndexedExpr *expr) const;
@@ -49,5 +52,7 @@ public:
   const std::vector<std::string> &getWarnings() const { return warnings; }
   IndexedMetric analyzeMetric(const MetricDecl &decl);
   IndexedEvolution analyzeEvolution(const EvolutionDecl &evo);
+  IndexedConstraintProblem
+  analyzeConstraintProblem(const ConstraintProblemDecl &problem);
 };
 } // namespace tensorium

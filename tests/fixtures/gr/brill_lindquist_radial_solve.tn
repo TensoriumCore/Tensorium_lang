@@ -1,0 +1,33 @@
+# Executable radial spectral problem for time-symmetric, conformally flat
+# vacuum initial data on a finite spherical shell.
+params { mass }
+
+initial_data BrillLindquistRadial {
+  domain exterior {
+    coordinates = spherical
+    topology = shell
+    resolution = [49]
+    basis = chebyshev
+    bounds = [1, 20]
+  }
+
+  unknown scalar psi
+  equation scalar hamiltonian = laplacian(psi)
+
+  boundary inner {
+    psi = 1 + mass / (2 * r)
+  }
+
+  boundary outer {
+    psi = 1 + mass / (2 * r)
+  }
+
+  seed psi = 1
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-9
+    max_iterations = 8
+  }
+}

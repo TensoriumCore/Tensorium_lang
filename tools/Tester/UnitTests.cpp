@@ -4,6 +4,7 @@
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
 #include "tensorium/Sema/Sema.hpp"
+#include "tensorium/Solver/ConstraintSolver.hpp"
 #include "tensorium/Validation/IRCanonicalize.hpp"
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumOps.h"
@@ -3560,6 +3561,400 @@ static bool testInitRhsInvariantRejectsMetricInRhs() {
   return true;
 }
 
+static bool testConstraintProblemIRFromFixture() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/brill_lindquist_constraints.tn");
+  const auto &module = result.module;
+  if (module.simulation) {
+    std::cerr << "FAIL: constraint-only initial data should not synthesize a "
+                 "time simulation\n";
+    return false;
+  }
+  if (!module.constraintProblem) {
+    std::cerr << "FAIL: missing ConstraintProblemIR\n";
+    return false;
+  }
+
+  const auto &problem = *module.constraintProblem;
+  if (problem.name != "BrillLindquist" || problem.domains.size() != 2 ||
+      problem.unknowns.size() != 1 || problem.equations.size() != 1 ||
+      problem.boundaries.size() != 1 || problem.interfaces.size() != 1 ||
+      problem.seeds.size() != 1) {
+    std::cerr << "FAIL: constrained initial-data structure was not preserved\n";
+    return false;
+  }
+  if (problem.domains[1].topology != "compactified" ||
+      problem.domains[1].basis != "chebyshev_fourier") {
+    std::cerr << "FAIL: spectral domain metadata was not preserved\n";
+    return false;
+  }
+  if (problem.interfaces[0].innerDomain != "near_puncture" ||
+      problem.interfaces[0].outerDomain != "infinity") {
+    std::cerr << "FAIL: constraint interface metadata was not preserved\n";
+    return false;
+  }
+  if (std::abs(problem.solve.tolerance - 1.0e-10) > 1.0e-20 ||
+      problem.solve.maxIterations != 30 ||
+      problem.solve.nonlinear != "newton") {
+    std::cerr << "FAIL: Newton solve configuration was not preserved\n";
+    return false;
+  }
+
+  auto *laplacian =
+      dynamic_cast<const backend::CallIR *>(problem.equations[0].residual.get());
+  if (!laplacian || laplacian->callee != "laplacian" ||
+      laplacian->args.size() != 1) {
+    std::cerr << "FAIL: Hamiltonian residual is not laplacian(psi)\n";
+    return false;
+  }
+  auto *psi = dynamic_cast<const backend::VarIR *>(laplacian->args[0].get());
+  if (!psi || psi->name != "psi" ||
+      psi->vkind != backend::VarKind::Unknown) {
+    std::cerr << "FAIL: psi must lower as a constraint unknown\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testConstraintRejectsTensorLaplacian() {
+  const std::string source = R"(
+    initial_data BadTensorResidual {
+      domain exterior {
+        coordinates = spherical
+        topology = compactified
+        resolution = [9, 7, 6]
+        basis = chebyshev_fourier
+      }
+      unknown vector beta[i]
+      equation scalar hamiltonian = laplacian(beta)
+      boundary infinity { beta[i] = beta[i] }
+      solve {
+        nonlinear = newton
+        linear = direct
+        tolerance = 1e-8
+        max_iterations = 10
+      }
+    }
+  )";
+
+  try {
+    (void)tensorium::api::parseAndValidateSource(source);
+  } catch (const std::exception &ex) {
+    return std::string(ex.what()).find("laplacian() expects scalar") !=
+           std::string::npos;
+  }
+  std::cerr << "FAIL: tensor-valued laplacian residual was accepted\n";
+  return false;
+}
+
+static bool testConstraintRejectsUnknownBoundaryTarget() {
+  const std::string source = R"(
+    initial_data BadBoundary {
+      domain exterior {
+        coordinates = spherical
+        topology = compactified
+        resolution = [9, 7, 6]
+        basis = chebyshev_fourier
+      }
+      unknown scalar psi
+      equation scalar hamiltonian = laplacian(psi)
+      boundary infinity { lapse = 1 }
+      solve {
+        nonlinear = newton
+        linear = gmres
+        tolerance = 1e-8
+        max_iterations = 10
+      }
+    }
+  )";
+
+  try {
+    (void)tensorium::api::parseAndValidateSource(source);
+  } catch (const std::exception &ex) {
+    return std::string(ex.what()).find(
+               "constraint assignment targets unknown symbol 'lapse'") !=
+           std::string::npos;
+  }
+  std::cerr << "FAIL: undeclared boundary target was accepted\n";
+  return false;
+}
+
+static bool testConstraintRejectsUnknownInterfaceDomain() {
+  const std::string source = R"(
+    initial_data BadInterface {
+      domain near {
+        coordinates = spherical
+        topology = shell
+        resolution = [9]
+        basis = chebyshev
+        bounds = [1, 2]
+      }
+      domain far {
+        coordinates = spherical
+        topology = shell
+        resolution = [9]
+        basis = chebyshev
+        bounds = [2, 3]
+      }
+      interface near -> missing
+      unknown scalar psi
+      equation scalar hamiltonian = laplacian(psi)
+      boundary inner { psi = 1 }
+      boundary outer { psi = 1 }
+      solve {
+        nonlinear = newton
+        linear = direct
+        tolerance = 1e-8
+        max_iterations = 10
+      }
+    }
+  )";
+
+  try {
+    (void)tensorium::api::parseAndValidateSource(source);
+  } catch (const std::exception &ex) {
+    return std::string(ex.what()).find(
+               "constraint interface references unknown domain 'missing'") !=
+           std::string::npos;
+  }
+  std::cerr << "FAIL: interface referencing an unknown domain was accepted\n";
+  return false;
+}
+
+static bool testRadialConstraintRejectsMismatchedInterface() {
+  const std::string source = R"(
+    initial_data MismatchedInterface {
+      domain near {
+        coordinates = spherical
+        topology = shell
+        resolution = [9]
+        basis = chebyshev
+        bounds = [1, 2]
+      }
+      domain far {
+        coordinates = spherical
+        topology = shell
+        resolution = [9]
+        basis = chebyshev
+        bounds = [3, 4]
+      }
+      interface near -> far
+      unknown scalar psi
+      equation scalar hamiltonian = laplacian(psi)
+      boundary inner { psi = 1 }
+      boundary outer { psi = 1 }
+      solve {
+        nonlinear = newton
+        linear = direct
+        tolerance = 1e-8
+        max_iterations = 10
+      }
+    }
+  )";
+
+  auto result = tensorium::api::parseAndValidateSource(source);
+  try {
+    (void)tensorium::solver::solveRadialConstraintProblem(result.module);
+  } catch (const std::exception &ex) {
+    return std::string(ex.what()).find("incompatible physical radii") !=
+           std::string::npos;
+  }
+  std::cerr << "FAIL: mismatched radial interface was accepted\n";
+  return false;
+}
+
+static bool testConstraintDifferentialCanonicalization() {
+  const std::string source = R"(
+    initial_data GradientConstraint {
+      domain exterior {
+        coordinates = cartesian
+        topology = rectilinear
+        resolution = [9, 9, 9]
+        basis = chebyshev
+      }
+      unknown scalar psi
+      equation covector gradient_residual[i] = gradient(psi)
+      boundary outer { psi = 0 }
+      solve {
+        nonlinear = newton
+        linear = gmres
+        tolerance = 1e-9
+        max_iterations = 12
+      }
+    }
+  )";
+
+  auto result = tensorium::api::parseAndValidateSource(source);
+  if (!result.module.constraintProblem)
+    return false;
+  const auto &equations = result.module.constraintProblem->equations;
+  if (equations.size() != 1)
+    return false;
+  auto *partial = dynamic_cast<const backend::PartialDerivativeIR *>(
+      equations[0].residual.get());
+  if (!partial || partial->coordIndex != "i") {
+    std::cerr << "FAIL: constraint gradient was not canonicalized to partial_i\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testConstraintMLIRLoweringFailsExplicitly() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/brill_lindquist_constraints.tn");
+  try {
+    (void)tensorium::api::emitMLIR(result.module);
+  } catch (const std::exception &ex) {
+    return std::string(ex.what()).find(
+               "constraint problem MLIR lowering is not implemented") !=
+           std::string::npos;
+  }
+  std::cerr << "FAIL: constraint problem was silently ignored by MLIRGen\n";
+  return false;
+}
+
+static bool testBrillLindquistRadialConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/brill_lindquist_radial_solve.tn");
+  tensorium::solver::ConstraintSolveRequest request;
+  request.parameters["mass"] = 1.0;
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module, request);
+
+  if (!solution.converged) {
+    std::cerr << "FAIL: radial constraint solve did not converge; residual="
+              << solution.residualNorm << "\n";
+    return false;
+  }
+  auto it = solution.unknowns.find("psi");
+  if (it == solution.unknowns.end() ||
+      it->second.size() != solution.coordinates.size()) {
+    std::cerr << "FAIL: radial constraint solution does not contain psi\n";
+    return false;
+  }
+
+  double maxError = 0.0;
+  for (size_t i = 0; i < solution.coordinates.size(); ++i) {
+    const double expected = 1.0 + 0.5 / solution.coordinates[i];
+    maxError = std::max(maxError, std::abs(it->second[i] - expected));
+  }
+  if (maxError > 1.0e-9) {
+    std::cerr << "FAIL: radial Brill-Lindquist max error=" << maxError
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+  if (solution.iterations == 0 || solution.iterations > 2) {
+    std::cerr << "FAIL: expected linear radial problem to converge in one "
+                 "Newton update, got "
+              << solution.iterations << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testBrillLindquistMultidomainConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn");
+  tensorium::solver::ConstraintSolveRequest request;
+  request.parameters["mass"] = 1.0;
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module, request);
+
+  if (!solution.converged) {
+    std::cerr << "FAIL: multidomain constraint solve did not converge; "
+                 "residual="
+              << solution.residualNorm << "\n";
+    return false;
+  }
+  if (solution.domains.size() != 2 ||
+      solution.domains[0].name != "near" ||
+      solution.domains[0].compactified ||
+      solution.domains[1].name != "infinity" ||
+      !solution.domains[1].compactified ||
+      solution.domains[0].pointCount != 25 ||
+      solution.domains[1].pointCount != 17) {
+    std::cerr << "FAIL: multidomain solution metadata is incorrect\n";
+    return false;
+  }
+
+  const auto &psi = solution.unknowns.at("psi");
+  if (psi.size() != 42 || psi.size() != solution.coordinates.size() ||
+      !std::isinf(solution.coordinates.back())) {
+    std::cerr << "FAIL: compactified solution does not end at infinity\n";
+    return false;
+  }
+  double maxError = 0.0;
+  for (size_t i = 0; i < solution.coordinates.size(); ++i) {
+    const double radius = solution.coordinates[i];
+    const double expected = std::isinf(radius) ? 1.0 : 1.0 + 0.5 / radius;
+    maxError = std::max(maxError, std::abs(psi[i] - expected));
+  }
+  const size_t leftInterface = solution.domains[0].offset +
+                               solution.domains[0].pointCount - 1;
+  const size_t rightInterface = solution.domains[1].offset;
+  const double interfaceJump =
+      std::abs(psi[leftInterface] - psi[rightInterface]);
+  if (maxError > 1.0e-9 || interfaceJump > 1.0e-11) {
+    std::cerr << "FAIL: multidomain Brill-Lindquist max error=" << maxError
+              << " interface jump=" << interfaceJump
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+  if (solution.iterations != 1) {
+    std::cerr << "FAIL: expected multidomain linear problem to converge in one "
+                 "Newton update, got "
+              << solution.iterations << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testNonlinearRadialConstraintSolve() {
+  const std::string source = R"(
+    initial_data NonlinearRadial {
+      domain shell {
+        coordinates = spherical
+        topology = shell
+        resolution = [17]
+        basis = chebyshev
+        bounds = [1, 2]
+      }
+      unknown scalar psi
+      equation scalar nonlinear = laplacian(psi) + psi^3 - 1
+      boundary inner { psi = 1 }
+      boundary outer { psi = 1 }
+      seed psi = 0.5
+      solve {
+        nonlinear = newton
+        linear = direct
+        tolerance = 1e-10
+        max_iterations = 12
+      }
+    }
+  )";
+
+  auto result = tensorium::api::parseAndValidateSource(source);
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module);
+  if (!solution.converged || solution.iterations < 2) {
+    std::cerr << "FAIL: nonlinear radial Newton solve did not converge "
+                 "iteratively; iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+  const auto &psi = solution.unknowns.at("psi");
+  double maxError = 0.0;
+  for (double value : psi)
+    maxError = std::max(maxError, std::abs(value - 1.0));
+  if (maxError > 1.0e-9) {
+    std::cerr << "FAIL: nonlinear radial solution max error=" << maxError
+              << "\n";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct NamedTest {
     const char *name;
@@ -3626,6 +4021,26 @@ int main() {
       {"testSchwarzschildChristoffelMLIRStructure",
        &testSchwarzschildChristoffelMLIRStructure},
       {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
+      {"testConstraintProblemIRFromFixture",
+       &testConstraintProblemIRFromFixture},
+      {"testConstraintRejectsTensorLaplacian",
+       &testConstraintRejectsTensorLaplacian},
+      {"testConstraintRejectsUnknownBoundaryTarget",
+       &testConstraintRejectsUnknownBoundaryTarget},
+      {"testConstraintRejectsUnknownInterfaceDomain",
+       &testConstraintRejectsUnknownInterfaceDomain},
+      {"testRadialConstraintRejectsMismatchedInterface",
+       &testRadialConstraintRejectsMismatchedInterface},
+      {"testConstraintDifferentialCanonicalization",
+       &testConstraintDifferentialCanonicalization},
+      {"testConstraintMLIRLoweringFailsExplicitly",
+       &testConstraintMLIRLoweringFailsExplicitly},
+      {"testBrillLindquistRadialConstraintSolve",
+       &testBrillLindquistRadialConstraintSolve},
+      {"testBrillLindquistMultidomainConstraintSolve",
+       &testBrillLindquistMultidomainConstraintSolve},
+      {"testNonlinearRadialConstraintSolve",
+       &testNonlinearRadialConstraintSolve},
   };
 
   bool ok = true;

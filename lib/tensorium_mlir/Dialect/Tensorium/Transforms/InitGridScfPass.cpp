@@ -33,18 +33,19 @@ struct InitGridScfPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InitGridScfPass)
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<func::FuncDialect, arith::ArithDialect, memref::MemRefDialect,
-                    scf::SCFDialect>();
+    registry.insert<func::FuncDialect, arith::ArithDialect,
+                    memref::MemRefDialect, scf::SCFDialect>();
   }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto initPoint =
-        module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolInitPoint);
+    auto initPoint = module.lookupSymbol<func::FuncOp>(
+        tensorium_mlir::abi::kSymbolInitPoint);
     if (!initPoint)
       return;
 
-    if (module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolInitGridScf))
+    if (module.lookupSymbol<func::FuncOp>(
+            tensorium_mlir::abi::kSymbolInitGridScf))
       return;
 
     OpBuilder b(&getContext());
@@ -53,18 +54,17 @@ struct InitGridScfPass
 
     auto dynMemTy = MemRefType::get({ShapedType::kDynamic}, f64);
 
-    std::vector<std::string> paramNames =
-        parseStringArrayAttr(initPoint->getAttrOfType<ArrayAttr>(
-            "tensorium.init.param_names"));
-    std::vector<std::string> coordNames =
-        parseStringArrayAttr(initPoint->getAttrOfType<ArrayAttr>(
-            "tensorium.init.coord_names"));
+    std::vector<std::string> paramNames = parseStringArrayAttr(
+        initPoint->getAttrOfType<ArrayAttr>("tensorium.init.param_names"));
+    std::vector<std::string> coordNames = parseStringArrayAttr(
+        initPoint->getAttrOfType<ArrayAttr>("tensorium.init.coord_names"));
 
-    const unsigned expectedInitArgs = static_cast<unsigned>(
-        paramNames.size() + coordNames.size() + 3u);
+    const unsigned expectedInitArgs =
+        static_cast<unsigned>(paramNames.size() + coordNames.size() + 3u);
     if (initPoint.getNumArguments() != expectedInitArgs) {
-      initPoint.emitError("init-grid-scf: tensorium_init_point signature does not "
-                          "match param/coord metadata");
+      initPoint.emitError(
+          "init-grid-scf: tensorium_init_point signature does not "
+          "match param/coord metadata");
       signalPassFailure();
       return;
     }
@@ -81,8 +81,8 @@ struct InitGridScfPass
 
     auto gridTy = b.getFunctionType(gridArgTypes, {});
 
-    auto gridFn = func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolInitGridScf,
-                                       gridTy);
+    auto gridFn = func::FuncOp::create(
+        loc, tensorium_mlir::abi::kSymbolInitGridScf, gridTy);
     auto makeStrArrayAttr = [&](const std::vector<std::string> &names) {
       SmallVector<StringRef> refs;
       refs.reserve(names.size());
@@ -98,16 +98,15 @@ struct InitGridScfPass
       return b.getArrayAttr(attrs);
     };
     auto setCommonABIAttrs = [&](func::FuncOp fn, StringRef kind) {
-      fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
-                  b.getI64IntegerAttr(
-                      tensorium_mlir::abi::kGeneratedKernelABIVersion));
+      fn->setAttr(
+          tensorium_mlir::abi::kAttrABIVersion,
+          b.getI64IntegerAttr(tensorium_mlir::abi::kGeneratedKernelABIVersion));
       fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
-      fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
-                  b.getStringAttr(
-                      tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+      fn->setAttr(
+          tensorium_mlir::abi::kAttrMemoryLayout,
+          b.getStringAttr(tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
       fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
-                  b.getStringAttr(
-                      tensorium_mlir::abi::kMemrefABI1DStridedF64));
+                  b.getStringAttr(tensorium_mlir::abi::kMemrefABI1DStridedF64));
     };
     setCommonABIAttrs(gridFn, tensorium_mlir::abi::kKindInitGridScf);
     gridFn->setAttr(tensorium_mlir::abi::kAttrParamNames,
@@ -119,8 +118,8 @@ struct InitGridScfPass
     const int64_t firstOutputArg =
         static_cast<int64_t>(paramNames.size() + coordNames.size());
     gridFn->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
-                    makeI64ArrayAttr(
-                        {firstOutputArg, firstOutputArg + 1, firstOutputArg + 2}));
+                    makeI64ArrayAttr({firstOutputArg, firstOutputArg + 1,
+                                      firstOutputArg + 2}));
     Block *entry = gridFn.addEntryBlock();
     b.setInsertionPointToEnd(entry);
 
@@ -137,54 +136,55 @@ struct InitGridScfPass
     Value gammaArg = entry->getArgument(gridArgIdx++);
     Value gammaUArg = entry->getArgument(gridArgIdx++);
 
-    Value c0 = arith::ConstantIndexOp::create(b, loc, 0);
-    Value c1 = arith::ConstantIndexOp::create(b, loc, 1);
-    Value n = coordMemrefs.empty() ? memref::DimOp::create(b, loc, alphaArg, c0)
-                                   : memref::DimOp::create(b, loc,
-                                                           coordMemrefs.front(), c0);
+    Value c0 = b.create<arith::ConstantIndexOp>(loc, 0);
+    Value c1 = b.create<arith::ConstantIndexOp>(loc, 1);
+    Value n = coordMemrefs.empty()
+                  ? b.create<memref::DimOp>(loc, alphaArg, c0)
+                  : b.create<memref::DimOp>(loc, coordMemrefs.front(), c0);
 
-    auto forOp = scf::ForOp::create(b, loc, c0, n, c1);
+    auto forOp = b.create<scf::ForOp>(loc, c0, n, c1);
     b.setInsertionPointToStart(forOp.getBody());
     Value i = forOp.getInductionVar();
 
     auto mem1Ty = MemRefType::get({1}, f64);
     auto mem9Ty = MemRefType::get({9}, f64);
-    Value tmpAlpha = memref::AllocOp::create(b, loc, mem1Ty);
-    Value tmpGamma = memref::AllocOp::create(b, loc, mem9Ty);
-    Value tmpGammaU = memref::AllocOp::create(b, loc, mem9Ty);
+    Value tmpAlpha = b.create<memref::AllocOp>(loc, mem1Ty);
+    Value tmpGamma = b.create<memref::AllocOp>(loc, mem9Ty);
+    Value tmpGammaU = b.create<memref::AllocOp>(loc, mem9Ty);
 
     SmallVector<Value> callArgs;
     callArgs.reserve(paramArgs.size() + coordMemrefs.size() + 3);
     callArgs.append(paramArgs.begin(), paramArgs.end());
     for (Value coordMemref : coordMemrefs)
-      callArgs.push_back(memref::LoadOp::create(b, loc, coordMemref, ValueRange{i}));
+      callArgs.push_back(
+          b.create<memref::LoadOp>(loc, coordMemref, ValueRange{i}));
     callArgs.push_back(tmpAlpha);
     callArgs.push_back(tmpGamma);
     callArgs.push_back(tmpGammaU);
 
-    func::CallOp::create(b, loc, initPoint.getSymName(), TypeRange{}, callArgs);
+    b.create<func::CallOp>(loc, initPoint.getSymName(), TypeRange{}, callArgs);
 
-    Value a0 = memref::LoadOp::create(b, loc, tmpAlpha, ValueRange{c0});
-    memref::StoreOp::create(b, loc, a0, alphaArg, ValueRange{i});
+    Value a0 = b.create<memref::LoadOp>(loc, tmpAlpha, ValueRange{c0});
+    b.create<memref::StoreOp>(loc, a0, alphaArg, ValueRange{i});
 
     for (int64_t comp = 0; comp < 9; ++comp) {
-      Value cComp = arith::ConstantIndexOp::create(b, loc, comp);
-      Value base = arith::MulIOp::create(b, loc, cComp, n);
-      Value flat = arith::AddIOp::create(b, loc, base, i);
+      Value cComp = b.create<arith::ConstantIndexOp>(loc, comp);
+      Value base = b.create<arith::MulIOp>(loc, cComp, n);
+      Value flat = b.create<arith::AddIOp>(loc, base, i);
 
-      Value g = memref::LoadOp::create(b, loc, tmpGamma, ValueRange{cComp});
-      memref::StoreOp::create(b, loc, g, gammaArg, ValueRange{flat});
+      Value g = b.create<memref::LoadOp>(loc, tmpGamma, ValueRange{cComp});
+      b.create<memref::StoreOp>(loc, g, gammaArg, ValueRange{flat});
 
-      Value gU = memref::LoadOp::create(b, loc, tmpGammaU, ValueRange{cComp});
-      memref::StoreOp::create(b, loc, gU, gammaUArg, ValueRange{flat});
+      Value gU = b.create<memref::LoadOp>(loc, tmpGammaU, ValueRange{cComp});
+      b.create<memref::StoreOp>(loc, gU, gammaUArg, ValueRange{flat});
     }
 
-    memref::DeallocOp::create(b, loc, tmpAlpha);
-    memref::DeallocOp::create(b, loc, tmpGamma);
-    memref::DeallocOp::create(b, loc, tmpGammaU);
+    b.create<memref::DeallocOp>(loc, tmpAlpha);
+    b.create<memref::DeallocOp>(loc, tmpGamma);
+    b.create<memref::DeallocOp>(loc, tmpGammaU);
 
     b.setInsertionPointAfter(forOp);
-    func::ReturnOp::create(b, loc);
+    b.create<func::ReturnOp>(loc);
 
     module.push_back(gridFn);
   }

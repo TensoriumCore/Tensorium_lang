@@ -12,9 +12,9 @@
 
 #include <algorithm>
 #include <array>
+#include <llvm/ADT/StringSet.h>
 #include <string>
 #include <vector>
-#include <llvm/ADT/StringSet.h>
 
 using namespace mlir;
 
@@ -78,7 +78,8 @@ struct InitToStdPass
     if (!initFn)
       return;
 
-    if (module.lookupSymbol<func::FuncOp>(tensorium_mlir::abi::kSymbolInitPoint))
+    if (module.lookupSymbol<func::FuncOp>(
+            tensorium_mlir::abi::kSymbolInitPoint))
       return;
 
     Block &srcBlock = initFn.getBody().front();
@@ -121,7 +122,8 @@ struct InitToStdPass
     }
     if (family != CoordFamily::Unknown) {
       int dim = 3;
-      if (auto dimAttr = module->getAttrOfType<IntegerAttr>("tensorium.sim.dim"))
+      if (auto dimAttr =
+              module->getAttrOfType<IntegerAttr>("tensorium.sim.dim"))
         dim = static_cast<int>(dimAttr.getInt());
       coordNames = defaultCoordsForFamily(family, dim);
     }
@@ -137,8 +139,8 @@ struct InitToStdPass
     loweredArgTypes.push_back(mem9);
 
     auto loweredTy = b.getFunctionType(loweredArgTypes, {});
-    auto lowered = func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolInitPoint,
-                                        loweredTy);
+    auto lowered = func::FuncOp::create(
+        loc, tensorium_mlir::abi::kSymbolInitPoint, loweredTy);
     auto makeStrArrayAttr = [&](const std::vector<std::string> &names) {
       SmallVector<StringRef> refs;
       refs.reserve(names.size());
@@ -154,16 +156,15 @@ struct InitToStdPass
       return b.getArrayAttr(attrs);
     };
     auto setCommonABIAttrs = [&](func::FuncOp fn, StringRef kind) {
-      fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
-                  b.getI64IntegerAttr(
-                      tensorium_mlir::abi::kGeneratedKernelABIVersion));
+      fn->setAttr(
+          tensorium_mlir::abi::kAttrABIVersion,
+          b.getI64IntegerAttr(tensorium_mlir::abi::kGeneratedKernelABIVersion));
       fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
-      fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
-                  b.getStringAttr(
-                      tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+      fn->setAttr(
+          tensorium_mlir::abi::kAttrMemoryLayout,
+          b.getStringAttr(tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
       fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
-                  b.getStringAttr(
-                      tensorium_mlir::abi::kMemrefABI1DStridedF64));
+                  b.getStringAttr(tensorium_mlir::abi::kMemrefABI1DStridedF64));
     };
 
     setCommonABIAttrs(lowered, tensorium_mlir::abi::kKindInitPoint);
@@ -180,8 +181,8 @@ struct InitToStdPass
     const int64_t firstOutputArg =
         static_cast<int64_t>(paramNames.size() + coordNames.size());
     lowered->setAttr(tensorium_mlir::abi::kAttrWriteArgIndices,
-                     makeI64ArrayAttr(
-                         {firstOutputArg, firstOutputArg + 1, firstOutputArg + 2}));
+                     makeI64ArrayAttr({firstOutputArg, firstOutputArg + 1,
+                                       firstOutputArg + 2}));
     Block *dstBlock = lowered.addEntryBlock();
     b.setInsertionPointToEnd(dstBlock);
 
@@ -211,14 +212,14 @@ struct InitToStdPass
     };
 
     auto storeScalarAt = [&](Value memref, int64_t idx, Value scalar) {
-      Value index = arith::ConstantIndexOp::create(b, loc, idx);
-      memref::StoreOp::create(b, loc, scalar, memref, ValueRange{index});
+      Value index = b.create<arith::ConstantIndexOp>(loc, idx);
+      b.create<memref::StoreOp>(loc, scalar, memref, ValueRange{index});
     };
 
     for (Operation &op : srcBlock.without_terminator()) {
       if (auto c = dyn_cast<ConstOp>(&op)) {
-        Value v = arith::ConstantFloatOp::create(
-            b, loc, llvm::cast<FloatType>(f64), c.getValue());
+        Value v = b.create<arith::ConstantFloatOp>(loc, c.getValue(),
+                                                   llvm::cast<FloatType>(f64));
         scalarVals[c.getResult()] = v;
         continue;
       }
@@ -254,7 +255,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[a.getRes()] = arith::AddFOp::create(b, loc, *lhs, *rhs);
+        scalarVals[a.getRes()] = b.create<arith::AddFOp>(loc, *lhs, *rhs);
         continue;
       }
 
@@ -265,7 +266,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[s.getRes()] = arith::SubFOp::create(b, loc, *lhs, *rhs);
+        scalarVals[s.getRes()] = b.create<arith::SubFOp>(loc, *lhs, *rhs);
         continue;
       }
 
@@ -276,7 +277,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[m.getRes()] = arith::MulFOp::create(b, loc, *lhs, *rhs);
+        scalarVals[m.getRes()] = b.create<arith::MulFOp>(loc, *lhs, *rhs);
         continue;
       }
 
@@ -287,7 +288,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[d.getRes()] = arith::DivFOp::create(b, loc, *lhs, *rhs);
+        scalarVals[d.getRes()] = b.create<arith::DivFOp>(loc, *lhs, *rhs);
         continue;
       }
 
@@ -297,7 +298,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[sin.getOut()] = math::SinOp::create(b, loc, *in);
+        scalarVals[sin.getOut()] = b.create<math::SinOp>(loc, *in);
         continue;
       }
 
@@ -307,7 +308,7 @@ struct InitToStdPass
           signalPassFailure();
           return;
         }
-        scalarVals[sq.getOut()] = math::SqrtOp::create(b, loc, *in);
+        scalarVals[sq.getOut()] = b.create<math::SqrtOp>(loc, *in);
         continue;
       }
 
@@ -371,7 +372,8 @@ struct InitToStdPass
       if (auto assign = dyn_cast<AssignOp>(&op)) {
         auto fieldArg = dyn_cast<BlockArgument>(assign.getField());
         if (!fieldArg || fieldArg.getOwner() != &srcBlock) {
-          op.emitError("init-to-std: assign target must be init function argument");
+          op.emitError(
+              "init-to-std: assign target must be init function argument");
           signalPassFailure();
           return;
         }
@@ -389,7 +391,8 @@ struct InitToStdPass
         case 1: {
           auto it = covTensor2Vals.find(assign.getRhs());
           if (it == covTensor2Vals.end()) {
-            op.emitError("init-to-std: gamma assign expects build_cov_tensor2 RHS");
+            op.emitError(
+                "init-to-std: gamma assign expects build_cov_tensor2 RHS");
             signalPassFailure();
             return;
           }
@@ -400,7 +403,8 @@ struct InitToStdPass
         case 2: {
           auto it = conTensor2Vals.find(assign.getRhs());
           if (it == conTensor2Vals.end()) {
-            op.emitError("init-to-std: gammaU assign expects build_con_tensor2 RHS");
+            op.emitError(
+                "init-to-std: gammaU assign expects build_con_tensor2 RHS");
             signalPassFailure();
             return;
           }
@@ -425,7 +429,7 @@ struct InitToStdPass
       return;
     }
 
-    func::ReturnOp::create(b, loc);
+    b.create<func::ReturnOp>(loc);
     module.push_back(lowered);
   }
 };

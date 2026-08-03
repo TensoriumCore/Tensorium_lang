@@ -57,8 +57,8 @@ void addEinsteinPipelineSafe(::mlir::PassManager &pm,
   }
 
   if (opts.enableStencilLoweringPass) {
-    pm.addPass(
-        tensorium::mlir::createTensoriumStencilLoweringPass(opts.dx, opts.order));
+    pm.addPass(tensorium::mlir::createTensoriumStencilLoweringPass(opts.dx,
+                                                                   opts.order));
   }
   if (opts.enableDissipationPass) {
     pm.addPass(tensorium::mlir::createTensoriumDissipationPass(
@@ -80,18 +80,17 @@ bool lowerModuleToLLVM(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
                        const MLIRGenOptions &opts) {
   mlir::PassManager pm(&ctx);
   if (opts.mlirPrintIRAfterFailure) {
-    pm.enableIRPrinting(
-        [](mlir::Pass *, mlir::Operation *) { return false; },
-        [](mlir::Pass *, mlir::Operation *) { return true; },
-        /*printModuleScope=*/true,
-        /*printAfterOnlyOnChange=*/false,
-        /*printAfterOnlyOnFailure=*/true);
+    pm.enableIRPrinting([](mlir::Pass *, mlir::Operation *) { return false; },
+                        [](mlir::Pass *, mlir::Operation *) { return true; },
+                        /*printModuleScope=*/true,
+                        /*printAfterOnlyOnChange=*/false,
+                        /*printAfterOnlyOnFailure=*/true);
   }
 
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createLowerAffinePass());
-  pm.addPass(mlir::createSCFToControlFlowPass());
+  pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::memref::createExpandStridedMetadataPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createConvertMathToLLVMPass());

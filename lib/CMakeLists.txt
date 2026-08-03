@@ -5,6 +5,7 @@ add_library(tensoriumCore
   Parse/Parser.cpp
   Runtime/CpuRuntime.cpp
   Runtime/Eval.cpp
+  Solver/ConstraintSolver.cpp
   Sema/CallSupport.cpp
   Sema/Sema.cpp
   Sema/SemaInitialData.cpp

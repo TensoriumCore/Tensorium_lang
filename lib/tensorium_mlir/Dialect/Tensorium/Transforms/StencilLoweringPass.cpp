@@ -80,15 +80,15 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
                                      Float64Type::get(rewriter.getContext()),
                                      /*up=*/0, /*down=*/1);
     Value zero =
-        ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(0.0))
+        rewriter.create<ConstOp>(loc, scalarTy, rewriter.getF64FloatAttr(0.0))
             .getResult();
     Value one =
-        ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(1.0))
+        rewriter.create<ConstOp>(loc, scalarTy, rewriter.getF64FloatAttr(1.0))
             .getResult();
 
     double invDx = (dx > 1e-12) ? (1.0 / dx) : 1.0;
     Value invDxVal =
-        ConstOp::create(rewriter, loc, scalarTy, rewriter.getF64FloatAttr(invDx))
+        rewriter.create<ConstOp>(loc, scalarTy, rewriter.getF64FloatAttr(invDx))
             .getResult();
 
     Value derivOut;
@@ -99,35 +99,40 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
       for (const auto &pt : stencil) {
         auto offAttr =
             rewriter.getI64ArrayAttr(makeOffsets(spatialDim, dim, pt.offset));
-        Value val =
-            RefOp::create(rewriter, loc, input.getType(), refOp.getSource(),
-                          refOp.getKindAttr(), refOp.getIndicesAttr(), offAttr)
-                .getResult();
+        Value val = rewriter
+                        .create<RefOp>(loc, input.getType(), refOp.getSource(),
+                                       refOp.getKindAttr(),
+                                       refOp.getIndicesAttr(), offAttr)
+                        .getResult();
 
-        Value weight = ConstOp::create(rewriter, loc, scalarTy,
-                                       rewriter.getF64FloatAttr(pt.weight))
+        Value weight = rewriter
+                           .create<ConstOp>(loc, scalarTy,
+                                            rewriter.getF64FloatAttr(pt.weight))
                            .getResult();
-        Value term =
-            MulOp::create(rewriter, loc, input.getType(), val, weight).getResult();
+        Value term = rewriter.create<MulOp>(loc, input.getType(), val, weight)
+                         .getResult();
 
         if (firstTerm) {
           sum = term;
           firstTerm = false;
           continue;
         }
-        sum = AddOp::create(rewriter, loc, input.getType(), sum, term).getResult();
+        sum =
+            rewriter.create<AddOp>(loc, input.getType(), sum, term).getResult();
       }
 
       Value axisDeriv =
-          MulOp::create(rewriter, loc, input.getType(), sum, invDxVal).getResult();
+          rewriter.create<MulOp>(loc, input.getType(), sum, invDxVal)
+              .getResult();
 
       SmallVector<Value, 3> basisComps = {zero, zero, zero};
       basisComps[dim] = one;
       Value basis =
-          BuildCovectorOp::create(rewriter, loc, covectorTy, basisComps).getOut();
+          rewriter.create<BuildCovectorOp>(loc, covectorTy, basisComps)
+              .getOut();
 
       Value lifted =
-          MulOp::create(rewriter, loc, resultType, axisDeriv, basis).getResult();
+          rewriter.create<MulOp>(loc, resultType, axisDeriv, basis).getResult();
 
       if (firstAxis) {
         derivOut = lifted;
@@ -135,7 +140,7 @@ struct LowerDerivToStencil : public OpRewritePattern<tensorium::mlir::DerivOp> {
         continue;
       }
       derivOut =
-          AddOp::create(rewriter, loc, resultType, derivOut, lifted).getResult();
+          rewriter.create<AddOp>(loc, resultType, derivOut, lifted).getResult();
     }
 
     rewriter.replaceOp(op, derivOut);

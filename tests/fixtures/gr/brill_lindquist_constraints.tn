@@ -1,0 +1,39 @@
+# First constrained initial-data problem: time-symmetric, conformally flat
+# vacuum data. The puncture singularity is represented by the analytic seed;
+# the elliptic residual and boundary data are preserved for the future solver.
+params { mass }
+
+initial_data BrillLindquist {
+  domain near_puncture {
+    coordinates = spherical
+    topology = shell
+    resolution = [17, 9, 8]
+    basis = chebyshev_fourier
+  }
+
+  domain infinity {
+    coordinates = spherical
+    topology = compactified
+    resolution = [17, 9, 8]
+    basis = chebyshev_fourier
+  }
+
+  interface near_puncture -> infinity
+
+  unknown scalar psi
+
+  equation scalar hamiltonian = laplacian(psi)
+
+  boundary asymptotic_infinity {
+    psi = 1
+  }
+
+  seed psi = 1 + mass / (2 * r)
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-10
+    max_iterations = 30
+  }
+}

@@ -66,8 +66,7 @@ bool SemanticAnalyzer::isSimpleIndexSwap(const IndexedExpr *lhs,
     return false;
   if (lVar->name != rVar->name)
     return false;
-  if (lVar->tensorIndexNames.size() != 2 ||
-      rVar->tensorIndexNames.size() != 2)
+  if (lVar->tensorIndexNames.size() != 2 || rVar->tensorIndexNames.size() != 2)
     return false;
   return lVar->tensorIndexNames[0] == rVar->tensorIndexNames[1] &&
          lVar->tensorIndexNames[1] == rVar->tensorIndexNames[0];
@@ -176,6 +175,15 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       return iv;
     }
 
+    if (auto itu = unknowns.find(v->name); itu != unknowns.end()) {
+      const ConstraintUnknownDecl *decl = itu->second;
+      auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Unknown);
+      iv->tensorKind = decl->type.kind;
+      iv->up = decl->type.up;
+      iv->down = decl->type.down;
+      return iv;
+    }
+
     throw std::runtime_error("Unknown identifier: " + v->name);
   }
 
@@ -187,22 +195,30 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
     return transformExpr(p->inner.get());
 
   if (auto iv = dynamic_cast<const IndexedVarExpr *>(e)) {
-    auto it = fields.find(iv->base);
-    if (it == fields.end())
+    const FieldDecl *field = nullptr;
+    const ConstraintUnknownDecl *unknown = nullptr;
+    if (auto it = fields.find(iv->base); it != fields.end())
+      field = it->second;
+    if (auto it = unknowns.find(iv->base); it != unknowns.end())
+      unknown = it->second;
+    if (!field && !unknown)
       throw std::runtime_error("Unknown indexed tensor: " + iv->base);
 
-    const FieldDecl *fd = it->second;
-    size_t expected = static_cast<size_t>(fd->up + fd->down);
+    const int up = field ? field->up : unknown->type.up;
+    const int down = field ? field->down : unknown->type.down;
+    const TensorKind tensorKind = field ? field->kind : unknown->type.kind;
+    size_t expected = static_cast<size_t>(up + down);
 
     if (iv->indices.size() != expected)
       throw std::runtime_error("Tensor '" + iv->base + "' expects " +
                                std::to_string(expected) + " indices, got " +
                                std::to_string(iv->indices.size()));
 
-    auto out = std::make_unique<IndexedVar>(iv->base, IndexedVarKind::Field);
-    out->tensorKind = fd->kind;
-    out->up = fd->up;
-    out->down = fd->down;
+    auto out = std::make_unique<IndexedVar>(
+        iv->base, field ? IndexedVarKind::Field : IndexedVarKind::Unknown);
+    out->tensorKind = tensorKind;
+    out->up = up;
+    out->down = down;
 
     size_t pos = 0;
     for (auto &idx : iv->indices) {
@@ -213,7 +229,7 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       int off = resolveIndex(idx);
       out->tensorIndices.push_back(off);
       out->tensorIndexNames.push_back(idx);
-      bool isUp = pos < static_cast<size_t>(fd->up);
+      bool isUp = pos < static_cast<size_t>(up);
       out->tensorIndexIsUp.push_back(isUp);
       ++pos;
     }
@@ -226,19 +242,18 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
         itExt != externSignatures.end()) {
       externDecl = itExt->second;
       if (c->args.size() != externDecl->params.size()) {
-        throw std::runtime_error("extern function '" + c->callee +
-                                 "' expects " +
-                                 std::to_string(externDecl->params.size()) +
-                                 " arguments, got " +
-                                 std::to_string(c->args.size()));
+        throw std::runtime_error(
+            "extern function '" + c->callee + "' expects " +
+            std::to_string(externDecl->params.size()) + " arguments, got " +
+            std::to_string(c->args.size()));
       }
     }
 
     if (mode == CompilationMode::Executable &&
         !isExecutableBuiltin(c->callee) && !externDecl) {
       throw std::runtime_error(
-          "executable mode requires implementation for function '" +
-          c->callee + "'");
+          "executable mode requires implementation for function '" + c->callee +
+          "'");
     }
     auto out = std::make_unique<IndexedCall>();
     out->callee = c->callee;
@@ -290,8 +305,7 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
   for (const auto &metric : prog.metrics) {
     if (params.count(metric.name)) {
       throw std::runtime_error("Name collision: parameter '" + metric.name +
-                               "' conflicts with metric '" + metric.name +
-                               "'");
+                               "' conflicts with metric '" + metric.name + "'");
     }
     if (!metricNames.insert(metric.name).second) {
       throw std::runtime_error("Metric redeclared: " + metric.name);
@@ -344,17 +358,39 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
     syntheticMetricFields.push_back(fd);
     fields[m.name] = &syntheticMetricFields.back();
   }
-  if (!prog.simulation) {
-    if (mode == CompilationMode::Executable) {
-      throw std::runtime_error(
-          std::string(kErrMissingSimulationBlock) +
-          ". Add `simulation { dimension = <N> resolution = [...] time { dt = ... "
-          "integrator = ... } spatial { scheme = ... derivative = ... order = ... } }` "
-          "or use --symbolic.");
+
+  if (prog.initialData && prog.initialData->hasConstraintProblem) {
+    for (const auto &unknown : prog.initialData->constraintProblem.unknowns) {
+      if (params.count(unknown.name) || fields.count(unknown.name) ||
+          metricNames.count(unknown.name)) {
+        throw std::runtime_error("Name collision for constraint unknown '" +
+                                 unknown.name + "'");
+      }
+      if (!unknowns.emplace(unknown.name, &unknown).second) {
+        throw std::runtime_error("Constraint unknown redeclared: " +
+                                 unknown.name);
+      }
     }
+  }
+
+  const bool constraintOnly =
+      prog.initialData && prog.initialData->hasConstraintProblem &&
+      !prog.initialData->hasMetric4 && !prog.initialData->hasDecomposed &&
+      prog.evolutions.empty();
+  if (!prog.simulation) {
     simulationMissing = true;
-    warnings.push_back(std::string(kWarnMissingSimulationBlock) +
-                       "; proceeding without simulation metadata");
+    if (!constraintOnly) {
+      if (mode == CompilationMode::Executable) {
+        throw std::runtime_error(std::string(kErrMissingSimulationBlock) +
+                                 ". Add `simulation { dimension = <N> "
+                                 "resolution = [...] time { dt = ... "
+                                 "integrator = ... } spatial { scheme = ... "
+                                 "derivative = ... order = ... } }` "
+                                 "or use --symbolic.");
+      }
+      warnings.push_back(std::string(kWarnMissingSimulationBlock) +
+                         "; proceeding without simulation metadata");
+    }
   } else {
     validateSimulation(*prog.simulation);
   }
@@ -484,6 +520,100 @@ IndexedEvolution SemanticAnalyzer::analyzeEvolution(const EvolutionDecl &evo) {
     ia.rhs = std::move(rhs);
     out.temp.push_back(std::move(ia));
   }
+
+  return out;
+}
+
+IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
+    const ConstraintProblemDecl &problem) {
+  LocalScopeGuard localsScope(locals, std::unordered_map<std::string, bool>{});
+  coordIndex.clear();
+
+  if (!problem.domains.empty()) {
+    const auto &domain = problem.domains.front();
+    const std::vector<std::string> cartesian = {"x", "y", "z"};
+    const std::vector<std::string> spherical = {"r", "theta", "phi"};
+    const std::vector<std::string> cylindrical = {"rho", "phi", "z"};
+    const std::vector<std::string> *coordinates = nullptr;
+    if (domain.coordinates == "cartesian")
+      coordinates = &cartesian;
+    else if (domain.coordinates == "spherical")
+      coordinates = &spherical;
+    else if (domain.coordinates == "cylindrical")
+      coordinates = &cylindrical;
+    if (coordinates) {
+      for (size_t i = 0;
+           i < domain.resolution.size() && i < coordinates->size(); ++i)
+        coordIndex[(*coordinates)[i]] = static_cast<int>(i);
+    }
+  }
+
+  auto registerIndices = [this](const std::vector<std::string> &indices) {
+    for (const auto &idx : indices) {
+      validateSpatialIndex(idx);
+      if (!coordIndex.count(idx))
+        coordIndex[idx] = -2;
+    }
+  };
+  for (const auto &equation : problem.equations)
+    registerIndices(equation.indices);
+  for (const auto &boundary : problem.boundaries)
+    for (const auto &condition : boundary.conditions)
+      registerIndices(condition.lhs.indices);
+  for (const auto &seed : problem.seeds)
+    registerIndices(seed.lhs.indices);
+
+  TensorTypeChecker checker(hasConnectionTensor);
+  IndexedConstraintProblem out;
+  out.name = problem.name;
+
+  for (const auto &equation : problem.equations) {
+    IndexedConstraintEquation indexed;
+    indexed.name = equation.name;
+    indexed.type = equation.type;
+    indexed.indices = equation.indices;
+    indexed.residual = transformExpr(equation.residual.get());
+    checker.checkAssignmentVariance(tensorTypeFromDesc(equation.type),
+                                    equation.indices, indexed.residual.get());
+    checker.infer(indexed.residual.get());
+    out.equations.push_back(std::move(indexed));
+  }
+
+  auto lowerAssignment = [this, &checker](const Assignment &assignment) {
+    auto it = unknowns.find(assignment.lhs.base);
+    if (it == unknowns.end()) {
+      throw std::runtime_error(
+          "constraint assignment targets unknown symbol '" +
+          assignment.lhs.base + "'");
+    }
+    const ConstraintUnknownDecl &decl = *it->second;
+    const size_t rank = static_cast<size_t>(decl.type.up + decl.type.down);
+    if (assignment.lhs.indices.size() != rank) {
+      throw std::runtime_error("constraint unknown '" + decl.name +
+                               "' expects " + std::to_string(rank) +
+                               " indices, got " +
+                               std::to_string(assignment.lhs.indices.size()));
+    }
+
+    IndexedConstraintAssignment indexed;
+    indexed.unknown = decl.name;
+    indexed.indices = assignment.lhs.indices;
+    indexed.rhs = transformExpr(assignment.rhs.get());
+    checker.checkAssignmentVariance(tensorTypeFromDesc(decl.type),
+                                    assignment.lhs.indices, indexed.rhs.get());
+    checker.infer(indexed.rhs.get());
+    return indexed;
+  };
+
+  for (const auto &boundary : problem.boundaries) {
+    IndexedConstraintBoundary indexed;
+    indexed.region = boundary.region;
+    for (const auto &condition : boundary.conditions)
+      indexed.conditions.push_back(lowerAssignment(condition));
+    out.boundaries.push_back(std::move(indexed));
+  }
+  for (const auto &seed : problem.seeds)
+    out.seeds.push_back(lowerAssignment(seed));
 
   return out;
 }

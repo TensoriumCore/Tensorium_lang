@@ -23,7 +23,8 @@ namespace tensorium::mlir {
 namespace {
 
 [[maybe_unused]] static bool isStringArray(ArrayAttr a) {
-  if (!a) return false;
+  if (!a)
+    return false;
   for (Attribute x : a)
     if (!isa<StringAttr>(x))
       return false;
@@ -32,7 +33,8 @@ namespace {
 
 static llvm::SmallVector<StringRef, 8> toRefs(ArrayAttr a) {
   llvm::SmallVector<StringRef, 8> out;
-  if (!a) return out;
+  if (!a)
+    return out;
   for (Attribute x : a)
     out.push_back(cast<StringAttr>(x).getValue());
   return out;
@@ -75,10 +77,12 @@ makeRolesStrict(OpBuilder &b, ArrayRef<StringRef> all, ArrayRef<StringRef> out,
 
     if (outSet.contains(idx)) {
       role = "free";
-      if (c != 1) valid = false;
+      if (c != 1)
+        valid = false;
     } else {
       role = (c == 2) ? "contracted" : "invalid";
-      if (c != 2) valid = false;
+      if (c != 2)
+        valid = false;
     }
 
     kv.push_back(b.getNamedAttr(idx, b.getStringAttr(role)));
@@ -89,14 +93,16 @@ makeRolesStrict(OpBuilder &b, ArrayRef<StringRef> all, ArrayRef<StringRef> out,
 
 static std::string joinNoSep(ArrayRef<StringRef> xs) {
   std::string s;
-  for (auto x : xs) s += x.str();
+  for (auto x : xs)
+    s += x.str();
   return s;
 }
 
 static std::string joinCommaNoSep(ArrayRef<std::string> xs) {
   std::string s;
   for (size_t i = 0; i < xs.size(); ++i) {
-    if (i) s += ",";
+    if (i)
+      s += ",";
     s += xs[i];
   }
   return s;
@@ -119,11 +125,13 @@ computeAllCanonical(ArrayRef<llvm::SmallVector<StringRef, 8>> ins,
   return all;
 }
 
-static bool parseSpecToIdx(MLIRContext *ctx, StringRef spec,
-                           llvm::SmallVector<llvm::SmallVector<StringRef, 8>, 8> &ins,
-                           llvm::SmallVector<StringRef, 8> &out) {
+static bool
+parseSpecToIdx(MLIRContext *ctx, StringRef spec,
+               llvm::SmallVector<llvm::SmallVector<StringRef, 8>, 8> &ins,
+               llvm::SmallVector<StringRef, 8> &out) {
   auto parts = spec.split("->");
-  if (parts.second.empty()) return false;
+  if (parts.second.empty())
+    return false;
 
   llvm::SmallVector<StringRef, 8> lhs;
   parts.first.split(lhs, ',', -1, false);
@@ -174,19 +182,24 @@ struct TensoriumEinsteinCanonicalizePass final
         out = toRefs(outAttr);
       } else {
         auto specAttr = op->getAttrOfType<StringAttr>("spec");
-        if (!specAttr || !parseSpecToIdx(&getContext(), specAttr.getValue(), ins, out))
+        if (!specAttr ||
+            !parseSpecToIdx(&getContext(), specAttr.getValue(), ins, out))
           return;
       }
 
-      if (ins.size() != op.getNumOperands()) return;
+      if (ins.size() != op.getNumOperands())
+        return;
 
-      struct Item { std::string key; unsigned pos; };
+      struct Item {
+        std::string key;
+        unsigned pos;
+      };
       std::vector<Item> order;
       for (unsigned i = 0; i < ins.size(); ++i)
         order.push_back({joinNoSep(ins[i]), i});
 
       std::stable_sort(order.begin(), order.end(),
-        [](auto &a, auto &b){ return a.key < b.key; });
+                       [](auto &a, auto &b) { return a.key < b.key; });
 
       llvm::SmallVector<Value, 8> newOps;
       llvm::SmallVector<llvm::SmallVector<StringRef, 8>, 8> newIns;
@@ -209,8 +222,8 @@ struct TensoriumEinsteinCanonicalizePass final
       bool valid = true;
       auto roles = makeRolesStrict(b, all, out, counts, valid);
 
-      auto newOp = tensorium::mlir::EinsumOp::create(
-          b, op.getLoc(), op.getResult().getType(), newOps);
+      auto newOp = b.create<tensorium::mlir::EinsumOp>(
+          op.getLoc(), op.getResult().getType(), newOps);
 
       newOp->setAttr("spec", b.getStringAttr(spec));
       newOp->setAttr("tin.idx.ins", fromRefs2D(b, newIns));
@@ -226,10 +239,10 @@ struct TensoriumEinsteinCanonicalizePass final
   }
 };
 
-} 
+} // namespace
 
 std::unique_ptr<::mlir::Pass> createTensoriumEinsteinCanonicalizePass() {
   return std::make_unique<TensoriumEinsteinCanonicalizePass>();
 }
 
-} 
+} // namespace tensorium::mlir

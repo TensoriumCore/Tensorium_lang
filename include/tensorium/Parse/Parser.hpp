@@ -26,15 +26,21 @@ class Parser {
   FieldDecl parseFieldDecl();
   MetricDecl parseMetric();
   InitialDataDecl parseInitialData();
+  SpectralDomainDecl parseSpectralDomain();
+  ConstraintUnknownDecl parseConstraintUnknown();
+  ConstraintEquationDecl parseConstraintEquation();
+  ConstraintBoundaryDecl parseConstraintBoundary();
+  ConstraintInterfaceDecl parseConstraintInterface();
+  ConstraintSolveConfig parseConstraintSolve();
   EvolutionEq parseEvolutionEq();
   EvolutionDecl parseEvolution();
   SimulationConfig parseSimulation();
   TimeConfig parseTimeBlock();
   SpatialConfig parseSpatialBlock();
-  std::vector<std::unique_ptr<Expr>> parseExprVectorLiteral(
-      size_t expectedSize, const std::string &label);
-  std::vector<std::vector<std::unique_ptr<Expr>>> parseExprMatrixLiteral(
-      size_t rows, size_t cols, const std::string &label);
+  std::vector<std::unique_ptr<Expr>>
+  parseExprVectorLiteral(size_t expectedSize, const std::string &label);
+  std::vector<std::vector<std::unique_ptr<Expr>>>
+  parseExprMatrixLiteral(size_t rows, size_t cols, const std::string &label);
 
 public:
   explicit Parser(Lexer &l);

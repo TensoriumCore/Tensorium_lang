@@ -1,5 +1,4 @@
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
-#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "MLIRGenExpr.h"
 #include "MLIRGenInitialData.h"
 #include "MLIRGenPipeline.h"
@@ -15,12 +14,14 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
+#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 #include <numeric>
+#include <stdexcept>
 
 namespace tensorium_mlir {
 namespace {
@@ -44,6 +45,11 @@ mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
                 mlir::MLIRContext &ctx, const MLIRGenOptions &opts,
                 bool *pipelineSuccess) {
+  if (module.constraintProblem) {
+    throw std::runtime_error(
+        "constraint problem MLIR lowering is not implemented; use "
+        "--validate or --dump-backend-expr");
+  }
   if (opts.mlirDisableThreading)
     ctx.disableMultithreading();
   ctx.printOpOnDiagnostic(opts.mlirPrintOpOnDiagnostic);
@@ -54,7 +60,8 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 
   mlir::OpBuilder b(&ctx);
   auto loc = b.getUnknownLoc();
-  auto moduleOp = mlir::OwningOpRef<mlir::ModuleOp>(mlir::ModuleOp::create(loc));
+  auto moduleOp =
+      mlir::OwningOpRef<mlir::ModuleOp>(mlir::ModuleOp::create(loc));
 
   const auto fields = extractFields(module);
   llvm::SmallVector<mlir::Type, 8> allArgTypes;
@@ -77,14 +84,18 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
     return b.getFunctionType(types, {});
   };
 
-  auto initFunc = mlir::func::FuncOp::create(
-      loc, tensorium_mlir::abi::kSymbolInit, buildTypeFromIndices(initArgIndices));
-  auto rhsFunc = mlir::func::FuncOp::create(
-      loc, tensorium_mlir::abi::kSymbolRhs, buildTypeFromIndices(rhsArgIndices));
-  auto entryFunc = mlir::func::FuncOp::create(
-      loc, tensorium_mlir::abi::kSymbolEntry, b.getFunctionType(allArgTypes, {}));
+  auto initFunc =
+      mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolInit,
+                                 buildTypeFromIndices(initArgIndices));
+  auto rhsFunc =
+      mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolRhs,
+                                 buildTypeFromIndices(rhsArgIndices));
+  auto entryFunc =
+      mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolEntry,
+                                 b.getFunctionType(allArgTypes, {}));
 
-  auto mapFieldArgs = [&](mlir::Block *block, const std::vector<unsigned> &indices) {
+  auto mapFieldArgs = [&](mlir::Block *block,
+                          const std::vector<unsigned> &indices) {
     llvm::DenseMap<llvm::StringRef, mlir::Value> fieldArg;
     for (unsigned i = 0; i < indices.size(); ++i)
       fieldArg[fields[indices[i]].name] = block->getArgument(i);
@@ -100,13 +111,13 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   };
 
   auto setCommonABIAttrs = [&](mlir::func::FuncOp fn, llvm::StringRef kind) {
-    fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
-                b.getI64IntegerAttr(
-                    tensorium_mlir::abi::kGeneratedKernelABIVersion));
+    fn->setAttr(
+        tensorium_mlir::abi::kAttrABIVersion,
+        b.getI64IntegerAttr(tensorium_mlir::abi::kGeneratedKernelABIVersion));
     fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
-    fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
-                b.getStringAttr(
-                    tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+    fn->setAttr(
+        tensorium_mlir::abi::kAttrMemoryLayout,
+        b.getStringAttr(tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
     fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
                 b.getStringAttr(tensorium_mlir::abi::kMemrefABI1DStridedF64));
   };
@@ -125,13 +136,13 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   b.setInsertionPointToEnd(initBlock);
   auto initFieldArg = mapFieldArgs(initBlock, initArgIndices);
   emitInitialDataOps(b, loc, module, initFieldArg);
-  mlir::func::ReturnOp::create(b, loc);
+  b.create<mlir::func::ReturnOp>(loc);
 
   auto *rhsBlock = rhsFunc.addEntryBlock();
   b.setInsertionPointToEnd(rhsBlock);
   auto rhsFieldArg = mapFieldArgs(rhsBlock, rhsArgIndices);
   emitEvolutionOps(b, loc, module, rhsFieldArg);
-  mlir::func::ReturnOp::create(b, loc);
+  b.create<mlir::func::ReturnOp>(loc);
 
   auto *entryBlock = entryFunc.addEntryBlock();
   b.setInsertionPointToEnd(entryBlock);
@@ -145,11 +156,11 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   for (unsigned idx : rhsArgIndices)
     rhsCallArgs.push_back(entryBlock->getArgument(idx));
 
-  mlir::func::CallOp::create(b, loc, tensorium_mlir::abi::kSymbolInit, mlir::TypeRange{},
-                             initCallArgs);
-  mlir::func::CallOp::create(b, loc, tensorium_mlir::abi::kSymbolRhs, mlir::TypeRange{},
-                             rhsCallArgs);
-  mlir::func::ReturnOp::create(b, loc);
+  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolInit,
+                               mlir::TypeRange{}, initCallArgs);
+  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolRhs,
+                               mlir::TypeRange{}, rhsCallArgs);
+  b.create<mlir::func::ReturnOp>(loc);
 
   moduleOp->getOperation()->setAttr(
       tensorium_mlir::abi::kAttrABIVersion,
@@ -184,12 +195,11 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 
   mlir::PassManager pm(&ctx);
   if (pipelineOpts.mlirPrintIRAfterFailure) {
-    pm.enableIRPrinting(
-        [](mlir::Pass *, mlir::Operation *) { return false; },
-        [](mlir::Pass *, mlir::Operation *) { return true; },
-        /*printModuleScope=*/true,
-        /*printAfterOnlyOnChange=*/false,
-        /*printAfterOnlyOnFailure=*/true);
+    pm.enableIRPrinting([](mlir::Pass *, mlir::Operation *) { return false; },
+                        [](mlir::Pass *, mlir::Operation *) { return true; },
+                        /*printModuleScope=*/true,
+                        /*printAfterOnlyOnChange=*/false,
+                        /*printAfterOnlyOnFailure=*/true);
   }
   addEinsteinPipelineSafe(pm, pipelineOpts);
   addPostMLIRNormalizationPipeline(pm, pipelineOpts);

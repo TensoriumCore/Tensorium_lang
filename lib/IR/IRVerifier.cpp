@@ -69,7 +69,8 @@ static void verifyExpr(const backend::ExprIR *expr, VerifyContext &ctx) {
     if (!std::is_sorted(ctr->summedIndices.begin(), ctr->summedIndices.end())) {
       emitError(ctx, "IR verifier: contraction indices are not canonicalized");
     }
-    if (std::adjacent_find(ctr->summedIndices.begin(), ctr->summedIndices.end()) !=
+    if (std::adjacent_find(ctr->summedIndices.begin(),
+                           ctr->summedIndices.end()) !=
         ctr->summedIndices.end()) {
       emitError(ctx, "IR verifier: contraction indices must be unique");
     }
@@ -95,7 +96,8 @@ static void verifyExpr(const backend::ExprIR *expr, VerifyContext &ctx) {
     verifyExpr(perm->in.get(), ctx);
     for (const auto &idx : perm->order) {
       if (!core::isTensorIndexName(idx)) {
-        emitError(ctx, "IR verifier: invalid index_permute index '" + idx + "'");
+        emitError(ctx,
+                  "IR verifier: invalid index_permute index '" + idx + "'");
       }
     }
     return;
@@ -158,6 +160,17 @@ ValidationResult verifyIR(const backend::ModuleIR &module) {
       verifyExpr(temp.rhs.get(), ctx);
     for (const auto &equation : evolution.equations)
       verifyExpr(equation.rhs.get(), ctx);
+  }
+
+  if (module.constraintProblem) {
+    const auto &problem = *module.constraintProblem;
+    for (const auto &equation : problem.equations)
+      verifyExpr(equation.residual.get(), ctx);
+    for (const auto &boundary : problem.boundaries)
+      for (const auto &condition : boundary.conditions)
+        verifyExpr(condition.rhs.get(), ctx);
+    for (const auto &seed : problem.seeds)
+      verifyExpr(seed.rhs.get(), ctx);
   }
 
   return result;

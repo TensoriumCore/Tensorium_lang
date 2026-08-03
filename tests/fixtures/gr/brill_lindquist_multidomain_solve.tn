@@ -1,0 +1,43 @@
+# Executable multidomain radial problem with a finite shell matched C0/C1 to
+# a compactified exterior domain whose final collocation point is infinity.
+params { mass }
+
+initial_data BrillLindquistMultidomain {
+  domain near {
+    coordinates = spherical
+    topology = shell
+    resolution = [25]
+    basis = chebyshev
+    bounds = [1, 4]
+  }
+
+  domain infinity {
+    coordinates = spherical
+    topology = compactified
+    resolution = [17]
+    basis = chebyshev
+    bounds = [4]
+  }
+
+  interface near -> infinity
+
+  unknown scalar psi
+  equation scalar hamiltonian = laplacian(psi)
+
+  boundary inner {
+    psi = 1 + mass / (2 * r)
+  }
+
+  boundary outer {
+    psi = 1
+  }
+
+  seed psi = 1
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-10
+    max_iterations = 8
+  }
+}

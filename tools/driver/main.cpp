@@ -9,14 +9,17 @@
 #include "tensorium/Backend/IRPrinter.hpp"
 #include "tensorium/Runtime/CpuRuntime.hpp"
 #include "tensorium/Runtime/Eval.hpp"
+#include "tensorium/Solver/ConstraintSolver.hpp"
 #include "tensorium/Validation/IRCanonicalize.hpp"
 #include "tensorium/Validation/IRVerifier.hpp"
 #include "tensorium/Validation/ProgramValidator.hpp"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <unordered_map>
 #include <vector>
 
 using namespace tensorium;
@@ -70,6 +73,9 @@ static void printIndexedExpr(const IndexedExpr *e) {
     case IndexedVarKind::Coordinate:
       std::cout << "coord:" << v->coordIndex;
       break;
+    case IndexedVarKind::Unknown:
+      std::cout << "unknown";
+      break;
     }
 
     if (!v->tensorIndexNames.empty()) {
@@ -115,6 +121,8 @@ int main(int argc, char **argv) {
   bool dumpBackend = false;
   bool dumpBackendExpr = false;
   bool runCpu = false;
+  bool solveConstraints = false;
+  std::unordered_map<std::string, double> constraintParameters;
   size_t steps = 10;
   double initScalar = 1.0;
   double initAlpha = 2.0;
@@ -170,6 +178,28 @@ int main(int argc, char **argv) {
       enableAnalysisPass = true;
     } else if (arg == "--run-cpu") {
       runCpu = true;
+    } else if (arg == "--solve-constraints") {
+      solveConstraints = true;
+    } else if (arg == "--param" || arg.rfind("--param=", 0) == 0) {
+      std::string assignment;
+      if (arg == "--param") {
+        if (i + 1 >= argc)
+          throw std::runtime_error("--param expects name=value");
+        assignment = argv[++i];
+      } else {
+        assignment = arg.substr(std::string("--param=").size());
+      }
+      const size_t equals = assignment.find('=');
+      if (equals == std::string::npos || equals == 0 ||
+          equals + 1 == assignment.size())
+        throw std::runtime_error("--param expects name=value");
+      const std::string name = assignment.substr(0, equals);
+      const std::string valueText = assignment.substr(equals + 1);
+      size_t consumed = 0;
+      const double value = std::stod(valueText, &consumed);
+      if (consumed != valueText.size())
+        throw std::runtime_error("--param value must be a number");
+      constraintParameters[name] = value;
     } else if (arg == "--tensorium-einstein-lower") {
       enableEinsteinLoweringPass = true;
     } else if (arg == "--tensorium-index-analyze") {
@@ -414,6 +444,14 @@ int main(int argc, char **argv) {
           std::cout << "  dt  = " << mod.simulation->time.dt << "\n";
         }
 
+        if (mod.constraintProblem) {
+          const auto &problem = *mod.constraintProblem;
+          std::cout << "ConstraintProblem:\n";
+          std::cout << "  " << problem.name << " (" << problem.domains.size()
+                    << " domains, " << problem.unknowns.size() << " unknowns, "
+                    << problem.equations.size() << " residuals)\n";
+        }
+
         std::cout << "Fields:\n";
         for (const auto &f : mod.fields) {
           std::cout << "  " << f.name << " (up=" << f.tensorType.up << ",down=" << f.tensorType.down
@@ -431,6 +469,40 @@ int main(int argc, char **argv) {
         std::cout << "\n=== BACKEND IR FULL (" << path << ") ===\n";
         tensorium::backend::printModuleIR(mod);
         std::cout << "==============================\n";
+      }
+
+      if (solveConstraints) {
+        tensorium::solver::ConstraintSolveRequest request;
+        request.parameters = constraintParameters;
+        auto solution = tensorium::solver::solveRadialConstraintProblem(
+            mod, request);
+        if (!solution.converged) {
+          throw std::runtime_error(
+              "constraint Newton solve did not converge after " +
+              std::to_string(solution.iterations) +
+              " iterations; residual_inf=" +
+              std::to_string(solution.residualNorm));
+        }
+        std::cout << std::setprecision(17);
+        std::cout << "[ConstraintSolve] converged=true iterations="
+                  << solution.iterations
+                  << " residual_inf=" << solution.residualNorm
+                  << " domains=" << solution.domains.size() << "\n";
+        for (const auto &domain : solution.domains) {
+          std::cout << "[ConstraintSolve] domain=" << domain.name
+                    << " offset=" << domain.offset
+                    << " points=" << domain.pointCount
+                    << " compactified="
+                    << (domain.compactified ? "true" : "false") << "\n";
+        }
+        for (const auto &entry : solution.unknowns) {
+          std::cout << "[ConstraintSolve] unknown=" << entry.first
+                    << " points=" << entry.second.size();
+          if (!entry.second.empty())
+            std::cout << " inner=" << entry.second.front()
+                      << " outer=" << entry.second.back();
+          std::cout << "\n";
+        }
       }
 
       auto makeMLIRGenOptions = [&]() {

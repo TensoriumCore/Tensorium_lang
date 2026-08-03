@@ -1,4 +1,5 @@
 #include "tensorium/Sema/Sema.hpp"
+#include <cmath>
 #include <set>
 #include <stdexcept>
 
@@ -149,13 +150,14 @@ void SemanticAnalyzer::validateInitialDataExpr(const Expr *expr,
 }
 
 void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
-  if (!prog.simulation) {
-    throw std::runtime_error("initial_data requires simulation block");
+  if ((init.hasMetric4 || init.hasDecomposed) && !prog.simulation) {
+    throw std::runtime_error("analytic initial_data requires simulation block");
   }
 
   if (init.hasMetric4) {
     if (init.metric4.indices.size() != 2) {
-      throw std::runtime_error("initial_data metric4 expects exactly 2 indices");
+      throw std::runtime_error(
+          "initial_data metric4 expects exactly 2 indices");
     }
     if (init.metric4.components.size() != 4) {
       throw std::runtime_error("initial_data metric4 expects a 4x4 matrix");
@@ -163,13 +165,12 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
     for (size_t i = 0; i < init.metric4.components.size(); ++i) {
       if (init.metric4.components[i].size() != 4) {
         throw std::runtime_error("initial_data metric4 row " +
-                                 std::to_string(i) +
-                                 " must have 4 entries");
+                                 std::to_string(i) + " must have 4 entries");
       }
       for (size_t j = 0; j < init.metric4.components[i].size(); ++j) {
-        validateInitialDataExpr(
-            init.metric4.components[i][j].get(),
-            "metric4[" + std::to_string(i) + "," + std::to_string(j) + "]");
+        validateInitialDataExpr(init.metric4.components[i][j].get(),
+                                "metric4[" + std::to_string(i) + "," +
+                                    std::to_string(j) + "]");
       }
     }
 
@@ -206,14 +207,13 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
     }
     for (size_t i = 0; i < init.decomposed.gamma.size(); ++i) {
       if (init.decomposed.gamma[i].size() != 3) {
-        throw std::runtime_error("initial_data gamma row " +
-                                 std::to_string(i) +
+        throw std::runtime_error("initial_data gamma row " + std::to_string(i) +
                                  " must have 3 entries");
       }
       for (size_t j = 0; j < init.decomposed.gamma[i].size(); ++j) {
-        validateInitialDataExpr(
-            init.decomposed.gamma[i][j].get(),
-            "gamma[" + std::to_string(i) + "," + std::to_string(j) + "]");
+        validateInitialDataExpr(init.decomposed.gamma[i][j].get(),
+                                "gamma[" + std::to_string(i) + "," +
+                                    std::to_string(j) + "]");
       }
     }
 
@@ -224,13 +224,12 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
       for (size_t i = 0; i < init.decomposed.gammaU.size(); ++i) {
         if (init.decomposed.gammaU[i].size() != 3) {
           throw std::runtime_error("initial_data gammaU row " +
-                                   std::to_string(i) +
-                                   " must have 3 entries");
+                                   std::to_string(i) + " must have 3 entries");
         }
         for (size_t j = 0; j < init.decomposed.gammaU[i].size(); ++j) {
-          validateInitialDataExpr(
-              init.decomposed.gammaU[i][j].get(),
-              "gammaU[" + std::to_string(i) + "," + std::to_string(j) + "]");
+          validateInitialDataExpr(init.decomposed.gammaU[i][j].get(),
+                                  "gammaU[" + std::to_string(i) + "," +
+                                      std::to_string(j) + "]");
         }
       }
     }
@@ -253,8 +252,8 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
 
   if (init.split3p1.enabled) {
     if (!init.hasMetric4 && !init.hasDecomposed) {
-      throw std::runtime_error(
-          "split_3p1 mapping requires metric4 or decomposed initial_data definition");
+      throw std::runtime_error("split_3p1 mapping requires metric4 or "
+                               "decomposed initial_data definition");
     }
 
     auto validateTarget = [this](const TensorAccess &target, int expUp,
@@ -276,15 +275,14 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
           expUp == 2 && expDown == 0)
         typeOk = true;
       if (!typeOk) {
-        throw std::runtime_error("split_3p1 target '" + target.base +
-                                 "' for " + label + " has wrong tensor type");
+        throw std::runtime_error("split_3p1 target '" + target.base + "' for " +
+                                 label + " has wrong tensor type");
       }
 
       const size_t expectedRank = static_cast<size_t>(expUp + expDown);
       if (target.indices.size() != expectedRank) {
-        throw std::runtime_error("split_3p1 target '" + target.base +
-                                 "' for " + label +
-                                 " has wrong number of indices");
+        throw std::runtime_error("split_3p1 target '" + target.base + "' for " +
+                                 label + " has wrong number of indices");
       }
     };
 
@@ -301,6 +299,176 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
       validateTarget(init.split3p1.gammaUTarget, 2, 0, "gammaU", false, true);
     }
   }
+
+  if (init.hasConstraintProblem)
+    validateConstraintProblem(init.constraintProblem);
+}
+
+void SemanticAnalyzer::validateConstraintProblem(
+    const ConstraintProblemDecl &problem) {
+  if (problem.name.empty())
+    throw std::runtime_error("constraint problem requires a name");
+  if (problem.domains.empty())
+    throw std::runtime_error("constraint problem requires at least one domain");
+  if (problem.unknowns.empty())
+    throw std::runtime_error(
+        "constraint problem requires at least one unknown");
+  if (problem.equations.empty())
+    throw std::runtime_error(
+        "constraint problem requires at least one equation");
+  if (problem.boundaries.empty())
+    throw std::runtime_error(
+        "constraint problem requires at least one boundary");
+  if (!problem.hasSolve)
+    throw std::runtime_error("constraint problem requires a solve block");
+
+  static const std::set<std::string> kCoordinates = {"cartesian", "spherical",
+                                                     "cylindrical"};
+  static const std::set<std::string> kTopologies = {
+      "ball", "shell", "compactified", "bispherical", "rectilinear"};
+  static const std::set<std::string> kBases = {"chebyshev", "legendre",
+                                               "fourier", "chebyshev_fourier",
+                                               "legendre_fourier"};
+
+  std::set<std::string> domainNames;
+  std::string coordinateSystem;
+  size_t domainDimension = 0;
+  for (const auto &domain : problem.domains) {
+    if (!domainNames.insert(domain.name).second)
+      throw std::runtime_error("constraint domain redeclared: " + domain.name);
+    if (!kCoordinates.count(domain.coordinates))
+      throw std::runtime_error("unsupported constraint coordinate system '" +
+                               domain.coordinates + "'");
+    if (coordinateSystem.empty())
+      coordinateSystem = domain.coordinates;
+    else if (coordinateSystem != domain.coordinates)
+      throw std::runtime_error(
+          "all constraint domains must use the same coordinate system");
+    if (!kTopologies.count(domain.topology))
+      throw std::runtime_error("unsupported constraint topology '" +
+                               domain.topology + "'");
+    if (!kBases.count(domain.basis))
+      throw std::runtime_error("unsupported spectral basis '" + domain.basis +
+                               "'");
+    if (domain.resolution.empty() || domain.resolution.size() > 3)
+      throw std::runtime_error(
+          "constraint domain resolution must have between 1 and 3 entries");
+    if (domainDimension == 0)
+      domainDimension = domain.resolution.size();
+    else if (domainDimension != domain.resolution.size())
+      throw std::runtime_error(
+          "all constraint domains must have the same dimension");
+    for (int resolution : domain.resolution) {
+      if (resolution <= 0)
+        throw std::runtime_error(
+            "constraint domain resolution entries must be > 0");
+    }
+    if (!domain.bounds.empty()) {
+      if (domain.topology == "compactified") {
+        if (domain.bounds.size() != 1 || !std::isfinite(domain.bounds[0]) ||
+            domain.bounds[0] <= 0.0) {
+          throw std::runtime_error(
+              "compactified domain bounds must contain one finite positive "
+              "inner radius");
+        }
+      } else {
+        if (domain.bounds.size() != 2)
+          throw std::runtime_error(
+              "finite constraint domain bounds must contain exactly two "
+              "entries");
+        if (!std::isfinite(domain.bounds[0]) ||
+            !std::isfinite(domain.bounds[1]) ||
+            domain.bounds[0] >= domain.bounds[1]) {
+          throw std::runtime_error(
+              "finite constraint domain bounds must be finite and strictly "
+              "increasing");
+        }
+        if (domain.coordinates == "spherical" && domain.bounds[0] <= 0.0) {
+          throw std::runtime_error(
+              "spherical shell bounds must have a strictly positive radius");
+        }
+      }
+    }
+  }
+
+  std::set<std::pair<std::string, std::string>> interfacePairs;
+  std::set<std::string> interfaceInputs;
+  std::set<std::string> interfaceOutputs;
+  for (const auto &interface : problem.interfaces) {
+    if (!domainNames.count(interface.innerDomain))
+      throw std::runtime_error("constraint interface references unknown domain '" +
+                               interface.innerDomain + "'");
+    if (!domainNames.count(interface.outerDomain))
+      throw std::runtime_error("constraint interface references unknown domain '" +
+                               interface.outerDomain + "'");
+    if (interface.innerDomain == interface.outerDomain)
+      throw std::runtime_error("constraint interface cannot connect domain '" +
+                               interface.innerDomain + "' to itself");
+    if (!interfacePairs
+             .insert({interface.innerDomain, interface.outerDomain})
+             .second)
+      throw std::runtime_error("constraint interface redeclared: " +
+                               interface.innerDomain + " -> " +
+                               interface.outerDomain);
+    if (!interfaceInputs.insert(interface.innerDomain).second)
+      throw std::runtime_error("constraint domain '" + interface.innerDomain +
+                               "' has multiple outer interfaces");
+    if (!interfaceOutputs.insert(interface.outerDomain).second)
+      throw std::runtime_error("constraint domain '" + interface.outerDomain +
+                               "' has multiple inner interfaces");
+  }
+
+  std::set<std::string> unknownNames;
+  for (const auto &unknown : problem.unknowns) {
+    if (!unknownNames.insert(unknown.name).second)
+      throw std::runtime_error("constraint unknown redeclared: " +
+                               unknown.name);
+    const size_t rank =
+        static_cast<size_t>(unknown.type.up + unknown.type.down);
+    if (unknown.indices.size() != rank)
+      throw std::runtime_error("constraint unknown '" + unknown.name +
+                               "' declares wrong number of indices");
+    for (const auto &index : unknown.indices)
+      validateSpatialIndex(index);
+  }
+
+  std::set<std::string> equationNames;
+  for (const auto &equation : problem.equations) {
+    if (!equationNames.insert(equation.name).second)
+      throw std::runtime_error("constraint equation redeclared: " +
+                               equation.name);
+    const size_t rank =
+        static_cast<size_t>(equation.type.up + equation.type.down);
+    if (equation.indices.size() != rank)
+      throw std::runtime_error("constraint equation '" + equation.name +
+                               "' declares wrong number of indices");
+    if (!equation.residual)
+      throw std::runtime_error("constraint equation '" + equation.name +
+                               "' has no residual");
+    for (const auto &index : equation.indices)
+      validateSpatialIndex(index);
+  }
+
+  std::set<std::string> boundaryRegions;
+  for (const auto &boundary : problem.boundaries) {
+    if (!boundaryRegions.insert(boundary.region).second)
+      throw std::runtime_error("constraint boundary redeclared: " +
+                               boundary.region);
+    if (boundary.conditions.empty())
+      throw std::runtime_error("constraint boundary '" + boundary.region +
+                               "' has no conditions");
+  }
+
+  if (problem.solve.nonlinear != "newton")
+    throw std::runtime_error(
+        "constraint solver currently supports nonlinear = newton");
+  if (problem.solve.linear != "direct" && problem.solve.linear != "gmres")
+    throw std::runtime_error(
+        "constraint solver linear method must be direct or gmres");
+  if (problem.solve.tolerance <= 0.0)
+    throw std::runtime_error("constraint solver tolerance must be > 0");
+  if (problem.solve.maxIterations <= 0)
+    throw std::runtime_error("constraint solver max_iterations must be > 0");
 }
 
 } // namespace tensorium

@@ -22,15 +22,18 @@ static mlir::ArrayAttr makeIndicesAttr(mlir::OpBuilder &b,
   return b.getArrayAttr(idxList);
 }
 
-static mlir::Value emitFieldRefFromSource(mlir::OpBuilder &b, mlir::Location loc,
+static mlir::Value emitFieldRefFromSource(mlir::OpBuilder &b,
+                                          mlir::Location loc,
                                           mlir::Value source,
                                           llvm::ArrayRef<std::string> names) {
-  auto sourceType = mlir::dyn_cast<tensorium::mlir::FieldType>(source.getType());
+  auto sourceType =
+      mlir::dyn_cast<tensorium::mlir::FieldType>(source.getType());
   if (!sourceType)
-    emitUnsupportedExprError(loc, "field source does not have tensorium.field type");
+    emitUnsupportedExprError(loc,
+                             "field source does not have tensorium.field type");
 
-  auto ref = tensorium::mlir::RefOp::create(
-      b, loc, sourceType, source, b.getStringAttr("field"),
+  auto ref = b.create<tensorium::mlir::RefOp>(
+      loc, sourceType, source, b.getStringAttr("field"),
       makeIndicesAttr(b, names), mlir::ArrayAttr());
   return ref.getResult();
 }
@@ -41,13 +44,13 @@ static mlir::Value emitFieldRefByName(
     const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg) {
   auto it = fieldArg.find(fieldName);
   if (it == fieldArg.end())
-    emitUnsupportedExprError(loc, "unknown field reference '" + fieldName.str() +
-                                     "' in MLIR emission");
+    emitUnsupportedExprError(loc, "unknown field reference '" +
+                                      fieldName.str() + "' in MLIR emission");
   return emitFieldRefFromSource(b, loc, it->second, names);
 }
 
-static mlir::Value
-findConnectionFieldValue(const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg) {
+static mlir::Value findConnectionFieldValue(
+    const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg) {
   auto isConnectionType = [](mlir::Type ty) {
     auto fieldTy = mlir::dyn_cast<tensorium::mlir::FieldType>(ty);
     return fieldTy && fieldTy.getRank() == 3 && fieldTy.getUp() == 1 &&
@@ -88,10 +91,11 @@ static std::string pickDummyIndex(llvm::ArrayRef<std::string> used) {
   return "l";
 }
 
-mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
-                     const tensorium::backend::ExprIR *e,
-                     const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg,
-                     llvm::StringMap<mlir::Value> *localTemps) {
+mlir::Value
+emitExpr(mlir::OpBuilder &b, mlir::Location loc,
+         const tensorium::backend::ExprIR *e,
+         const llvm::DenseMap<llvm::StringRef, mlir::Value> &fieldArg,
+         llvm::StringMap<mlir::Value> *localTemps) {
   using namespace tensorium::backend;
   if (!e)
     emitUnsupportedExprError(loc, "null expression");
@@ -101,8 +105,9 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
   switch (e->kind) {
   case ExprIR::Kind::Number: {
     auto *n = static_cast<const NumberIR *>(e);
-    return tensorium::mlir::ConstOp::create(b, loc, desiredType,
-                                            b.getF64FloatAttr(n->value))
+    return b
+        .create<tensorium::mlir::ConstOp>(loc, desiredType,
+                                          b.getF64FloatAttr(n->value))
         .getResult();
   }
   case ExprIR::Kind::Var: {
@@ -110,32 +115,34 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
     if (v->vkind == VarKind::Local) {
       if (!localTemps)
         emitUnsupportedExprError(loc, "temporary '" + v->name +
-                                         "' is not supported in this context");
+                                          "' is not supported in this context");
       auto itLocal = localTemps->find(v->name);
       if (itLocal == localTemps->end()) {
-        emitUnsupportedExprError(
-            loc, "temporary '" + v->name + "' referenced before definition");
+        emitUnsupportedExprError(loc, "temporary '" + v->name +
+                                          "' referenced before definition");
       }
       return itLocal->second;
     }
 
     if (v->vkind == VarKind::Param) {
       if (desiredType.getRank() != 0) {
-        emitUnsupportedExprError(
-            loc, "parameter '" + v->name + "' must lower as scalar");
+        emitUnsupportedExprError(loc, "parameter '" + v->name +
+                                          "' must lower as scalar");
       }
-      return tensorium::mlir::ParamOp::create(b, loc, desiredType,
-                                              b.getStringAttr(v->name))
+      return b
+          .create<tensorium::mlir::ParamOp>(loc, desiredType,
+                                            b.getStringAttr(v->name))
           .getResult();
     }
 
     if (v->vkind == VarKind::Coord) {
       if (desiredType.getRank() != 0) {
-        emitUnsupportedExprError(
-            loc, "coordinate '" + v->name + "' must lower as scalar");
+        emitUnsupportedExprError(loc, "coordinate '" + v->name +
+                                          "' must lower as scalar");
       }
-      return tensorium::mlir::CoordOp::create(b, loc, desiredType,
-                                              b.getStringAttr(v->name))
+      return b
+          .create<tensorium::mlir::CoordOp>(loc, desiredType,
+                                            b.getStringAttr(v->name))
           .getResult();
     }
 
@@ -152,21 +159,21 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
     auto R = emitExpr(b, loc, bin->rhs.get(), fieldArg, localTemps);
 
     if (bin->op == "+")
-      return tensorium::mlir::AddOp::create(b, loc, desiredType, L, R)
+      return b.create<tensorium::mlir::AddOp>(loc, desiredType, L, R)
           .getResult();
     if (bin->op == "*")
-      return tensorium::mlir::MulOp::create(b, loc, desiredType, L, R)
+      return b.create<tensorium::mlir::MulOp>(loc, desiredType, L, R)
           .getResult();
     if (bin->op == "-")
-      return tensorium::mlir::SubOp::create(b, loc, desiredType, L, R)
+      return b.create<tensorium::mlir::SubOp>(loc, desiredType, L, R)
           .getResult();
     if (bin->op == "/")
-      return tensorium::mlir::DivOp::create(b, loc, desiredType, L, R)
+      return b.create<tensorium::mlir::DivOp>(loc, desiredType, L, R)
           .getResult();
 
-    emitUnsupportedExprError(
-        loc, "binary operator '" + bin->op +
-                 "' is not supported during MLIR emission");
+    emitUnsupportedExprError(loc,
+                             "binary operator '" + bin->op +
+                                 "' is not supported during MLIR emission");
   }
   case ExprIR::Kind::Call: {
     auto *c = static_cast<const CallIR *>(e);
@@ -175,7 +182,7 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
         emitUnsupportedExprError(
             loc, "d_* expects exactly one argument in MLIR emission");
       auto arg0 = emitExpr(b, loc, c->args[0].get(), fieldArg, localTemps);
-      auto deriv = tensorium::mlir::DerivOp::create(b, loc, desiredType, arg0);
+      auto deriv = b.create<tensorium::mlir::DerivOp>(loc, desiredType, arg0);
       deriv->setAttr("index", b.getStringAttr(std::string(1, c->callee[2])));
       return deriv.getResult();
     }
@@ -184,7 +191,7 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
         emitUnsupportedExprError(
             loc, "contract() expects exactly one argument in MLIR emission");
       auto arg0 = emitExpr(b, loc, c->args[0].get(), fieldArg, localTemps);
-      return tensorium::mlir::ContractOp::create(b, loc, desiredType, arg0)
+      return b.create<tensorium::mlir::ContractOp>(loc, desiredType, arg0)
           .getResult();
     }
     if (c->callee == "laplacian") {
@@ -214,37 +221,35 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
       hessianDesc.down = 2;
       auto hessianTy = asFieldType(b, hessianDesc);
 
-      auto firstDeriv =
-          tensorium::mlir::DerivOp::create(b, loc, gradTy, arg0);
+      auto firstDeriv = b.create<tensorium::mlir::DerivOp>(loc, gradTy, arg0);
       firstDeriv->setAttr("index", b.getStringAttr("i"));
 
-      auto secondDeriv = tensorium::mlir::DerivOp::create(
-          b, loc, hessianTy, firstDeriv.getResult());
+      auto secondDeriv = b.create<tensorium::mlir::DerivOp>(
+          loc, hessianTy, firstDeriv.getResult());
       secondDeriv->setAttr("index", b.getStringAttr("i"));
 
-      auto lap =
-          tensorium::mlir::ContractOp::create(b, loc, desiredType,
-                                              secondDeriv.getResult());
+      auto lap = b.create<tensorium::mlir::ContractOp>(loc, desiredType,
+                                                       secondDeriv.getResult());
       lap->setAttr("sum_indices", makeIndexArrayAttr(b, {"i"}));
       return lap.getResult();
     }
     if (c->isExtern)
       emitExternLoweringError(loc, c->callee);
 
-    emitUnsupportedExprError(
-        loc, "call to '" + c->callee +
-                 "' is not supported during MLIR emission");
+    emitUnsupportedExprError(loc,
+                             "call to '" + c->callee +
+                                 "' is not supported during MLIR emission");
   }
   case ExprIR::Kind::TensorProduct: {
     auto *p = static_cast<const TensorProductIR *>(e);
     auto L = emitExpr(b, loc, p->lhs.get(), fieldArg, localTemps);
     auto R = emitExpr(b, loc, p->rhs.get(), fieldArg, localTemps);
-    return tensorium::mlir::MulOp::create(b, loc, desiredType, L, R).getResult();
+    return b.create<tensorium::mlir::MulOp>(loc, desiredType, L, R).getResult();
   }
   case ExprIR::Kind::Contraction: {
     auto *c = static_cast<const ContractionIR *>(e);
     auto in = emitExpr(b, loc, c->in.get(), fieldArg, localTemps);
-    auto out = tensorium::mlir::ContractOp::create(b, loc, desiredType, in);
+    auto out = b.create<tensorium::mlir::ContractOp>(loc, desiredType, in);
     if (!c->summedIndices.empty()) {
       out->setAttr("sum_indices", makeIndexArrayAttr(b, c->summedIndices));
     }
@@ -261,7 +266,7 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
   case ExprIR::Kind::Trace: {
     auto *t = static_cast<const TraceIR *>(e);
     auto in = emitExpr(b, loc, t->in.get(), fieldArg, localTemps);
-    auto out = tensorium::mlir::ContractOp::create(b, loc, desiredType, in);
+    auto out = b.create<tensorium::mlir::ContractOp>(loc, desiredType, in);
     if (!t->tracedIndices.empty()) {
       out->setAttr("sum_indices", makeIndexArrayAttr(b, t->tracedIndices));
     }
@@ -270,7 +275,7 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
   case ExprIR::Kind::PartialDerivative: {
     auto *d = static_cast<const PartialDerivativeIR *>(e);
     auto in = emitExpr(b, loc, d->in.get(), fieldArg, localTemps);
-    auto deriv = tensorium::mlir::DerivOp::create(b, loc, desiredType, in);
+    auto deriv = b.create<tensorium::mlir::DerivOp>(loc, desiredType, in);
     deriv->setAttr("index", b.getStringAttr(d->coordIndex));
     return deriv.getResult();
   }
@@ -278,7 +283,8 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
     auto *g = static_cast<const GradientIR *>(e);
     (void)g;
     emitUnsupportedExprError(
-        loc, "gradient lowering requires explicit coordinate index; use d_i(...)");
+        loc,
+        "gradient lowering requires explicit coordinate index; use d_i(...)");
   }
   case ExprIR::Kind::CovariantDerivative: {
     auto *d = static_cast<const CovariantDerivativeIR *>(e);
@@ -288,20 +294,21 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
     }
 
     if (d->contravariant) {
-      emitUnsupportedExprError(
-          loc,
-          "contravariant covariant derivative (nabla^) lowering is not implemented");
+      emitUnsupportedExprError(loc, "contravariant covariant derivative "
+                                    "(nabla^) lowering is not implemented");
     }
 
     auto *inVar = dynamic_cast<const VarIR *>(d->in.get());
     if (!inVar || inVar->vkind != VarKind::Field) {
       emitUnsupportedExprError(
-          loc, "covariant derivative lowering requires a field reference input");
+          loc,
+          "covariant derivative lowering requires a field reference input");
     }
 
-    auto inValue =
-        emitFieldRefByName(b, loc, inVar->name, inVar->tensorIndexNames, fieldArg);
-    auto partial = tensorium::mlir::DerivOp::create(b, loc, desiredType, inValue);
+    auto inValue = emitFieldRefByName(b, loc, inVar->name,
+                                      inVar->tensorIndexNames, fieldArg);
+    auto partial =
+        b.create<tensorium::mlir::DerivOp>(loc, desiredType, inValue);
     partial->setAttr("index", b.getStringAttr(d->derivIndex));
 
     const int rank = inVar->exprType.rank();
@@ -311,22 +318,21 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
     }
 
     if (rank != 1 || inVar->tensorIndexNames.size() != 1) {
-      emitUnsupportedExprError(
-          loc,
-          "covariant derivative lowering currently supports rank-1 field inputs");
+      emitUnsupportedExprError(loc, "covariant derivative lowering currently "
+                                    "supports rank-1 field inputs");
     }
 
     const bool isVector = inVar->exprType.up == 1 && inVar->exprType.down == 0;
     const bool isCovector =
         inVar->exprType.up == 0 && inVar->exprType.down == 1;
     if (!isVector && !isCovector) {
-      emitUnsupportedExprError(
-          loc,
-          "covariant derivative lowering supports vector/covector rank-1 fields");
+      emitUnsupportedExprError(loc, "covariant derivative lowering supports "
+                                    "vector/covector rank-1 fields");
     }
 
     if (inVar->tensorIndexNames[0].empty() || d->derivIndex.empty()) {
-      emitUnsupportedExprError(loc, "covariant derivative requires explicit indices");
+      emitUnsupportedExprError(
+          loc, "covariant derivative requires explicit indices");
     }
 
     mlir::Value connection = findConnectionFieldValue(fieldArg);
@@ -357,27 +363,27 @@ mlir::Value emitExpr(mlir::OpBuilder &b, mlir::Location loc,
     productTypeDesc.down = 2 + inVar->exprType.down;
     auto productType = asFieldType(b, productTypeDesc);
 
-    auto product = tensorium::mlir::MulOp::create(b, loc, productType, gammaRef,
-                                                   shiftedTensorRef);
-    auto correction =
-        tensorium::mlir::ContractOp::create(b, loc, desiredType, product.getRes());
+    auto product = b.create<tensorium::mlir::MulOp>(loc, productType, gammaRef,
+                                                    shiftedTensorRef);
+    auto correction = b.create<tensorium::mlir::ContractOp>(loc, desiredType,
+                                                            product.getRes());
     correction->setAttr("sum_indices", makeIndexArrayAttr(b, {dummy}));
 
     if (isVector) {
-      return tensorium::mlir::AddOp::create(b, loc, desiredType,
-                                            partial.getResult(),
-                                            correction.getOut())
+      return b
+          .create<tensorium::mlir::AddOp>(loc, desiredType, partial.getResult(),
+                                          correction.getOut())
           .getResult();
     }
-    return tensorium::mlir::SubOp::create(b, loc, desiredType,
-                                          partial.getResult(),
-                                          correction.getOut())
+    return b
+        .create<tensorium::mlir::SubOp>(loc, desiredType, partial.getResult(),
+                                        correction.getOut())
         .getResult();
   }
   case ExprIR::Kind::Divergence: {
     auto *d = static_cast<const DivergenceIR *>(e);
     auto in = emitExpr(b, loc, d->in.get(), fieldArg, localTemps);
-    auto out = tensorium::mlir::ContractOp::create(b, loc, desiredType, in);
+    auto out = b.create<tensorium::mlir::ContractOp>(loc, desiredType, in);
     if (!d->contractedIndex.empty()) {
       std::vector<std::string> idx = {d->contractedIndex};
       out->setAttr("sum_indices", makeIndexArrayAttr(b, idx));
@@ -400,9 +406,9 @@ void emitEvolutionOps(
 
     for (const auto &tmp : evo.temporaries) {
       if (!tmp.indexOffsets.empty()) {
-        emitUnsupportedExprError(
-            loc, "non-scalar temporary '" + tmp.name +
-                     "' is not supported in executable mode");
+        emitUnsupportedExprError(loc,
+                                 "non-scalar temporary '" + tmp.name +
+                                     "' is not supported in executable mode");
       }
       auto rhsV = emitExpr(b, loc, tmp.rhs.get(), fieldArg, &tempValues);
       tempValues[tmp.name] = rhsV;
@@ -415,22 +421,23 @@ void emitEvolutionOps(
       auto fieldTy =
           mlir::dyn_cast<tensorium::mlir::FieldType>(it->second.getType());
       if (!fieldTy)
-        emitUnsupportedExprError(loc, "field argument lacks tensorium.field type");
+        emitUnsupportedExprError(loc,
+                                 "field argument lacks tensorium.field type");
       auto rhsV = emitExpr(b, loc, eq.rhs.get(), fieldArg, &tempValues);
       if (!rhsV)
         continue;
       auto rhsTy = mlir::dyn_cast<tensorium::mlir::FieldType>(rhsV.getType());
       if (!rhsTy)
-        emitUnsupportedExprError(loc,
-                                 "rhs expression did not produce tensorium.field type");
+        emitUnsupportedExprError(
+            loc, "rhs expression did not produce tensorium.field type");
       if (rhsTy.getRank() == 0) {
-        rhsV = tensorium::mlir::PromoteOp::create(b, loc, fieldTy, rhsV)
+        rhsV = b.create<tensorium::mlir::PromoteOp>(loc, fieldTy, rhsV)
                    .getResult();
       } else if (fieldTy != rhsTy) {
         emitUnsupportedExprError(loc, "tensor assignment variance mismatch");
       }
-      tensorium::mlir::DtAssignOp::create(b, loc, it->second, rhsV,
-                                          makeIndexArrayAttr(b, eq.indices));
+      b.create<tensorium::mlir::DtAssignOp>(loc, it->second, rhsV,
+                                            makeIndexArrayAttr(b, eq.indices));
     }
   }
 }

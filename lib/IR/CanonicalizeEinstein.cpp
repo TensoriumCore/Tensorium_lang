@@ -222,8 +222,8 @@ static void collectFreeIndices(const backend::ExprIR *expr,
   }
 }
 
-static std::vector<std::string> pickCanonicalDummyTargets(
-    const std::set<std::string> &free, size_t needed) {
+static std::vector<std::string>
+pickCanonicalDummyTargets(const std::set<std::string> &free, size_t needed) {
   std::vector<std::string> out;
   out.reserve(needed);
 
@@ -250,8 +250,9 @@ static void remapIndexList(const std::map<std::string, std::string> &mapping,
     remapIndexName(mapping, idx);
 }
 
-static void applyIndexMapping(backend::ExprIR *expr,
-                              const std::map<std::string, std::string> &mapping) {
+static void
+applyIndexMapping(backend::ExprIR *expr,
+                  const std::map<std::string, std::string> &mapping) {
   using backend::ExprIR;
   if (!expr || mapping.empty())
     return;
@@ -487,6 +488,16 @@ void canonicalizeEinsteinIR(backend::ModuleIR &module) {
       canonicalizeExpr(temp.rhs);
     for (auto &equation : evolution.equations)
       canonicalizeExpr(equation.rhs);
+  }
+  if (module.constraintProblem) {
+    auto &problem = *module.constraintProblem;
+    for (auto &equation : problem.equations)
+      canonicalizeExpr(equation.residual);
+    for (auto &boundary : problem.boundaries)
+      for (auto &condition : boundary.conditions)
+        canonicalizeExpr(condition.rhs);
+    for (auto &seed : problem.seeds)
+      canonicalizeExpr(seed.rhs);
   }
 }
 
