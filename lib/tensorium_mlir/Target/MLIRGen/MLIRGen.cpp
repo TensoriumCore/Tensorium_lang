@@ -1188,6 +1188,11 @@ mlir::OwningOpRef<mlir::ModuleOp>
 buildMLIRModule(const tensorium::backend::ModuleIR &module,
                 mlir::MLIRContext &ctx, const MLIRGenOptions &opts,
                 bool *pipelineSuccess) {
+  if (module.constraintProblem && module.evolutions.empty()) {
+    throw std::runtime_error(
+        "constraint problem MLIR lowering is not implemented; use "
+        "--validate or --dump-backend-expr");
+  }
   if (opts.mlirDisableThreading)
     ctx.disableMultithreading();
   ctx.printOpOnDiagnostic(opts.mlirPrintOpOnDiagnostic);

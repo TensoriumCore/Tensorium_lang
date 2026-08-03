@@ -189,11 +189,8 @@ void emitInitialDataOps(mlir::OpBuilder &b, mlir::Location loc,
   const auto &init = *module.initialData;
 
   if (!init.hasMetric4 && !init.hasDecomposed) {
-    if (module.constraintProblem) {
-      emitUnsupportedExprError(
-          loc, "constraint problem MLIR lowering is not implemented; solve "
-               "the initial-data constraints before MLIR emission");
-    }
+    if (module.constraintProblem)
+      return;
     emitUnsupportedExprError(
         loc, "initial_data is present but no metric4 or alpha/beta/gamma data "
              "was provided");

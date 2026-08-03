@@ -322,6 +322,47 @@ by the solved domains.
 The handoff deliberately does not construct lapse or shift: those are gauge
 variables and are not determined by the CTT constraint equations.
 
+## Cartesian BSSN initialization
+
+`initializeBssnFromRadialCtt` converts the interpolated physical tensors into
+the Cartesian BSSN variables used by evolution kernels. For
+`gamma = det(gamma_ij)`, the conversion is
+
+```text
+chi             = gamma^(-1/3)
+gamma_tilde_ij  = chi gamma_ij
+gamma_tilde^ij  = gamma^ij / chi
+A_tilde_ij      = chi (K_ij - gamma_ij K/3).
+```
+
+The resulting conformal metric has unit determinant and `A_tilde_ij` is
+trace-free with respect to its inverse. `CttBssnBuffers` uses the generated
+kernel's structure-of-arrays, component-major layout, so its buffers can be
+passed directly to a Tensorium RHS kernel. The conversion currently requires
+a Cartesian target grid; spherical BSSN needs a reference-metric formulation
+and is not approximated by this API.
+
+`BssnGaugeSeed` supplies the initial lapse and shift when their optional output
+buffers are present. These are explicit gauge choices rather than results of
+the elliptic CTT solve.
+
+A single DSL module may now contain both the constraint `initial_data` block
+and an `evolution` block. Constraint equations still execute through the
+spectral solver, while the evolution block lowers to MLIR and LLVM normally.
+For example, from `build`:
+
+```sh
+./tools/driver/Tensorium_cc \
+  --solve-constraints --param amplitude=0.2 \
+  --emit-llvm /tmp/ctt_bssn_handoff.ll \
+  ../tests/fixtures/gr/ctt_bssn_handoff.tn
+```
+
+This emits `tensorium_rhs_grid_affine` after solving the same module's CTT
+problem. The generated analytic initialization entry point is not the
+constraint solver: a host must call `solveRadialConstraintProblem` followed by
+`initializeBssnFromRadialCtt`, then pass those buffers to the generated RHS.
+
 This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
 interval under spherical symmetry and a conformally flat ansatz. It is not yet
 a complete asymptotically flat data set or generic CTT/XCTS: the conformal
@@ -379,6 +420,7 @@ constrained initial_data DSL
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
+  -> initialize Cartesian BSSN buffers and lower the same module's RHS [implemented]
   -> damped Newton and dense linear solve [implemented subset]
   -> [next] generic covariant contractions and rank-two unknowns
 ```
@@ -406,6 +448,8 @@ From the `build` directory:
   ../tests/fixtures/gr/brill_lindquist_constraints.tn
 ```
 
-MLIR/LLVM generation is not enabled for constraint problems yet; the radial
-solver executes directly from `ConstraintProblemIR`. MLIR lowering still fails
-explicitly rather than silently discarding the problem.
+The radial solver executes constraint equations directly from
+`ConstraintProblemIR`; it does not lower those elliptic equations to MLIR.
+Constraint-only modules therefore still fail MLIR lowering explicitly rather
+than silently discarding the problem. A combined constraint-and-evolution
+module can lower its evolution RHS after the host-side constraint solve.
