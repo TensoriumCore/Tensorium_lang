@@ -3640,10 +3640,11 @@ static bool testConstraintRejectsTensorLaplacian() {
   try {
     (void)tensorium::api::parseAndValidateSource(source);
   } catch (const std::exception &ex) {
-    return std::string(ex.what()).find("laplacian() expects scalar") !=
+    return std::string(ex.what()).find(
+               "constraint tensor unknown 'beta' requires indexed access") !=
            std::string::npos;
   }
-  std::cerr << "FAIL: tensor-valued laplacian residual was accepted\n";
+  std::cerr << "FAIL: unindexed tensor-valued laplacian was accepted\n";
   return false;
 }
 
@@ -3991,6 +3992,49 @@ static bool testCoupledNonlinearRadialConstraintSolve() {
   return true;
 }
 
+static bool testScalarVectorRadialConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/scalar_vector_radial_solve.tn");
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module);
+  if (!solution.converged || solution.iterations != 3) {
+    std::cerr << "FAIL: scalar-vector radial solve did not converge as "
+                 "expected; iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+  if (solution.unknownLayouts.size() != 2 ||
+      solution.unknownLayouts[0].name != "psi" ||
+      solution.unknownLayouts[0].componentCount != 1 ||
+      solution.unknownLayouts[1].name != "W" ||
+      solution.unknownLayouts[1].contravariantRank != 1 ||
+      solution.unknownLayouts[1].componentCount != 3 ||
+      solution.unknownLayouts[1].pointsPerComponent != 22) {
+    std::cerr << "FAIL: scalar-vector component layout is incorrect\n";
+    return false;
+  }
+
+  const auto &psi = solution.unknowns.at("psi");
+  const auto &w = solution.unknowns.at("W");
+  if (psi.size() != 22 || w.size() != 66 ||
+      !std::isinf(solution.coordinates.back())) {
+    std::cerr << "FAIL: scalar-vector flattened solution sizes are incorrect\n";
+    return false;
+  }
+  double maxError = 0.0;
+  for (double value : psi)
+    maxError = std::max(maxError, std::abs(value - 1.0));
+  for (double value : w)
+    maxError = std::max(maxError, std::abs(value));
+  if (maxError > 1.0e-9) {
+    std::cerr << "FAIL: scalar-vector radial solution max error=" << maxError
+              << "\n";
+    return false;
+  }
+  return true;
+}
+
 int main() {
   struct NamedTest {
     const char *name;
@@ -4079,6 +4123,8 @@ int main() {
        &testNonlinearRadialConstraintSolve},
       {"testCoupledNonlinearRadialConstraintSolve",
        &testCoupledNonlinearRadialConstraintSolve},
+      {"testScalarVectorRadialConstraintSolve",
+       &testScalarVectorRadialConstraintSolve},
   };
 
   bool ok = true;

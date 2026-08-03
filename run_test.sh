@@ -151,6 +151,7 @@ CONSTRAINT_SOLVE_TESTS=(
   "tests/fixtures/gr/brill_lindquist_radial_solve.tn|49|1|1"
   "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn|42|2|1"
   "tests/fixtures/gr/coupled_nonlinear_radial_solve.tn|22|2|5"
+  "tests/fixtures/gr/scalar_vector_radial_solve.tn|22|2|3"
 )
 
 GR_FIXTURES=(
@@ -484,6 +485,12 @@ for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
   fi
   if ! grep -q "unknown=psi points=$expected_points" "$OUT_FILE"; then
     echo "ERROR: expected $expected_points-point psi solution for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
+  if [[ "$f" == *"scalar_vector_radial_solve.tn"* ]] &&
+     ! grep -q "unknown=W points=22 components=3 values=66" "$OUT_FILE"; then
+    echo "ERROR: expected three-component vector solution for $f"
     cat "$OUT_FILE"
     exit 1
   fi

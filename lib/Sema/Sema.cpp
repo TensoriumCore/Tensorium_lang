@@ -177,6 +177,10 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
 
     if (auto itu = unknowns.find(v->name); itu != unknowns.end()) {
       const ConstraintUnknownDecl *decl = itu->second;
+      if (decl->type.up + decl->type.down > 0) {
+        throw std::runtime_error("constraint tensor unknown '" + v->name +
+                                 "' requires indexed access");
+      }
       auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Unknown);
       iv->tensorKind = decl->type.kind;
       iv->up = decl->type.up;
@@ -599,9 +603,12 @@ IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
     indexed.unknown = decl.name;
     indexed.indices = assignment.lhs.indices;
     indexed.rhs = transformExpr(assignment.rhs.get());
-    checker.checkAssignmentVariance(tensorTypeFromDesc(decl.type),
-                                    assignment.lhs.indices, indexed.rhs.get());
-    checker.infer(indexed.rhs.get());
+    const TensorType rhsType = checker.infer(indexed.rhs.get());
+    if (!rhsType.isScalar() || rank == 0) {
+      checker.checkAssignmentVariance(tensorTypeFromDesc(decl.type),
+                                      assignment.lhs.indices,
+                                      indexed.rhs.get());
+    }
     return indexed;
   };
 

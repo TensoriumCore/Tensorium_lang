@@ -577,11 +577,8 @@ public:
         if (call->args.size() != 1)
           throw std::runtime_error("laplacian() expects exactly 1 argument");
         TensorType argT = inferImpl(call->args[0].get(), allowRepeated);
-        if (!argT.isScalar())
-          throw std::runtime_error("laplacian() expects scalar argument");
-        TensorType res{0, 0};
-        annotateType(e, res);
-        return res;
+        annotateType(e, argT);
+        return argT;
       }
 
       if (call->isExtern) {
