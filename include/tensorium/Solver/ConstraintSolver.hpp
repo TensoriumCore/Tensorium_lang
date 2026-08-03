@@ -2,6 +2,7 @@
 
 #include "tensorium/Backend/DomainIR.hpp"
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -52,10 +53,33 @@ struct ConstraintSolution {
   std::vector<double> residualHistory;
 };
 
+enum class CttTargetCoordinates { Spherical, Cartesian };
+
+struct CttTargetGrid {
+  CttTargetCoordinates coordinates = CttTargetCoordinates::Spherical;
+  std::size_t pointCount = 0;
+  // Spherical: r, theta, phi. Cartesian: x, y, z.
+  std::array<const double *, 3> coordinateComponents{};
+};
+
+struct CttEvolutionBuffers {
+  // Structure-of-arrays, row-major tensor component: component = 3*i + j.
+  std::array<double *, 9> spatialMetric{};
+  std::array<double *, 9> inverseSpatialMetric{};
+  std::array<double *, 9> extrinsicCurvature{};
+  double *meanCurvature = nullptr;
+};
+
 // Coupled scalar/rank-one radial constraint backend with Chebyshev-Lobatto
 // domains, optional compactified infinity, C0/C1 matching, and Newton solve.
 ConstraintSolution
 solveRadialConstraintProblem(const backend::ModuleIR &module,
                              const ConstraintSolveRequest &request = {});
+
+// Spectrally interpolates reconstructed radial CTT profiles and lifts them to
+// full 3x3 physical tensors on a spherical or Cartesian target grid.
+void interpolateRadialCttToGrid(const ConstraintSolution &solution,
+                                const CttTargetGrid &target,
+                                const CttEvolutionBuffers &outputs);
 
 } // namespace tensorium::solver
