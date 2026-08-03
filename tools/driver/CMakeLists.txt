@@ -7,6 +7,7 @@ target_link_libraries(Tensorium_cc PRIVATE
   tensoriumParse
   tensoriumRuntime
   tensoriumLowering
+  tensoriumSolver
   tensoriumValidation
   tensoriumMlirCodegen
 )

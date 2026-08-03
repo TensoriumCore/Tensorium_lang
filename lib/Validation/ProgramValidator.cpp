@@ -1,5 +1,5 @@
-#include "tensorium/Core/IndexSet.h"
 #include "tensorium/Validation/ProgramValidator.hpp"
+#include "tensorium/Core/IndexSet.h"
 #include <unordered_map>
 #include <unordered_set>
 
@@ -7,14 +7,12 @@ using namespace tensorium;
 using namespace tensorium::backend;
 using namespace tensorium::validation;
 
-static int fieldRank(const FieldIR &f) {
-  return f.tensorType.rank();
-}
+static int fieldRank(const FieldIR &f) { return f.tensorType.rank(); }
 
-static void validateLocalUseOrder(const ExprIR *expr,
-                                  const std::unordered_set<std::string> &defined,
-                                  ValidationResult &res,
-                                  const std::string &evolutionName) {
+static void
+validateLocalUseOrder(const ExprIR *expr,
+                      const std::unordered_set<std::string> &defined,
+                      ValidationResult &res, const std::string &evolutionName) {
   if (!expr)
     return;
 
@@ -26,9 +24,10 @@ static void validateLocalUseOrder(const ExprIR *expr,
     auto *var = static_cast<const VarIR *>(expr);
     if (var->vkind == VarKind::Local && !defined.count(var->name)) {
       res.diags.push_back(
-          {Diagnostic::Kind::Error,
-           "temporary '" + var->name + "' referenced before definition in "
-           "evolution '" + evolutionName + "'"});
+          {Diagnostic::Kind::Error, "temporary '" + var->name +
+                                        "' referenced before definition in "
+                                        "evolution '" +
+                                        evolutionName + "'"});
     }
     return;
   }
@@ -122,9 +121,8 @@ ValidationResult validation::validateProgram(const ModuleIR &m) {
 
       auto it = fieldMap.find(eq.fieldName);
       if (it == fieldMap.end()) {
-        res.diags.push_back(
-            {Diagnostic::Kind::Error,
-             "unknown field in dt lhs: " + eq.fieldName});
+        res.diags.push_back({Diagnostic::Kind::Error,
+                             "unknown field in dt lhs: " + eq.fieldName});
         continue;
       }
 
@@ -140,13 +138,39 @@ ValidationResult validation::validateProgram(const ModuleIR &m) {
       for (auto &idx : eq.indices) {
         if (!core::isTensorIndexName(idx)) {
           res.diags.push_back(
-              {Diagnostic::Kind::Error,
-               "invalid index name: '" + idx + "'"});
+              {Diagnostic::Kind::Error, "invalid index name: '" + idx + "'"});
         }
       }
 
       validateLocalUseOrder(eq.rhs.get(), definedTemporaries, res, ev.name);
     }
+  }
+
+  if (m.constraintProblem) {
+    const auto &problem = *m.constraintProblem;
+    std::unordered_set<std::string> unknownNames;
+    for (const auto &unknown : problem.unknowns)
+      unknownNames.insert(unknown.name);
+
+    const std::unordered_set<std::string> noLocals;
+    for (const auto &equation : problem.equations) {
+      validateLocalUseOrder(equation.residual.get(), noLocals, res,
+                            problem.name + "::" + equation.name);
+    }
+    auto validateAssignment = [&](const ConstraintAssignmentIR &assignment,
+                                  const std::string &context) {
+      if (!unknownNames.count(assignment.unknown)) {
+        res.diags.push_back({Diagnostic::Kind::Error,
+                             "unknown constraint target '" +
+                                 assignment.unknown + "' in " + context});
+      }
+      validateLocalUseOrder(assignment.rhs.get(), noLocals, res, context);
+    };
+    for (const auto &boundary : problem.boundaries)
+      for (const auto &condition : boundary.conditions)
+        validateAssignment(condition, "boundary '" + boundary.region + "'");
+    for (const auto &seed : problem.seeds)
+      validateAssignment(seed, "constraint seed");
   }
 
   return res;

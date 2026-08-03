@@ -51,8 +51,7 @@ inline void printExprIR(const ExprIR *e) {
   }
 
   auto printType = [&]() {
-    std::cout << "[u=" << e->exprType.up << ",d=" << e->exprType.down
-              << "]";
+    std::cout << "[u=" << e->exprType.up << ",d=" << e->exprType.down << "]";
   };
 
   switch (e->kind) {
@@ -77,6 +76,9 @@ inline void printExprIR(const ExprIR *e) {
       break;
     case VarKind::Coord:
       std::cout << "coord:" << v->coordIndex;
+      break;
+    case VarKind::Unknown:
+      std::cout << "unknown";
       break;
     }
     std::cout << "]";
@@ -201,8 +203,8 @@ inline void printExprIR(const ExprIR *e) {
     std::cout << "covariant_" << d->derivIndex << "(";
     printExprIR(d->in.get());
     std::cout << "; contra=" << (d->contravariant ? "true" : "false")
-              << ", gamma="
-              << (d->hasConnectionTensor ? "present" : "missing") << ")";
+              << ", gamma=" << (d->hasConnectionTensor ? "present" : "missing")
+              << ")";
     printType();
     return;
   }
@@ -245,7 +247,8 @@ inline void printModuleIR(const ModuleIR &m) {
       std::cout << "\n";
       if (!m.initialData->decomposed.gammaUExpr.empty()) {
         std::cout << "    gammaU = [";
-        for (size_t i = 0; i < m.initialData->decomposed.gammaUExpr.size(); ++i) {
+        for (size_t i = 0; i < m.initialData->decomposed.gammaUExpr.size();
+             ++i) {
           printInitExpr(m.initialData->decomposed.gammaUExpr[i].get());
           if (i + 1 < m.initialData->decomposed.gammaUExpr.size())
             std::cout << ",";
@@ -268,6 +271,67 @@ inline void printModuleIR(const ModuleIR &m) {
         std::cout << "      gammaU -> " << m.initialData->split3p1.gammaUField
                   << "\n";
     }
+  }
+
+  if (m.constraintProblem) {
+    const auto &problem = *m.constraintProblem;
+    std::cout << "  ConstraintProblem " << problem.name << ":\n";
+    std::cout << "    Domains:\n";
+    for (const auto &domain : problem.domains) {
+      std::cout << "      " << domain.name
+                << " coordinates=" << domain.coordinates
+                << " topology=" << domain.topology << " basis=" << domain.basis
+                << " resolution=[";
+      for (size_t i = 0; i < domain.resolution.size(); ++i) {
+        std::cout << domain.resolution[i];
+        if (i + 1 < domain.resolution.size())
+          std::cout << ",";
+      }
+      std::cout << "]";
+      if (!domain.bounds.empty()) {
+        std::cout << " bounds=[";
+        for (size_t i = 0; i < domain.bounds.size(); ++i) {
+          std::cout << domain.bounds[i];
+          if (i + 1 < domain.bounds.size())
+            std::cout << ",";
+        }
+        std::cout << "]";
+      }
+      std::cout << "\n";
+    }
+    std::cout << "    Unknowns:\n";
+    for (const auto &unknown : problem.unknowns)
+      std::cout << "      " << unknown.name << " (up=" << unknown.tensorType.up
+                << ",down=" << unknown.tensorType.down << ")\n";
+    std::cout << "    Residuals:\n";
+    for (const auto &equation : problem.equations) {
+      std::cout << "      " << equation.name << " = ";
+      printExprIR(equation.residual.get());
+      std::cout << "\n";
+    }
+    std::cout << "    Boundaries:\n";
+    for (const auto &boundary : problem.boundaries) {
+      std::cout << "      " << boundary.region << ":\n";
+      for (const auto &condition : boundary.conditions) {
+        std::cout << "        " << condition.unknown << " = ";
+        printExprIR(condition.rhs.get());
+        std::cout << "\n";
+      }
+    }
+    std::cout << "    Interfaces:\n";
+    for (const auto &interface : problem.interfaces)
+      std::cout << "      " << interface.innerDomain << " -> "
+                << interface.outerDomain << " (C0,C1)\n";
+    std::cout << "    Seeds:\n";
+    for (const auto &seed : problem.seeds) {
+      std::cout << "      " << seed.unknown << " = ";
+      printExprIR(seed.rhs.get());
+      std::cout << "\n";
+    }
+    std::cout << "    Solve: nonlinear=" << problem.solve.nonlinear
+              << " linear=" << problem.solve.linear
+              << " tolerance=" << problem.solve.tolerance
+              << " max_iterations=" << problem.solve.maxIterations << "\n";
   }
 
   std::cout << "  Fields:\n";

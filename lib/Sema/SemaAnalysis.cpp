@@ -316,6 +316,104 @@ SemanticAnalyzer::analyzeConstraint(const ConstraintDecl &decl) {
   return out;
 }
 
+IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
+    const ConstraintProblemDecl &problem) {
+  LocalScopeGuard localsScope(
+      locals, std::unordered_map<std::string, TensorTypeDesc>{});
+  coordIndex.clear();
+  locals.clear();
+
+  if (!problem.domains.empty()) {
+    const auto &domain = problem.domains.front();
+    const std::vector<std::string> cartesian = {"x", "y", "z"};
+    const std::vector<std::string> spherical = {"r", "theta", "phi"};
+    const std::vector<std::string> cylindrical = {"rho", "phi", "z"};
+    const std::vector<std::string> *coordinates = nullptr;
+    if (domain.coordinates == "cartesian")
+      coordinates = &cartesian;
+    else if (domain.coordinates == "spherical")
+      coordinates = &spherical;
+    else if (domain.coordinates == "cylindrical")
+      coordinates = &cylindrical;
+    if (coordinates) {
+      for (size_t i = 0;
+           i < domain.resolution.size() && i < coordinates->size(); ++i) {
+        coordIndex[(*coordinates)[i]] = static_cast<int>(i);
+      }
+    }
+  }
+
+  auto registerIndices = [this](const std::vector<std::string> &indices) {
+    for (const auto &idx : indices) {
+      validateSpatialIndex(idx);
+      if (!coordIndex.count(idx))
+        coordIndex[idx] = -2;
+    }
+  };
+  for (const auto &equation : problem.equations)
+    registerIndices(equation.indices);
+  for (const auto &boundary : problem.boundaries)
+    for (const auto &condition : boundary.conditions)
+      registerIndices(condition.lhs.indices);
+  for (const auto &seed : problem.seeds)
+    registerIndices(seed.lhs.indices);
+
+  TensorTypeChecker checker(hasConnectionTensor);
+  IndexedConstraintProblem out;
+  out.name = problem.name;
+
+  for (const auto &equation : problem.equations) {
+    IndexedConstraintEquation indexed;
+    indexed.name = equation.name;
+    indexed.type = equation.type;
+    indexed.indices = equation.indices;
+    indexed.residual = transformExpr(equation.residual.get());
+    checker.checkAssignmentVariance(
+        TensorType{equation.type.up, equation.type.down}, equation.indices,
+        indexed.residual.get());
+    checker.infer(indexed.residual.get());
+    out.equations.push_back(std::move(indexed));
+  }
+
+  auto lowerAssignment = [this, &checker](const Assignment &assignment) {
+    auto it = unknowns.find(assignment.lhs.base);
+    if (it == unknowns.end()) {
+      throw std::runtime_error(
+          "constraint assignment targets unknown symbol '" +
+          assignment.lhs.base + "'");
+    }
+    const ConstraintUnknownDecl &decl = *it->second;
+    const size_t rank = static_cast<size_t>(decl.type.up + decl.type.down);
+    if (assignment.lhs.indices.size() != rank) {
+      throw std::runtime_error("constraint unknown '" + decl.name +
+                               "' expects " + std::to_string(rank) +
+                               " indices, got " +
+                               std::to_string(assignment.lhs.indices.size()));
+    }
+
+    IndexedConstraintAssignment indexed;
+    indexed.unknown = decl.name;
+    indexed.indices = assignment.lhs.indices;
+    indexed.rhs = transformExpr(assignment.rhs.get());
+    checker.checkAssignmentVariance(TensorType{decl.type.up, decl.type.down},
+                                    assignment.lhs.indices, indexed.rhs.get());
+    checker.infer(indexed.rhs.get());
+    return indexed;
+  };
+
+  for (const auto &boundary : problem.boundaries) {
+    IndexedConstraintBoundary indexed;
+    indexed.region = boundary.region;
+    for (const auto &condition : boundary.conditions)
+      indexed.conditions.push_back(lowerAssignment(condition));
+    out.boundaries.push_back(std::move(indexed));
+  }
+  for (const auto &seed : problem.seeds)
+    out.seeds.push_back(lowerAssignment(seed));
+
+  return out;
+}
+
 IndexedPrint SemanticAnalyzer::analyzePrint(const PrintDecl &decl) {
   LocalScopeGuard localsScope(
       locals, std::unordered_map<std::string, TensorTypeDesc>{});

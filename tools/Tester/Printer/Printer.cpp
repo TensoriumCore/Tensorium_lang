@@ -211,6 +211,9 @@ void printIndexedExpr(const IndexedExpr *e) {
     case IndexedVarKind::Parameter:
       std::cout << "param";
       break;
+    case IndexedVarKind::Unknown:
+      std::cout << "unknown";
+      break;
     }
 
     if (v->up > 0 || v->down > 0) {

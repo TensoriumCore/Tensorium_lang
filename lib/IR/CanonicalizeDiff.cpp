@@ -95,7 +95,8 @@ static void canonicalizeExpr(std::unique_ptr<backend::ExprIR> &expr,
     canonicalizeExpr(diff->in, connectionAvailable);
     if (diff->derivIndex.empty())
       diff->derivIndex = defaultDerivativeIndex();
-    diff->hasConnectionTensor = diff->hasConnectionTensor || connectionAvailable;
+    diff->hasConnectionTensor =
+        diff->hasConnectionTensor || connectionAvailable;
     return;
   }
   case ExprIR::Kind::Divergence: {
@@ -135,6 +136,16 @@ void canonicalizeDifferentialIR(backend::ModuleIR &module) {
       canonicalizeExpr(temp.rhs, connectionAvailable);
     for (auto &equation : evolution.equations)
       canonicalizeExpr(equation.rhs, connectionAvailable);
+  }
+  if (module.constraintProblem) {
+    auto &problem = *module.constraintProblem;
+    for (auto &equation : problem.equations)
+      canonicalizeExpr(equation.residual, connectionAvailable);
+    for (auto &boundary : problem.boundaries)
+      for (auto &condition : boundary.conditions)
+        canonicalizeExpr(condition.rhs, connectionAvailable);
+    for (auto &seed : problem.seeds)
+      canonicalizeExpr(seed.rhs, connectionAvailable);
   }
 }
 

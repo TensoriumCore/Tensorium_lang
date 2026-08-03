@@ -161,6 +161,15 @@ INITIAL_DATA_VALID_TESTS=(
   tests/semantic/initial_data/05_shift_metric_not_supported.tn
 )
 
+CONSTRAINT_INITIAL_DATA_VALID_TESTS=(
+  tests/fixtures/gr/brill_lindquist_constraints.tn
+)
+
+CONSTRAINT_SOLVE_TESTS=(
+  "tests/fixtures/gr/brill_lindquist_radial_solve.tn|49|1"
+  "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn|42|2"
+)
+
 GR_FIXTURES=(
   tests/fixtures/gr/schwarzschild_2d.tn
   tests/fixtures/gr/schwarzschild_3d.tn
@@ -461,6 +470,62 @@ echo "=============================="
 for f in "${INITIAL_DATA_VALID_TESTS[@]}"; do
   echo "[INITIAL_DATA OK EXPECTED] $f"
   "$BIN" "${PIPELINE_BASE[@]}" "$f" > /dev/null
+done
+
+echo
+echo "=============================="
+echo " RUN CONSTRAINT INITIAL DATA TESTS"
+echo "=============================="
+
+for f in "${CONSTRAINT_INITIAL_DATA_VALID_TESTS[@]}"; do
+  echo "[CONSTRAINT INITIAL_DATA OK EXPECTED] $f"
+  "$BIN" --validate "$f" > /dev/null
+  OUT_FILE="$OUT/$(basename "$f").constraint.backend.txt"
+  "$BIN" --dump-backend-expr "$f" > "$OUT_FILE"
+  if ! grep -q "ConstraintProblem BrillLindquist" "$OUT_FILE"; then
+    echo "ERROR: expected ConstraintProblemIR in backend dump for $f"
+    exit 1
+  fi
+  if ! grep -q "psi\[unknown\]" "$OUT_FILE"; then
+    echo "ERROR: expected typed constraint unknown in backend dump for $f"
+    exit 1
+  fi
+  TMP_ERR=$(mktemp)
+  if "$BIN" --dump-mlir "$f" > "$TMP_ERR" 2>&1; then
+    echo "ERROR: constraint MLIR lowering was expected to fail explicitly"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  if ! grep -q "constraint problem MLIR lowering is not implemented" "$TMP_ERR"; then
+    echo "ERROR: missing explicit constraint MLIR diagnostic"
+    cat "$TMP_ERR"
+    rm -f "$TMP_ERR"
+    exit 1
+  fi
+  rm -f "$TMP_ERR"
+done
+
+for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
+  IFS='|' read -r f expected_points expected_domains <<< "$spec"
+  echo "[CONSTRAINT SOLVE OK EXPECTED] $f"
+  OUT_FILE="$OUT/$(basename "$f").solve.txt"
+  "$BIN" --solve-constraints --param mass=1 "$f" > "$OUT_FILE"
+  if ! grep -q "converged=true iterations=1" "$OUT_FILE"; then
+    echo "ERROR: expected one-step Newton convergence for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
+  if ! grep -q "domains=$expected_domains" "$OUT_FILE"; then
+    echo "ERROR: expected $expected_domains-domain solution for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
+  if ! grep -q "unknown=psi points=$expected_points" "$OUT_FILE"; then
+    echo "ERROR: expected $expected_points-point psi solution for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
 done
 
 echo

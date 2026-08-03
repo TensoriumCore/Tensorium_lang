@@ -45,7 +45,8 @@ static std::unique_ptr<InitExprIR> lowerInitExpr(const tensorium::Expr *expr) {
   return std::make_unique<InitSymbolIR>("<expr>");
 }
 
-static tensorium::ir::TensorType lowerTensorType(const tensorium::TensorTypeDesc &d) {
+static tensorium::ir::TensorType
+lowerTensorType(const tensorium::TensorTypeDesc &d) {
   tensorium::ir::TensorType out;
   out.up = d.up;
   out.down = d.down;
@@ -226,8 +227,8 @@ lowerChristoffelBuiltin(const tensorium::IndexedCall *call) {
                                         std::move(dk_gamma_lj));
   add->exprType = makeTensorType(0, 3);
 
-  auto sum = std::make_unique<BinaryIR>("-", std::move(add),
-                                        std::move(dl_gamma_jk));
+  auto sum =
+      std::make_unique<BinaryIR>("-", std::move(add), std::move(dl_gamma_jk));
   sum->exprType = makeTensorType(0, 3);
 
   auto product =
@@ -249,8 +250,8 @@ lowerChristoffelBuiltin(const tensorium::IndexedCall *call) {
 
 static std::unique_ptr<ExprIR>
 lowerIndexedExpr(const tensorium::IndexedExpr *e,
-                bool materializeImplicitContraction,
-                bool hasConnectionTensor) {
+                 bool materializeImplicitContraction,
+                 bool hasConnectionTensor) {
   using namespace tensorium;
 
   if (!e)
@@ -279,6 +280,9 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       k = VarKind::Coord;
       coord = v->coordIndex;
       break;
+    case IndexedVarKind::Unknown:
+      k = VarKind::Unknown;
+      break;
     }
 
     auto out = std::make_unique<VarIR>(v->name, k);
@@ -295,8 +299,10 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
                                 hasConnectionTensor);
 
     std::unique_ptr<ExprIR> out;
-    if (b->op == '*' && hasTensorRank(b->lhs.get()) && hasTensorRank(b->rhs.get())) {
-      auto product = std::make_unique<TensorProductIR>(std::move(lhs), std::move(rhs));
+    if (b->op == '*' && hasTensorRank(b->lhs.get()) &&
+        hasTensorRank(b->rhs.get())) {
+      auto product =
+          std::make_unique<TensorProductIR>(std::move(lhs), std::move(rhs));
       product->exprType = lowerTensorType(b->inferredType);
       out = std::move(product);
     } else {
@@ -425,8 +431,8 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
         return std::make_unique<CallIR>("<invalid_index_rename>");
       }
       auto rename = std::make_unique<IndexRenameIR>(
-          lowerIndexedExpr(c->args[0].get(), false, hasConnectionTensor),
-          from, to);
+          lowerIndexedExpr(c->args[0].get(), false, hasConnectionTensor), from,
+          to);
       rename->exprType = lowerTensorType(c->inferredType);
       return rename;
     }
@@ -454,9 +460,8 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       out->paramTypes.push_back(lowerTensorType(paramType));
     out->args.reserve(c->args.size());
     for (const auto &a : c->args)
-      out->args.push_back(
-          lowerIndexedExpr(a.get(), materializeImplicitContraction,
-                           hasConnectionTensor));
+      out->args.push_back(lowerIndexedExpr(
+          a.get(), materializeImplicitContraction, hasConnectionTensor));
     out->exprType = lowerTensorType(c->inferredType);
     return out;
   }
@@ -659,6 +664,71 @@ ModuleIR BackendBuilder::build(const Program &prog,
       hasConnectionTensor = true;
     }
     mod.fields.push_back(std::move(out));
+  }
+
+  if (prog.initialData && prog.initialData->hasConstraintProblem) {
+    const auto &problem = prog.initialData->constraintProblem;
+    auto indexed = sem.analyzeConstraintProblem(problem);
+    ConstraintProblemIR out;
+    out.name = problem.name;
+
+    for (const auto &domain : problem.domains) {
+      SpectralDomainIR lowered;
+      lowered.name = domain.name;
+      lowered.coordinates = domain.coordinates;
+      lowered.topology = domain.topology;
+      lowered.resolution = domain.resolution;
+      lowered.basis = domain.basis;
+      lowered.bounds = domain.bounds;
+      out.domains.push_back(std::move(lowered));
+    }
+    for (const auto &unknown : problem.unknowns) {
+      ConstraintUnknownIR lowered;
+      lowered.name = unknown.name;
+      lowered.tensorType = lowerTensorType(unknown.type);
+      lowered.indices = unknown.indices;
+      out.unknowns.push_back(std::move(lowered));
+    }
+    for (const auto &equation : indexed.equations) {
+      ConstraintEquationIR lowered;
+      lowered.name = equation.name;
+      lowered.tensorType = lowerTensorType(equation.type);
+      lowered.indices = equation.indices;
+      lowered.residual =
+          lowerIndexedExpr(equation.residual.get(), true, hasConnectionTensor);
+      out.equations.push_back(std::move(lowered));
+    }
+
+    auto lowerAssignment =
+        [hasConnectionTensor](const IndexedConstraintAssignment &assignment) {
+          ConstraintAssignmentIR lowered;
+          lowered.unknown = assignment.unknown;
+          lowered.indices = assignment.indices;
+          lowered.rhs =
+              lowerIndexedExpr(assignment.rhs.get(), true, hasConnectionTensor);
+          return lowered;
+        };
+    for (const auto &boundary : indexed.boundaries) {
+      ConstraintBoundaryIR lowered;
+      lowered.region = boundary.region;
+      for (const auto &condition : boundary.conditions)
+        lowered.conditions.push_back(lowerAssignment(condition));
+      out.boundaries.push_back(std::move(lowered));
+    }
+    for (const auto &interface : problem.interfaces) {
+      ConstraintInterfaceIR lowered;
+      lowered.innerDomain = interface.innerDomain;
+      lowered.outerDomain = interface.outerDomain;
+      out.interfaces.push_back(std::move(lowered));
+    }
+    for (const auto &seed : indexed.seeds)
+      out.seeds.push_back(lowerAssignment(seed));
+
+    out.solve.nonlinear = problem.solve.nonlinear;
+    out.solve.linear = problem.solve.linear;
+    out.solve.tolerance = problem.solve.tolerance;
+    out.solve.maxIterations = problem.solve.maxIterations;
+    mod.constraintProblem = std::move(out);
   }
 
   mod.evolutions.reserve(prog.evolutions.size());

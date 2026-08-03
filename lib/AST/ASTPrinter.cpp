@@ -145,7 +145,7 @@ void printProgram(const Program &prog) {
       case TensorKind::ConTensor2:
         std::cout << "con_tensor2";
         break;
-	  case TensorKind::CovTensor3:
+      case TensorKind::CovTensor3:
         std::cout << "cov_tensor3";
         break;
       case TensorKind::ConTensor3:
@@ -207,8 +207,7 @@ void printProgram(const Program &prog) {
   if (prog.initialData) {
     std::cout << "\nInitialData:\n";
     std::cout << "  enforce_symmetry = "
-              << (prog.initialData->enforceSymmetry ? "true" : "false")
-              << "\n";
+              << (prog.initialData->enforceSymmetry ? "true" : "false") << "\n";
     if (prog.initialData->hasMetric4) {
       std::cout << "  metric4 " << prog.initialData->metric4.name << "[";
       for (size_t i = 0; i < prog.initialData->metric4.indices.size(); ++i) {
@@ -261,6 +260,51 @@ void printProgram(const Program &prog) {
         printTarget(prog.initialData->split3p1.gammaUTarget);
         std::cout << "\n";
       }
+    }
+    if (prog.initialData->hasConstraintProblem) {
+      const auto &problem = prog.initialData->constraintProblem;
+      std::cout << "  constraint_problem " << problem.name << ":\n";
+      for (const auto &domain : problem.domains) {
+        std::cout << "    domain " << domain.name << " (" << domain.coordinates
+                  << ", " << domain.topology << ", basis=" << domain.basis
+                  << ", resolution=[";
+        for (size_t i = 0; i < domain.resolution.size(); ++i) {
+          std::cout << domain.resolution[i];
+          if (i + 1 < domain.resolution.size())
+            std::cout << ",";
+        }
+        std::cout << "]";
+        if (!domain.bounds.empty()) {
+          std::cout << ", bounds=[";
+          for (size_t i = 0; i < domain.bounds.size(); ++i) {
+            std::cout << domain.bounds[i];
+            if (i + 1 < domain.bounds.size())
+              std::cout << ",";
+          }
+          std::cout << "]";
+        }
+        std::cout << ")\n";
+      }
+      for (const auto &unknown : problem.unknowns) {
+        std::cout << "    unknown " << unknown.name
+                  << " (up=" << unknown.type.up << ",down=" << unknown.type.down
+                  << ")\n";
+      }
+      for (const auto &equation : problem.equations) {
+        std::cout << "    equation " << equation.name << " = ";
+        printExpr(equation.residual.get());
+        std::cout << "\n";
+      }
+      for (const auto &boundary : problem.boundaries)
+        std::cout << "    boundary " << boundary.region << " ("
+                  << boundary.conditions.size() << " conditions)\n";
+      for (const auto &interface : problem.interfaces)
+        std::cout << "    interface " << interface.innerDomain << " -> "
+                  << interface.outerDomain << "\n";
+      std::cout << "    solve nonlinear=" << problem.solve.nonlinear
+                << " linear=" << problem.solve.linear
+                << " tolerance=" << problem.solve.tolerance
+                << " max_iterations=" << problem.solve.maxIterations << "\n";
     }
   }
 

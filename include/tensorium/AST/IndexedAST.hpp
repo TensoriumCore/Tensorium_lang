@@ -17,7 +17,7 @@ struct IndexedNumber : IndexedExpr {
   explicit IndexedNumber(double v) : value(v) {}
 };
 
-enum class IndexedVarKind { Coordinate, Local, Field, Parameter };
+enum class IndexedVarKind { Coordinate, Local, Field, Parameter, Unknown };
 
 struct IndexedVar : IndexedExpr {
   std::string name;
@@ -78,6 +78,31 @@ struct IndexedEvolution {
   std::string name;
   std::vector<IndexedEvolutionEq> equations;
   std::vector<IndexedAssignment> temp;
+};
+
+struct IndexedConstraintEquation {
+  std::string name;
+  TensorTypeDesc type;
+  std::vector<std::string> indices;
+  std::unique_ptr<IndexedExpr> residual;
+};
+
+struct IndexedConstraintAssignment {
+  std::string unknown;
+  std::vector<std::string> indices;
+  std::unique_ptr<IndexedExpr> rhs;
+};
+
+struct IndexedConstraintBoundary {
+  std::string region;
+  std::vector<IndexedConstraintAssignment> conditions;
+};
+
+struct IndexedConstraintProblem {
+  std::string name;
+  std::vector<IndexedConstraintEquation> equations;
+  std::vector<IndexedConstraintBoundary> boundaries;
+  std::vector<IndexedConstraintAssignment> seeds;
 };
 
 struct IndexedPrint {

@@ -208,13 +208,66 @@ struct Split3P1BindingDecl {
   TensorAccess gammaUTarget;
 };
 
+struct SpectralDomainDecl {
+  std::string name;
+  std::string coordinates;
+  std::string topology;
+  std::vector<int> resolution;
+  std::string basis;
+  std::vector<double> bounds;
+};
+
+struct ConstraintUnknownDecl {
+  TensorTypeDesc type;
+  std::string name;
+  std::vector<std::string> indices;
+};
+
+struct ConstraintEquationDecl {
+  TensorTypeDesc type;
+  std::string name;
+  std::vector<std::string> indices;
+  std::unique_ptr<Expr> residual;
+};
+
+struct ConstraintBoundaryDecl {
+  std::string region;
+  std::vector<Assignment> conditions;
+};
+
+struct ConstraintInterfaceDecl {
+  std::string innerDomain;
+  std::string outerDomain;
+};
+
+struct ConstraintSolveConfig {
+  std::string nonlinear = "newton";
+  std::string linear = "direct";
+  double tolerance = 1.0e-10;
+  int maxIterations = 30;
+};
+
+struct ConstraintProblemDecl {
+  std::string name;
+  std::vector<SpectralDomainDecl> domains;
+  std::vector<ConstraintUnknownDecl> unknowns;
+  std::vector<ConstraintEquationDecl> equations;
+  std::vector<ConstraintBoundaryDecl> boundaries;
+  std::vector<ConstraintInterfaceDecl> interfaces;
+  std::vector<Assignment> seeds;
+  ConstraintSolveConfig solve;
+  bool hasSolve = false;
+};
+
 struct InitialDataDecl {
   bool enforceSymmetry = false;
   bool hasMetric4 = false;
   bool hasDecomposed = false;
+  bool hasConstraintProblem = false;
   Metric4InitDecl metric4;
   DecomposedMetricInitDecl decomposed;
   Split3P1BindingDecl split3p1;
+  ConstraintProblemDecl constraintProblem;
 };
 
 struct Program {

@@ -76,6 +76,15 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       return iv;
     }
 
+    if (auto itu = unknowns.find(v->name); itu != unknowns.end()) {
+      const ConstraintUnknownDecl *decl = itu->second;
+      auto iv = std::make_unique<IndexedVar>(v->name, IndexedVarKind::Unknown);
+      iv->tensorKind = decl->type.kind;
+      iv->up = decl->type.up;
+      iv->down = decl->type.down;
+      return iv;
+    }
+
     if (auto it = coordIndex.find(v->name); it != coordIndex.end()) {
       auto iv =
           std::make_unique<IndexedVar>(v->name, IndexedVarKind::Coordinate);
@@ -110,6 +119,12 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
       tensorKind = fd->kind;
       up = fd->up;
       down = fd->down;
+    } else if (auto it = unknowns.find(iv->base); it != unknowns.end()) {
+      const ConstraintUnknownDecl *decl = it->second;
+      outKind = IndexedVarKind::Unknown;
+      tensorKind = decl->type.kind;
+      up = decl->type.up;
+      down = decl->type.down;
     } else {
       throw std::runtime_error("Unknown indexed tensor: " + iv->base);
     }

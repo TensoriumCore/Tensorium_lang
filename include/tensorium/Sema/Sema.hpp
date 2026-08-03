@@ -20,6 +20,7 @@ class SemanticAnalyzer {
   std::unordered_map<std::string, TensorTypeDesc> metricScalarLocals;
   std::unordered_set<std::string> params;
   std::unordered_map<std::string, const FieldDecl *> fields;
+  std::unordered_map<std::string, const ConstraintUnknownDecl *> unknowns;
   std::unordered_map<std::string, const ExternDecl *> externSignatures;
   std::vector<FieldDecl> syntheticMetricFields;
   std::unordered_map<std::string, int> indexUseCount;
@@ -37,6 +38,7 @@ class SemanticAnalyzer {
                                                   bool isContravariant);
   void validateSimulation(const SimulationConfig &sim);
   void validateInitialData(const InitialDataDecl &init);
+  void validateConstraintProblem(const ConstraintProblemDecl &problem);
   void validateInitialDataExpr(const Expr *expr, const std::string &context);
   void enforceMetricFieldRules(const FieldDecl &field);
   bool containsExplicitMetricAntisymmetry(const IndexedExpr *expr) const;
@@ -52,6 +54,8 @@ public:
   IndexedMetric analyzeMetric(const MetricDecl &decl);
   IndexedEvolution analyzeEvolution(const EvolutionDecl &evo);
   IndexedEvolution analyzeConstraint(const ConstraintDecl &decl);
+  IndexedConstraintProblem
+  analyzeConstraintProblem(const ConstraintProblemDecl &problem);
   IndexedPrint analyzePrint(const PrintDecl &decl);
 };
 } // namespace tensorium

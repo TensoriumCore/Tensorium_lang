@@ -104,17 +104,38 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
     syntheticMetricFields.push_back(fd);
     fields[m.name] = &syntheticMetricFields.back();
   }
+
+  if (prog.initialData && prog.initialData->hasConstraintProblem) {
+    for (const auto &unknown : prog.initialData->constraintProblem.unknowns) {
+      if (params.count(unknown.name) || fields.count(unknown.name) ||
+          metricNames.count(unknown.name)) {
+        throw std::runtime_error("Name collision for constraint unknown '" +
+                                 unknown.name + "'");
+      }
+      if (!unknowns.emplace(unknown.name, &unknown).second) {
+        throw std::runtime_error("Constraint unknown redeclared: " +
+                                 unknown.name);
+      }
+    }
+  }
+
+  const bool constraintOnly =
+      prog.initialData && prog.initialData->hasConstraintProblem &&
+      !prog.initialData->hasMetric4 && !prog.initialData->hasDecomposed &&
+      prog.evolutions.empty();
   if (!prog.simulation) {
-    if (mode == CompilationMode::Executable) {
+    simulationMissing = true;
+    if (!constraintOnly && mode == CompilationMode::Executable) {
       throw std::runtime_error(
           std::string(kErrMissingSimulationBlock) +
           ". Add `simulation { dimension = <N> resolution = [...] time { dt = ... "
           "integrator = ... } spatial { scheme = ... derivative = ... order = ... } }` "
           "or use --symbolic.");
     }
-    simulationMissing = true;
-    warnings.push_back(std::string(kWarnMissingSimulationBlock) +
-                       "; proceeding without simulation metadata");
+    if (!constraintOnly) {
+      warnings.push_back(std::string(kWarnMissingSimulationBlock) +
+                         "; proceeding without simulation metadata");
+    }
   } else {
     validateSimulation(*prog.simulation);
   }

@@ -79,6 +79,14 @@ target_link_libraries(tensoriumLowering PUBLIC
   tensoriumIR
 )
 
+add_library(tensoriumSolver
+  Solver/ConstraintSolver.cpp
+)
+tensorium_configure_public_headers(tensoriumSolver)
+target_link_libraries(tensoriumSolver PUBLIC
+  tensoriumIR
+)
+
 add_library(tensoriumValidation
   IR/CanonicalizeDiff.cpp
   IR/CanonicalizeEinstein.cpp
@@ -97,6 +105,7 @@ target_include_directories(tensorium INTERFACE
 target_link_libraries(tensorium INTERFACE
   tensoriumCore
   tensoriumLowering
+  tensoriumSolver
   tensoriumValidation
 )
 
