@@ -400,6 +400,10 @@ ConstraintUnknownDecl Parser::parseConstraintUnknown() {
   advance();
 
   ConstraintUnknownDecl unknown;
+  if (cur.type == TokenType::Identifier && cur.text == "symmetric") {
+    unknown.symmetric = true;
+    advance();
+  }
   unknown.type = parseTensorTypeDesc();
   if (cur.type != TokenType::Identifier)
     syntaxError("unknown declaration expects a name");

@@ -687,6 +687,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
       lowered.name = unknown.name;
       lowered.tensorType = lowerTensorType(unknown.type);
       lowered.indices = unknown.indices;
+      lowered.symmetric = unknown.symmetric;
       out.unknowns.push_back(std::move(lowered));
     }
     for (const auto &equation : indexed.equations) {

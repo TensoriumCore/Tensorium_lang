@@ -1,6 +1,7 @@
 #include "tensorium/Solver/ConstraintSolver.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iterator>
 #include <limits>
@@ -28,12 +29,23 @@ struct DualGrid {
 
 struct ComponentField {
   std::vector<DualGrid> components;
+  std::size_t rank = 0;
+  bool symmetric = false;
 };
 
 using UnknownState = std::unordered_map<std::string, ComponentField>;
 using ComponentEnvironment = std::unordered_map<std::string, std::size_t>;
 
 constexpr std::size_t kSpatialComponentCount = 3;
+constexpr std::size_t kSymmetricRankTwoComponentCount = 6;
+constexpr std::array<std::array<std::size_t, 2>,
+                     kSymmetricRankTwoComponentCount>
+    kSymmetricRankTwoIndices = {{{0, 0}, {0, 1}, {0, 2},
+                                 {1, 1}, {1, 2}, {2, 2}}};
+constexpr std::array<std::array<std::size_t, kSpatialComponentCount>,
+                     kSpatialComponentCount>
+    kSymmetricRankTwoComponents = {
+        {{0, 1, 2}, {1, 3, 4}, {2, 4, 5}}};
 
 [[noreturn]] void fail(const std::string &message) {
   throw std::runtime_error("constraint solver: " + message);
@@ -241,13 +253,28 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
       if (variable->tensorIndexNames.empty())
         fail("tensor unknown '" + variable->name +
              "' requires component indices");
+      if (variable->tensorIndexNames.size() != it->second.rank)
+        fail("tensor access rank does not match the unknown layout");
+
+      std::array<std::size_t, 2> symmetricIndices{};
       std::size_t flatComponent = 0;
-      for (const auto &indexName : variable->tensorIndexNames) {
+      for (std::size_t index = 0;
+           index < variable->tensorIndexNames.size(); ++index) {
+        const auto &indexName = variable->tensorIndexNames[index];
         auto component = componentEnvironment.find(indexName);
         if (component == componentEnvironment.end())
           fail("unbound tensor component index '" + indexName + "'");
-        flatComponent =
-            flatComponent * kSpatialComponentCount + component->second;
+        if (it->second.symmetric)
+          symmetricIndices[index] = component->second;
+        else
+          flatComponent = flatComponent * kSpatialComponentCount +
+                          component->second;
+      }
+      if (it->second.symmetric) {
+        if (it->second.rank != 2)
+          fail("symmetric component mapping requires a rank-two unknown");
+        flatComponent = kSymmetricRankTwoComponents[symmetricIndices[0]]
+                                                    [symmetricIndices[1]];
       }
       if (flatComponent >= it->second.components.size())
         fail("tensor component is outside the unknown layout");
@@ -410,6 +437,7 @@ struct RadialDomainLayout {
 struct UnknownComponentLayout {
   std::string name;
   std::size_t rank = 0;
+  bool symmetric = false;
   std::size_t componentCount = 1;
   std::size_t firstComponent = 0;
 };
@@ -494,6 +522,12 @@ buildComponentLayout(const backend::ConstraintProblemIR &problem) {
         static_cast<std::size_t>(unknown.tensorType.rank());
     if (rank > 2)
       fail("radial backend currently supports unknowns up to rank two");
+    if (unknown.symmetric &&
+        !((unknown.tensorType.up == 0 && unknown.tensorType.down == 2) ||
+          (unknown.tensorType.up == 2 && unknown.tensorType.down == 0))) {
+      fail("symmetric unknown '" + unknown.name +
+           "' must be covariant or contravariant rank two");
+    }
     if (unknown.tensorType.up != equation.tensorType.up ||
         unknown.tensorType.down != equation.tensorType.down)
       fail("unknown '" + unknown.name +
@@ -503,8 +537,11 @@ buildComponentLayout(const backend::ConstraintProblemIR &problem) {
     std::size_t componentCount = 1;
     for (std::size_t index = 0; index < rank; ++index)
       componentCount *= kSpatialComponentCount;
+    if (unknown.symmetric)
+      componentCount = kSymmetricRankTwoComponentCount;
     layout.unknowns.push_back(
-        {unknown.name, rank, componentCount, layout.totalComponents});
+        {unknown.name, rank, unknown.symmetric, componentCount,
+         layout.totalComponents});
     layout.totalComponents += componentCount;
   }
   return layout;
@@ -512,11 +549,27 @@ buildComponentLayout(const backend::ConstraintProblemIR &problem) {
 
 ComponentEnvironment
 makeComponentEnvironment(const std::vector<std::string> &indices,
-                         std::size_t component) {
+                         std::size_t component, bool symmetric) {
   ComponentEnvironment environment;
   if (indices.empty()) {
     if (component != 0)
       fail("scalar component index must be zero");
+    return environment;
+  }
+
+  if (symmetric) {
+    if (indices.size() != 2 ||
+        component >= kSymmetricRankTwoComponentCount) {
+      fail("invalid symmetric rank-two component environment");
+    }
+    for (std::size_t index = 0; index < indices.size(); ++index) {
+      if (!environment
+               .emplace(indices[index],
+                        kSymmetricRankTwoIndices[component][index])
+               .second) {
+        fail("tensor component layout requires distinct free indices");
+      }
+    }
     return environment;
   }
 
@@ -555,6 +608,8 @@ buildLocalStates(const backend::ConstraintProblemIR &problem,
          unknownIndex < componentLayout.unknowns.size(); ++unknownIndex) {
       const auto &unknownLayout = componentLayout.unknowns[unknownIndex];
       ComponentField field;
+      field.rank = unknownLayout.rank;
+      field.symmetric = unknownLayout.symmetric;
       field.components.reserve(unknownLayout.componentCount);
       for (std::size_t component = 0; component < unknownLayout.componentCount;
            ++component) {
@@ -600,7 +655,8 @@ evaluateResidual(const backend::ConstraintProblemIR &problem,
       const std::size_t rowBase =
           (unknownLayout.firstComponent + component) * domainLayout.totalSize;
       const ComponentEnvironment equationEnvironment =
-          makeComponentEnvironment(equation.indices, component);
+          makeComponentEnvironment(equation.indices, component,
+                                   unknownLayout.symmetric);
 
       for (std::size_t domainIndex = 0; domainIndex < domainLayout.grids.size();
            ++domainIndex) {
@@ -616,9 +672,11 @@ evaluateResidual(const backend::ConstraintProblemIR &problem,
       }
 
       const ComponentEnvironment innerEnvironment =
-          makeComponentEnvironment(inner.indices, component);
+          makeComponentEnvironment(inner.indices, component,
+                                   unknownLayout.symmetric);
       const ComponentEnvironment outerEnvironment =
-          makeComponentEnvironment(outer.indices, component);
+          makeComponentEnvironment(outer.indices, component,
+                                   unknownLayout.symmetric);
       const DualGrid innerValue =
           evalExpr(inner.rhs.get(), firstGrid, localStates.front(),
                    innerEnvironment, parameters);
@@ -904,7 +962,8 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
       for (std::size_t component = 0; component < targetLayout.componentCount;
            ++component) {
         const ComponentEnvironment environment =
-            makeComponentEnvironment(seed.indices, component);
+            makeComponentEnvironment(seed.indices, component,
+                                     targetLayout.symmetric);
         const std::size_t offset =
             (targetLayout.firstComponent + component) * layout.totalSize +
             layout.offsets[domainIndex];
@@ -934,7 +993,8 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
     solution.unknownLayouts.push_back(
         {unknownLayout.name, static_cast<std::size_t>(tensorType.up),
          static_cast<std::size_t>(tensorType.down),
-         unknownLayout.componentCount, layout.totalSize});
+         unknownLayout.componentCount, layout.totalSize,
+         unknownLayout.symmetric});
   }
   const std::size_t maxIterations =
       static_cast<std::size_t>(problem.solve.maxIterations);

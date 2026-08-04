@@ -425,6 +425,13 @@ void SemanticAnalyzer::validateConstraintProblem(
                                unknown.name);
     const size_t rank =
         static_cast<size_t>(unknown.type.up + unknown.type.down);
+    if (unknown.symmetric &&
+        !((unknown.type.up == 0 && unknown.type.down == 2) ||
+          (unknown.type.up == 2 && unknown.type.down == 0))) {
+      throw std::runtime_error("symmetric constraint unknown '" +
+                               unknown.name +
+                               "' must be covariant or contravariant rank two");
+    }
     if (unknown.indices.size() != rank)
       throw std::runtime_error("constraint unknown '" + unknown.name +
                                "' declares wrong number of indices");

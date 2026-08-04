@@ -28,6 +28,7 @@ struct ConstraintUnknownSolution {
   std::size_t covariantRank = 0;
   std::size_t componentCount = 1;
   std::size_t pointsPerComponent = 0;
+  bool symmetric = false;
 };
 
 struct RadialCttPhysicalSolution {
@@ -89,8 +90,9 @@ struct CttBssnBuffers {
 };
 
 // Coupled radial constraint backend for scalar, rank-one, and rank-two
-// unknowns, with Chebyshev-Lobatto domains, optional compactified infinity,
-// C0/C1 matching, and a Newton solve.
+// unknowns, including compact symmetric rank-two layouts, with
+// Chebyshev-Lobatto domains, optional compactified infinity, C0/C1 matching,
+// and a Newton solve.
 ConstraintSolution
 solveRadialConstraintProblem(const backend::ModuleIR &module,
                              const ConstraintSolveRequest &request = {});

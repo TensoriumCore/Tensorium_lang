@@ -221,6 +221,7 @@ struct ConstraintUnknownDecl {
   TensorTypeDesc type;
   std::string name;
   std::vector<std::string> indices;
+  bool symmetric = false;
 };
 
 struct ConstraintEquationDecl {

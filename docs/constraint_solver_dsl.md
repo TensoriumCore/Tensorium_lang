@@ -121,7 +121,8 @@ The current numerical backend supports:
 - scalar, rank-one, and rank-two unknowns, paired with residuals of identical
   variance;
 - three spatial components for each rank-one unknown;
-- nine row-major spatial components for each general rank-two unknown;
+- nine row-major spatial components for each general rank-two unknown, or six
+  components for an explicitly symmetric covariant/contravariant unknown;
 - Chebyshev-Lobatto collocation;
 - the radial spherical Laplacian
   `d2/dr2 + (2/r) d/dr`;
@@ -394,6 +395,21 @@ rank-two unknowns have nine components in row-major order,
 `component = 3*i + j`. This applies to `cov_tensor2`, `con_tensor2`, and
 `mixed_tensor(up=1,down=1)`.
 
+Purely covariant or contravariant rank-two unknowns may declare compact
+symmetric storage:
+
+```tensorium
+unknown symmetric cov_tensor2 A[i,j]
+unknown symmetric con_tensor2 B[i,j]
+```
+
+Their six stored components use the order `(00, 01, 02, 11, 12, 22)`.
+`A[i,j]` and `A[j,i]` resolve to the same component, including inside the
+automatically differentiated residual. A symmetric declaration is a contract;
+Tensorium does not attempt to prove that an arbitrary residual preserves the
+symmetry. Mixed tensors cannot use this modifier because exchanging an upper
+and a lower index is not a tensor symmetry without an explicit metric.
+
 Scalar boundary or seed expressions are broadcast to every component, which
 makes homogeneous tensor data concise:
 
@@ -434,10 +450,8 @@ point count per component and the total number of stored values.
 
 At this stage `laplacian(W[i])` and `laplacian(A[i,j])` apply the scalar radial
 Laplacian to each component independently. They are not yet covariant tensor
-Laplacians in a spherical basis. Rank-two storage is general and does not yet
-compress a declared symmetric tensor from nine to six components. Connection
-terms, contractions, and explicit tensor symmetry are the next geometric
-lowering steps.
+Laplacians in a spherical basis. Connection terms and generic contractions are
+the next geometric lowering steps.
 
 ## Pipeline status
 
@@ -449,12 +463,13 @@ constrained initial_data DSL
   -> multidomain radial maps and Chebyshev-Lobatto collocation [implemented]
   -> compactified exterior and C0/C1 matching [implemented]
   -> coupled scalar/rank-one/rank-two layout and Jacobian [implemented]
+  -> compact six-component symmetric rank-two storage [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] generic covariant contractions and tensor symmetry metadata
+  -> [next] generic covariant contractions and connection terms
 ```
 
 The physical target includes the 3+1 constraint equations

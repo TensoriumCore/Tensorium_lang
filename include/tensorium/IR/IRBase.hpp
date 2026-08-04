@@ -223,6 +223,7 @@ struct ConstraintUnknownIR {
   std::string name;
   tensorium::ir::TensorType tensorType;
   std::vector<std::string> indices;
+  bool symmetric = false;
 };
 
 struct ConstraintEquationIR {

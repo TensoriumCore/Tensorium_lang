@@ -5616,6 +5616,46 @@ static bool testScalarVectorRadialConstraintSolve() {
   return true;
 }
 
+static bool testSymmetricConstraintUnknownValidation() {
+  const std::string source = R"(
+initial_data InvalidSymmetricMixed {
+  domain shell {
+    coordinates = spherical
+    topology = shell
+    resolution = [5]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+  unknown symmetric mixed_tensor(up=1,down=1) C[i,j]
+  equation mixed_tensor(up=1,down=1) mixed_equation[i,j] = laplacian(C[i,j])
+  boundary inner { C[i,j] = 0 }
+  boundary outer { C[i,j] = 0 }
+  seed C[i,j] = 0
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-10
+    max_iterations = 4
+  }
+}
+)";
+
+  try {
+    (void)buildModuleFromSource(source, CompilationMode::Executable);
+  } catch (const std::exception &exception) {
+    if (std::string(exception.what()).find(
+            "must be covariant or contravariant rank two") !=
+        std::string::npos) {
+      return true;
+    }
+    std::cerr << "FAIL: unexpected symmetric constraint diagnostic: "
+              << exception.what() << "\n";
+    return false;
+  }
+  std::cerr << "FAIL: symmetric mixed constraint unknown was accepted\n";
+  return false;
+}
+
 static bool testRankTwoRadialConstraintSolve() {
   auto result = tensorium::api::parseAndValidateFile(
       "tests/fixtures/gr/rank_two_radial_solve.tn");
@@ -5634,12 +5674,14 @@ static bool testRankTwoRadialConstraintSolve() {
     const char *name;
     std::size_t contravariantRank;
     std::size_t covariantRank;
+    std::size_t componentCount;
+    bool symmetric;
     double value;
   };
   const std::array<ExpectedLayout, 3> expected = {
-      ExpectedLayout{"A", 0, 2, 1.0},
-      ExpectedLayout{"B", 2, 0, 2.0},
-      ExpectedLayout{"C", 1, 1, 3.0},
+      ExpectedLayout{"A", 0, 2, 6, true, 1.0},
+      ExpectedLayout{"B", 2, 0, 6, true, 2.0},
+      ExpectedLayout{"C", 1, 1, 9, false, 3.0},
   };
 
   double maxError = 0.0;
@@ -5649,13 +5691,15 @@ static bool testRankTwoRadialConstraintSolve() {
     if (layout.name != wanted.name ||
         layout.contravariantRank != wanted.contravariantRank ||
         layout.covariantRank != wanted.covariantRank ||
-        layout.componentCount != 9 || layout.pointsPerComponent != 7) {
+        layout.componentCount != wanted.componentCount ||
+        layout.pointsPerComponent != 7 ||
+        layout.symmetric != wanted.symmetric) {
       std::cerr << "FAIL: rank-two component layout is incorrect for "
                 << wanted.name << "\n";
       return false;
     }
     const auto &values = solution.unknowns.at(wanted.name);
-    if (values.size() != 9 * layout.pointsPerComponent) {
+    if (values.size() != wanted.componentCount * layout.pointsPerComponent) {
       std::cerr << "FAIL: rank-two flattened buffer size is incorrect for "
                 << wanted.name << "\n";
       return false;
@@ -6296,6 +6340,8 @@ int main() {
        &testCoupledNonlinearRadialConstraintSolve},
       {"testScalarVectorRadialConstraintSolve",
        &testScalarVectorRadialConstraintSolve},
+      {"testSymmetricConstraintUnknownValidation",
+       &testSymmetricConstraintUnknownValidation},
       {"testRankTwoRadialConstraintSolve",
        &testRankTwoRadialConstraintSolve},
       {"testCttRadialVacuumConstraintSolve",

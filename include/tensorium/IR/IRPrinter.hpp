@@ -302,7 +302,9 @@ inline void printModuleIR(const ModuleIR &m) {
     std::cout << "    Unknowns:\n";
     for (const auto &unknown : problem.unknowns)
       std::cout << "      " << unknown.name << " (up=" << unknown.tensorType.up
-                << ",down=" << unknown.tensorType.down << ")\n";
+                << ",down=" << unknown.tensorType.down
+                << ",symmetric=" << (unknown.symmetric ? "true" : "false")
+                << ")\n";
     std::cout << "    Residuals:\n";
     for (const auto &equation : problem.equations) {
       std::cout << "      " << equation.name << " = ";

@@ -286,7 +286,8 @@ void printProgram(const Program &prog) {
         std::cout << ")\n";
       }
       for (const auto &unknown : problem.unknowns) {
-        std::cout << "    unknown " << unknown.name
+        std::cout << "    unknown "
+                  << (unknown.symmetric ? "symmetric " : "") << unknown.name
                   << " (up=" << unknown.type.up << ",down=" << unknown.type.down
                   << ")\n";
       }
