@@ -175,6 +175,21 @@ DualGrid constantGrid(std::size_t size, double value) {
   return {std::vector<double>(size, value), std::vector<double>(size, 0.0)};
 }
 
+DualGrid multiplyPointwise(const DualGrid &lhs, const DualGrid &rhs,
+                           std::size_t size) {
+  if (lhs.value.size() != size || lhs.tangent.size() != size ||
+      rhs.value.size() != size || rhs.tangent.size() != size)
+    fail("internal dual-grid size mismatch");
+
+  DualGrid result = constantGrid(size, 0.0);
+  for (std::size_t i = 0; i < size; ++i) {
+    result.value[i] = lhs.value[i] * rhs.value[i];
+    result.tangent[i] =
+        lhs.tangent[i] * rhs.value[i] + lhs.value[i] * rhs.tangent[i];
+  }
+  return result;
+}
+
 DualGrid applyRadialLaplacian(const DualGrid &input, const RadialGrid &grid) {
   DualGrid result;
   const auto first = applyMatrix(grid.firstDerivative, grid.size, input.value);
@@ -392,16 +407,57 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
         outer ? dynamic_cast<const backend::PartialDerivativeIR *>(
                     outer->in.get())
               : nullptr;
-    if (!inner || outer->coordIndex != inner->coordIndex ||
-        contraction->summedIndices.size() != 1 ||
-        contraction->summedIndices.front() != outer->coordIndex) {
-      fail("unsupported contraction in scalar radial backend");
+    if (inner && outer->coordIndex == inner->coordIndex &&
+        contraction->summedIndices.size() == 1 &&
+        contraction->summedIndices.front() == outer->coordIndex) {
+      DualGrid input = evalExpr(inner->in.get(), grid, unknowns,
+                                componentEnvironment, parameters);
+      return applyRadialLaplacian(input, grid);
     }
-    DualGrid input = evalExpr(inner->in.get(), grid, unknowns,
-                              componentEnvironment, parameters);
-    return applyRadialLaplacian(input, grid);
+
+    if (contraction->summedIndices.empty())
+      fail("Einstein contraction has no summed indices");
+    if (contraction->summedIndices.size() > 2)
+      fail("radial Einstein contraction supports at most two summed indices");
+
+    ComponentEnvironment contractedEnvironment = componentEnvironment;
+    for (const auto &index : contraction->summedIndices) {
+      if (contractedEnvironment.contains(index))
+        fail("Einstein contraction index '" + index +
+             "' collides with a free component index");
+    }
+
+    DualGrid result = constantGrid(grid.size, 0.0);
+    auto accumulate = [&](auto &&self, std::size_t depth) -> void {
+      if (depth == contraction->summedIndices.size()) {
+        DualGrid term = evalExpr(contraction->in.get(), grid, unknowns,
+                                 contractedEnvironment, parameters);
+        for (std::size_t point = 0; point < grid.size; ++point) {
+          result.value[point] += term.value[point];
+          result.tangent[point] += term.tangent[point];
+        }
+        return;
+      }
+
+      const auto &index = contraction->summedIndices[depth];
+      for (std::size_t component = 0; component < kSpatialComponentCount;
+           ++component) {
+        contractedEnvironment.emplace(index, component);
+        self(self, depth + 1);
+        contractedEnvironment.erase(index);
+      }
+    };
+    accumulate(accumulate, 0);
+    return result;
   }
-  case ExprIR::Kind::TensorProduct:
+  case ExprIR::Kind::TensorProduct: {
+    const auto *product = static_cast<const backend::TensorProductIR *>(expr);
+    DualGrid lhs = evalExpr(product->lhs.get(), grid, unknowns,
+                            componentEnvironment, parameters);
+    DualGrid rhs = evalExpr(product->rhs.get(), grid, unknowns,
+                            componentEnvironment, parameters);
+    return multiplyPointwise(lhs, rhs, grid.size);
+  }
   case ExprIR::Kind::IndexRename:
   case ExprIR::Kind::IndexPermute:
   case ExprIR::Kind::Trace:

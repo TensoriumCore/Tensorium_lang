@@ -170,6 +170,7 @@ CONSTRAINT_SOLVE_TESTS=(
   "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn|42|2|1|mass=1"
   "tests/fixtures/gr/coupled_nonlinear_radial_solve.tn|22|2|5|mass=1"
   "tests/fixtures/gr/scalar_vector_radial_solve.tn|22|2|3|mass=1"
+  "tests/fixtures/gr/tensor_contraction_radial_solve.tn|7|1|2|mass=1"
   "tests/fixtures/gr/ctt_radial_vacuum_solve.tn|50|2|4|amplitude=0.2"
 )
 
@@ -532,6 +533,14 @@ for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
   if [[ "$f" == *"scalar_vector_radial_solve.tn"* ]] &&
      ! grep -q "unknown=W points=22 components=3 values=66" "$OUT_FILE"; then
     echo "ERROR: expected three-component vector solution for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
+  if [[ "$f" == *"tensor_contraction_radial_solve.tn"* ]] &&
+     { ! grep -q "unknown=A points=7 components=6 values=42" "$OUT_FILE" ||
+       ! grep -q "unknown=B points=7 components=6 values=42" "$OUT_FILE" ||
+       ! grep -q "unknown=C points=7 components=9 values=63" "$OUT_FILE"; }; then
+    echo "ERROR: expected symmetric and mixed tensor solutions for $f"
     cat "$OUT_FILE"
     exit 1
   fi

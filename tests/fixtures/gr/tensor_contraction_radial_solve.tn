@@ -1,0 +1,52 @@
+# Manufactured coupled solve for executable Einstein contractions. With
+# A_ij = 1 and B^ij = 2, the full three-dimensional contraction A_ij B^ij is
+# 18, while B^ik A_kj is 6 for every free pair (i,j). Symmetric tensors use six
+# stored components, but the ordered Einstein sum still contains all nine
+# index pairs.
+initial_data TensorContractionRadial {
+  domain shell {
+    coordinates = spherical
+    topology = shell
+    resolution = [7]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+
+  unknown scalar psi
+  unknown symmetric cov_tensor2 A[i,j]
+  unknown symmetric con_tensor2 B[i,j]
+  unknown mixed_tensor(up=1,down=1) C[i,j]
+
+  equation scalar hamiltonian =
+      laplacian(psi) + contract(A[i,j] * B[i,j]) - 18
+  equation cov_tensor2 covariant[i,j] = laplacian(A[i,j])
+  equation con_tensor2 contravariant[i,j] = laplacian(B[i,j])
+  equation mixed_tensor(up=1,down=1) mixed[i,j] =
+      laplacian(C[i,j]) + contract(B[i,k] * A[k,j]) - 2 * C[i,j]
+
+  boundary inner {
+    psi = 1
+    A[i,j] = 1
+    B[i,j] = 2
+    C[i,j] = 3
+  }
+
+  boundary outer {
+    psi = 1
+    A[i,j] = 1
+    B[i,j] = 2
+    C[i,j] = 3
+  }
+
+  seed psi = 0.5
+  seed A[i,j] = 0.25
+  seed B[i,j] = 0.5
+  seed C[i,j] = 0.75
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-11
+    max_iterations = 8
+  }
+}

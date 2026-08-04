@@ -128,7 +128,9 @@ The current numerical backend supports:
   `d2/dr2 + (2/r) d/dr`;
 - `radial_derivative(f) = df/dr`;
 - the flat conformal vector Laplacian for a radial vector amplitude;
-- algebraic nonlinearities, powers, and radial derivatives;
+- algebraic nonlinearities, powers, pointwise tensor products, and Einstein
+  contractions over one or two repeated spatial indices;
+- radial derivatives;
 - global `inner` and `outer` Dirichlet conditions;
 - automatic `C0` and `C1` matching at every declared interface;
 - forward-mode automatic differentiation of the complete coupled residual,
@@ -410,6 +412,22 @@ Tensorium does not attempt to prove that an arbitrary residual preserves the
 symmetry. Mixed tensors cannot use this modifier because exchanging an upper
 and a lower index is not a tensor symmetry without an explicit metric.
 
+Algebraic Einstein contractions are executable in radial residuals. For
+example:
+
+```tensorium
+equation scalar hamiltonian =
+    laplacian(psi) + contract(A[i,j] * B[i,j]) - 18
+```
+
+Here `A` is covariant and `B` is contravariant. The solver evaluates the full
+ordered sum `sum_i sum_j A_ij B^ij`. Compact symmetric storage does not change
+that mathematical sum: diagonal pairs occur once and off-diagonal pairs occur
+twice. The same evaluator propagates automatic derivatives through both tensor
+factors, so these terms populate the cross-field blocks of the Newton
+Jacobian. The current executable limit is two simultaneously summed spatial
+indices.
+
 Scalar boundary or seed expressions are broadcast to every component, which
 makes homogeneous tensor data concise:
 
@@ -444,14 +462,28 @@ It solves covariant, contravariant, and mixed rank-two equations together. The
 covariant and contravariant residuals also access the transposed component,
 which exercises cross-component entries in the automatic Newton Jacobian.
 
+Run the nonlinear contraction regression with:
+
+```sh
+./tools/driver/Tensorium_cc --solve-constraints \
+  ../tests/fixtures/gr/tensor_contraction_radial_solve.tn
+```
+
+Its manufactured solution is `psi = 1`, `A_ij = 1`, `B^ij = 2`, and
+`C^i_j = 3`. It checks both the double contraction `A_ij B^ij = 18` and the
+one-index contraction `B^ik A_kj = 6` in three spatial dimensions. The system
+couples compact symmetric and general mixed rank-two fields and converges in
+two Newton updates.
+
 Solution buffers are component-major: all radial points for component `0`,
 followed by all points for component `1`, and so on. The CLI reports both the
 point count per component and the total number of stored values.
 
 At this stage `laplacian(W[i])` and `laplacian(A[i,j])` apply the scalar radial
 Laplacian to each component independently. They are not yet covariant tensor
-Laplacians in a spherical basis. Connection terms and generic contractions are
-the next geometric lowering steps.
+Laplacians in a spherical basis. Algebraic contractions are executable, but
+connection terms and covariant derivatives are the next geometric lowering
+steps.
 
 ## Pipeline status
 
@@ -464,12 +496,13 @@ constrained initial_data DSL
   -> compactified exterior and C0/C1 matching [implemented]
   -> coupled scalar/rank-one/rank-two layout and Jacobian [implemented]
   -> compact six-component symmetric rank-two storage [implemented]
+  -> algebraic Einstein tensor contractions [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] generic covariant contractions and connection terms
+  -> [next] connection terms and covariant derivatives
 ```
 
 The physical target includes the 3+1 constraint equations
