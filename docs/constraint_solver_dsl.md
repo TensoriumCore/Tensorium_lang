@@ -199,10 +199,11 @@ The charged nonlinear fixture follows the isotropic Reissner-Nordstrom data
 and conformal Einstein-Maxwell equations reviewed by
 [Bozzola and Paschalidis, *Initial data for general relativistic simulations of multiple electrically charged black holes with linear and angular momenta*](https://doi.org/10.1103/PhysRevD.99.104044),
 especially Eqs. (21), (22), and (43a). For a time-symmetric slice with
-conformal electric field `Ebar^r = Q/r^2`, the solved equation is
+conformal electric field `Ebar^r = Q/r^2`, the coupled solved system is
 
 ```text
-Delta psi + Q^2 psi^(-3)/(4 r^4) = 0,
+Delta psi + (Ebar^r)^2 psi^(-3)/4 = 0,
+d(Ebar^r)/dr + 2 Ebar^r/r = 0,
 psi(r) = sqrt((1 + M/(2 r))^2 - Q^2/(4 r^2)).
 ```
 
@@ -214,16 +215,30 @@ Run the normalized `M = 1`, `Q = 0.6` benchmark from `build`:
   ../tests/fixtures/gr/reissner_nordstrom_einstein_maxwell_solve.tn
 ```
 
-The solve joins `[0.4,2]` to compactified infinity and converges from an
-uncharged Schwarzschild seed. The unit regression checks the exact conformal
-factor at all 58 collocation points and verifies that the inner isotropic
-horizon `r_H = sqrt(M^2-Q^2)/2 = 0.4` has areal radius
+The solve joins `[0.4,2]` to compactified infinity. Newton iteration determines
+both `psi` and the scalar SO(3) radial amplitude `electric` from independently
+perturbed seeds. The unit regression checks `psi`, `electric = Q/r^2`, the
+physical field `E^r = psi^(-6) electric`, and the Maxwell Gauss constraint at
+all 58 collocation points. It also verifies that the inner isotropic horizon
+`r_H = sqrt(M^2-Q^2)/2 = 0.4` has areal radius
 `R_+ = M + sqrt(M^2-Q^2) = 1.8`.
 
-This fixture solves the Einstein Hamiltonian constraint with the analytic
-electric-energy source inserted in the residual. It does not make the
-electric field a solver unknown, independently solve the Maxwell Gauss
-constraint, or export electromagnetic evolution buffers.
+The reconstruction declares the conformal electric amplitude explicitly:
+
+```tensorium
+reconstruct ctt {
+  conformal_factor = psi
+  conformal_electric_radial = electric
+  mean_curvature = 0
+}
+```
+
+No radial CTT vector potential is required for time-symmetric data; omitting
+`radial_vector` reconstructs zero extrinsic curvature. The physical electric
+vector can be interpolated to spherical or Cartesian external grids through
+`interpolateRadialElectromagneticToGrid` or the versioned C handoff ABI. The
+currently supported electrostatic reconstruction writes a zero magnetic
+field.
 
 ### Published cases that are not yet faithful executable tests
 
@@ -231,7 +246,7 @@ constraint, or export electromagnetic evolution buffers.
 | --- | --- |
 | Multi-hole Brill-Lindquist or Misner data | Executable multidimensional or bispherical domains, multiple punctures or throats, and their matching conditions. |
 | Boosted or spinning Bowen-York black holes | Angular dependence beyond SO(3), executable 3D vector/tensor fields, and puncture or excision treatment. The original data are explicitly non-spherical. |
-| Generic charged black-hole binaries | The same 3D puncture machinery plus Maxwell unknowns, Gauss constraints, and electromagnetic handoff buffers. |
+| Generic charged black-hole binaries | Three-dimensional puncture domains, non-radial electric and magnetic fields, and the associated multidimensional Maxwell constraints. |
 | TOV or rotating neutron-star data | An executable ball domain with regularity at `r = 0`, matter variables, an equation of state, surface matching, and coupled matter constraints. |
 | Kerr/XCTS quasi-equilibrium data | Axisymmetric or 3D bases, coupled XCTS lapse and shift equations, and apparent-horizon/excision boundary conditions. |
 | `f(R)`, DHOST, or other modified-gravity initial data | A theory-level declaration of the extra gravitational fields and their constraints, theory-specific source terms, physical boundary conditions, and reference solutions compatible with the chosen symmetry. Rank-two storage alone is not sufficient. |
@@ -323,9 +338,10 @@ reconstruct ctt {
 }
 ```
 
-The reconstruction block identifies the solved conformal factor and radial
-vector potential and supplies the prescribed mean-curvature expression. It
-then creates physical spatial-metric and extrinsic-curvature profiles.
+The reconstruction block identifies the solved conformal factor and optional
+radial vector potential and supplies the prescribed mean-curvature expression.
+When `radial_vector` is omitted, its longitudinal contribution is zero. The
+block then creates physical spatial-metric and extrinsic-curvature profiles.
 
 ```sh
 ./tools/driver/Tensorium_cc \
@@ -403,6 +419,16 @@ All target coordinates must be finite. Radii must also be positive and covered
 by the solved domains.
 The handoff deliberately does not construct lapse or shift: those are gauge
 variables and are not determined by the CTT constraint equations.
+
+`interpolateRadialElectromagneticToGrid` uses the same target-grid contract.
+It converts the solved conformal radial amplitude into the physical
+contravariant field and writes three-component structure-of-arrays buffers:
+
+```text
+E^r = psi^(-6) Ebar^r                         (spherical)
+E^i = psi^(-6) Ebar^r x^i/r                   (Cartesian)
+B^i = 0                                       (electrostatic subset).
+```
 
 ## Cartesian BSSN initialization
 
@@ -717,11 +743,13 @@ constrained initial_data DSL
   -> composable covariant derivatives and rank-one/rank-two rough Laplacians [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> curved-background longitudinal CTT and sourced Hamiltonian residuals [implemented radial subset]
+  -> coupled radial Einstein-Maxwell Hamiltonian and Gauss constraints [implemented electrostatic subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
+  -> reconstruct and export physical electric and magnetic buffers [implemented electrostatic subset]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] generalized curved-CTT reconstruction and physical-source declarations
+  -> [next] regular ball domains and general matter-source declarations
 ```
 
 The physical target includes the 3+1 constraint equations

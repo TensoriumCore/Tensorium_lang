@@ -592,6 +592,7 @@ ConstraintCttReconstructionDecl Parser::parseConstraintCttReconstruction() {
   reconstruction.enabled = true;
   bool hasConformalFactor = false;
   bool hasRadialVector = false;
+  bool hasConformalElectricRadial = false;
   bool hasMeanCurvature = false;
   while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
     if (cur.type == TokenType::Semicolon) {
@@ -604,7 +605,8 @@ ConstraintCttReconstructionDecl Parser::parseConstraintCttReconstruction() {
     advance();
     expect(TokenType::Equals);
 
-    if (key == "conformal_factor" || key == "radial_vector") {
+    if (key == "conformal_factor" || key == "radial_vector" ||
+        key == "conformal_electric_radial") {
       if (cur.type != TokenType::Identifier)
         syntaxError("reconstruct ctt property '" + key +
                     "' expects an unknown name");
@@ -613,11 +615,16 @@ ConstraintCttReconstructionDecl Parser::parseConstraintCttReconstruction() {
           syntaxError("duplicate conformal_factor in reconstruct ctt");
         reconstruction.conformalFactor = cur.text;
         hasConformalFactor = true;
-      } else {
+      } else if (key == "radial_vector") {
         if (hasRadialVector)
           syntaxError("duplicate radial_vector in reconstruct ctt");
         reconstruction.radialVectorPotential = cur.text;
         hasRadialVector = true;
+      } else {
+        if (hasConformalElectricRadial)
+          syntaxError("duplicate conformal_electric_radial in reconstruct ctt");
+        reconstruction.conformalElectricRadial = cur.text;
+        hasConformalElectricRadial = true;
       }
       advance();
       continue;
@@ -632,9 +639,8 @@ ConstraintCttReconstructionDecl Parser::parseConstraintCttReconstruction() {
     syntaxError("unknown reconstruct ctt property '" + key + "'");
   }
   expect(TokenType::RBrace);
-  if (!hasConformalFactor || !hasRadialVector || !hasMeanCurvature) {
-    syntaxError("reconstruct ctt requires conformal_factor, radial_vector "
-                "and mean_curvature");
+  if (!hasConformalFactor || !hasMeanCurvature) {
+    syntaxError("reconstruct ctt requires conformal_factor and mean_curvature");
   }
   return reconstruction;
 }

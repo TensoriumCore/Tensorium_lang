@@ -369,6 +369,48 @@ tensorium_constraint_status_v1 tensorium_interpolate_radial_ctt_v1(
   }
 }
 
+tensorium_constraint_status_v1 tensorium_interpolate_radial_electromagnetic_v1(
+    const tensorium_constraint_solution_v1 *solution,
+    const tensorium_ctt_target_grid_v1 *target,
+    const tensorium_electromagnetic_buffers_v1 *outputs, char *errorMessage,
+    int64_t errorCapacity) {
+  Status status = validateCall(solution, errorMessage, errorCapacity);
+  if (status != TENSORIUM_CONSTRAINT_STATUS_OK)
+    return status;
+  tensorium::solver::CttTargetGrid cppTarget;
+  status = convertTarget(target, cppTarget, errorMessage, errorCapacity);
+  if (status != TENSORIUM_CONSTRAINT_STATUS_OK)
+    return status;
+  if (!validStruct(outputs))
+    return report(
+        TENSORIUM_CONSTRAINT_STATUS_ABI_MISMATCH,
+        "electromagnetic output struct_size is incompatible with ABI v1",
+        errorMessage, errorCapacity);
+  if (outputs->point_count != target->point_count)
+    return report(
+        TENSORIUM_CONSTRAINT_STATUS_INVALID_ARGUMENT,
+        "electromagnetic output point_count does not match target grid",
+        errorMessage, errorCapacity);
+
+  tensorium::solver::ElectromagneticEvolutionBuffers cppOutputs;
+  for (std::size_t component = 0; component < 3; ++component) {
+    cppOutputs.electricField[component] = outputs->electric_field[component];
+    cppOutputs.magneticField[component] = outputs->magnetic_field[component];
+  }
+  try {
+    tensorium::solver::interpolateRadialElectromagneticToGrid(
+        solution->value, cppTarget, cppOutputs);
+    return TENSORIUM_CONSTRAINT_STATUS_OK;
+  } catch (const std::exception &exception) {
+    return report(TENSORIUM_CONSTRAINT_STATUS_SOLVER_ERROR, exception.what(),
+                  errorMessage, errorCapacity);
+  } catch (...) {
+    return report(TENSORIUM_CONSTRAINT_STATUS_INTERNAL_ERROR,
+                  "unknown electromagnetic interpolation failure", errorMessage,
+                  errorCapacity);
+  }
+}
+
 tensorium_constraint_status_v1 tensorium_initialize_bssn_from_radial_ctt_v1(
     const tensorium_constraint_solution_v1 *solution,
     const tensorium_ctt_target_grid_v1 *target,

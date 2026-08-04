@@ -35,9 +35,69 @@ static double determinant(const double matrix[9][POINT_COUNT], int point) {
          c * (d * h - e * g);
 }
 
+static int test_electromagnetic_handoff(const char *path, char *error) {
+  tensorium_constraint_parameter_v1 parameter = {0};
+  parameter.struct_size = sizeof(parameter);
+  parameter.name = "charge";
+  parameter.value = 0.6;
+
+  tensorium_constraint_solution_v1 *solution = NULL;
+  tensorium_constraint_status_v1 status =
+      tensorium_solve_radial_constraints_file_v1(path, &parameter, 1, &solution,
+                                                 error, ERROR_CAPACITY);
+  if (status != TENSORIUM_CONSTRAINT_STATUS_OK)
+    return fail(solution, "Einstein-Maxwell constraint solve", status, error);
+
+  const double x[POINT_COUNT] = {0.5, 0.0, 0.0};
+  const double y[POINT_COUNT] = {0.0, 1.0, 0.0};
+  const double z[POINT_COUNT] = {0.0, 0.0, 4.0};
+  tensorium_ctt_target_grid_v1 target = {0};
+  target.struct_size = sizeof(target);
+  target.coordinates = TENSORIUM_CTT_COORDINATES_CARTESIAN;
+  target.point_count = POINT_COUNT;
+  target.coordinate_components[0] = x;
+  target.coordinate_components[1] = y;
+  target.coordinate_components[2] = z;
+
+  double electric[3][POINT_COUNT] = {{0}};
+  double magnetic[3][POINT_COUNT] = {{0}};
+  tensorium_electromagnetic_buffers_v1 outputs = {0};
+  outputs.struct_size = sizeof(outputs);
+  outputs.point_count = POINT_COUNT;
+  for (int component = 0; component < 3; ++component) {
+    outputs.electric_field[component] = electric[component];
+    outputs.magnetic_field[component] = magnetic[component];
+  }
+
+  status = tensorium_interpolate_radial_electromagnetic_v1(
+      solution, &target, &outputs, error, ERROR_CAPACITY);
+  if (status != TENSORIUM_CONSTRAINT_STATUS_OK)
+    return fail(solution, "electromagnetic interpolation", status, error);
+
+  for (int point = 0; point < POINT_COUNT; ++point) {
+    const double radius = x[point] + y[point] + z[point];
+    const double psi = sqrt(pow(1.0 + 1.0 / (2.0 * radius), 2.0) -
+                            0.6 * 0.6 / (4.0 * radius * radius));
+    const double expected = 0.6 / (radius * radius * pow(psi, 6.0));
+    for (int component = 0; component < 3; ++component) {
+      const double wanted = component == point ? expected : 0.0;
+      if (!nearly_equal(electric[component][point], wanted, 1.0e-8) ||
+          !nearly_equal(magnetic[component][point], 0.0, 1.0e-15)) {
+        return fail(solution, "electromagnetic field validation",
+                    TENSORIUM_CONSTRAINT_STATUS_INTERNAL_ERROR,
+                    "unexpected electric or magnetic field component");
+      }
+    }
+  }
+
+  tensorium_constraint_solution_destroy_v1(solution);
+  return 0;
+}
+
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    fprintf(stderr, "usage: %s <constraint-dsl-file>\n", argv[0]);
+  if (argc != 3) {
+    fprintf(stderr, "usage: %s <ctt-dsl-file> <einstein-maxwell-dsl-file>\n",
+            argv[0]);
     return 2;
   }
   if (tensorium_constraint_handoff_abi_version() !=
@@ -205,5 +265,5 @@ int main(int argc, char **argv) {
          (long long)info.iterations, info.residual_norm,
          (long long)info.source_point_count, POINT_COUNT);
   tensorium_constraint_solution_destroy_v1(solution);
-  return 0;
+  return test_electromagnetic_handoff(argv[2], error);
 }

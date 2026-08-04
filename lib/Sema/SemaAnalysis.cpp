@@ -425,6 +425,8 @@ IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
         problem.cttReconstruction.conformalFactor;
     out.cttReconstruction.radialVectorPotential =
         problem.cttReconstruction.radialVectorPotential;
+    out.cttReconstruction.conformalElectricRadial =
+        problem.cttReconstruction.conformalElectricRadial;
     out.cttReconstruction.meanCurvature =
         transformExpr(problem.cttReconstruction.meanCurvature.get());
     const TensorType meanCurvatureType =

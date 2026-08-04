@@ -753,6 +753,8 @@ ModuleIR BackendBuilder::build(const Program &prog,
           indexed.cttReconstruction.conformalFactor;
       out.cttReconstruction.radialVectorPotential =
           indexed.cttReconstruction.radialVectorPotential;
+      out.cttReconstruction.conformalElectricRadial =
+          indexed.cttReconstruction.conformalElectricRadial;
       out.cttReconstruction.meanCurvature =
           lowerIndexedExpr(indexed.cttReconstruction.meanCurvature.get(), true,
                            constraintConnectionAvailable);

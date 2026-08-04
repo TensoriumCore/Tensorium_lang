@@ -309,10 +309,14 @@ void printProgram(const Program &prog) {
                   << interface.outerDomain << "\n";
       if (problem.cttReconstruction.enabled) {
         std::cout << "    reconstruct ctt conformal_factor="
-                  << problem.cttReconstruction.conformalFactor
-                  << " radial_vector="
-                  << problem.cttReconstruction.radialVectorPotential
-                  << " mean_curvature=";
+                  << problem.cttReconstruction.conformalFactor;
+        if (!problem.cttReconstruction.radialVectorPotential.empty())
+          std::cout << " radial_vector="
+                    << problem.cttReconstruction.radialVectorPotential;
+        if (!problem.cttReconstruction.conformalElectricRadial.empty())
+          std::cout << " conformal_electric_radial="
+                    << problem.cttReconstruction.conformalElectricRadial;
+        std::cout << " mean_curvature=";
         printExpr(problem.cttReconstruction.meanCurvature.get());
         std::cout << "\n";
       }

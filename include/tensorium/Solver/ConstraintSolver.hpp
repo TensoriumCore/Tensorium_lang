@@ -42,6 +42,14 @@ struct RadialCttPhysicalSolution {
   std::vector<double> extrinsicCurvatureTangential;
 };
 
+struct RadialElectromagneticPhysicalSolution {
+  std::string basis = "conformally_flat_coordinate_contravariant";
+  std::string conformalFactorUnknown;
+  std::string conformalElectricRadialUnknown;
+  // Physical contravariant radial component E^r = psi^(-6) Ebar^r.
+  std::vector<double> electricContravariantRadial;
+};
+
 struct ConstraintSolution {
   bool converged = false;
   std::size_t iterations = 0;
@@ -51,6 +59,7 @@ struct ConstraintSolution {
   std::vector<ConstraintUnknownSolution> unknownLayouts;
   std::unordered_map<std::string, std::vector<double>> unknowns;
   std::optional<RadialCttPhysicalSolution> physicalCtt;
+  std::optional<RadialElectromagneticPhysicalSolution> physicalElectromagnetic;
   std::vector<double> residualHistory;
 };
 
@@ -69,6 +78,12 @@ struct CttEvolutionBuffers {
   std::array<double *, 9> inverseSpatialMetric{};
   std::array<double *, 9> extrinsicCurvature{};
   double *meanCurvature = nullptr;
+};
+
+struct ElectromagneticEvolutionBuffers {
+  // Physical contravariant vectors in the target coordinate basis.
+  std::array<double *, 3> electricField{};
+  std::array<double *, 3> magneticField{};
 };
 
 struct BssnGaugeSeed {
@@ -104,6 +119,12 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
 void interpolateRadialCttToGrid(const ConstraintSolution &solution,
                                 const CttTargetGrid &target,
                                 const CttEvolutionBuffers &outputs);
+
+// Interpolates a reconstructed radial Einstein-Maxwell field. The magnetic
+// field is zero for the currently supported electrostatic reconstruction.
+void interpolateRadialElectromagneticToGrid(
+    const ConstraintSolution &solution, const CttTargetGrid &target,
+    const ElectromagneticEvolutionBuffers &outputs);
 
 // Initializes Cartesian BSSN variables from reconstructed physical CTT data.
 // The conformal metric has unit determinant and the conformal extrinsic

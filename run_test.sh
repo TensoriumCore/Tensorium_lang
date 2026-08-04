@@ -577,6 +577,13 @@ for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
     cat "$OUT_FILE"
     exit 1
   fi
+  if [[ "$f" == *"reissner_nordstrom_einstein_maxwell_solve.tn"* ]] &&
+     { ! grep -q "unknown=electric points=58 components=1 values=58" "$OUT_FILE" ||
+       ! grep -q "physical_electromagnetic basis=conformally_flat_coordinate_contravariant points=58" "$OUT_FILE"; }; then
+    echo "ERROR: expected coupled Einstein-Maxwell reconstruction for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
 done
 
 CTT_CSV="$OUT/ctt_radial_physical.csv"
@@ -588,6 +595,18 @@ if [[ $(wc -l < "$CTT_CSV") -ne 51 ]]; then
 fi
 if ! grep -q '^domain,r,conformal_factor,radial_vector,mean_curvature,gamma_radial,gamma_tangential,k_radial,k_tangential$' "$CTT_CSV"; then
   echo "ERROR: unexpected CTT physical CSV schema"
+  exit 1
+fi
+
+ELECTROMAGNETIC_CSV="$OUT/reissner_nordstrom_electromagnetic.csv"
+"$BIN" --export-constraint-csv "$ELECTROMAGNETIC_CSV" --param charge=0.6 \
+  tests/fixtures/gr/reissner_nordstrom_einstein_maxwell_solve.tn > /dev/null
+if [[ $(wc -l < "$ELECTROMAGNETIC_CSV") -ne 59 ]]; then
+  echo "ERROR: expected header plus 58 Einstein-Maxwell CSV rows"
+  exit 1
+fi
+if ! grep -q '^domain,r,conformal_factor,radial_vector,mean_curvature,gamma_radial,gamma_tangential,k_radial,k_tangential,conformal_electric_radial,electric_contravariant_radial$' "$ELECTROMAGNETIC_CSV"; then
+  echo "ERROR: unexpected Einstein-Maxwell CSV schema"
   exit 1
 fi
 

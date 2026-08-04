@@ -532,8 +532,12 @@ void SemanticAnalyzer::validateConstraintProblem(
     };
     requireScalarUnknown(problem.cttReconstruction.conformalFactor,
                          "conformal_factor");
-    requireScalarUnknown(problem.cttReconstruction.radialVectorPotential,
-                         "radial_vector");
+    if (!problem.cttReconstruction.radialVectorPotential.empty())
+      requireScalarUnknown(problem.cttReconstruction.radialVectorPotential,
+                           "radial_vector");
+    if (!problem.cttReconstruction.conformalElectricRadial.empty())
+      requireScalarUnknown(problem.cttReconstruction.conformalElectricRadial,
+                           "conformal_electric_radial");
     if (!problem.cttReconstruction.meanCurvature)
       throw std::runtime_error(
           "reconstruct ctt requires a mean_curvature expression");

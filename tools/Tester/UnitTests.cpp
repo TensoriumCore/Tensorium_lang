@@ -6017,6 +6017,8 @@ static bool testReissnerNordstromEinsteinMaxwellPaperSolution() {
   if (!solution.converged || solution.iterations != 4 ||
       solution.residualNorm > 1.0e-11 || solution.domains.size() != 2 ||
       solution.coordinates.size() != 58 ||
+      solution.unknownLayouts.size() != 2 || !solution.physicalCtt ||
+      !solution.physicalElectromagnetic ||
       !std::isinf(solution.coordinates.back())) {
     std::cerr << "FAIL: Reissner-Nordstrom paper benchmark did not converge "
                  "as expected; iterations="
@@ -6026,7 +6028,12 @@ static bool testReissnerNordstromEinsteinMaxwellPaperSolution() {
   }
 
   const auto &psi = solution.unknowns.at("psi");
+  const auto &electric = solution.unknowns.at("electric");
+  const auto &physicalElectric =
+      solution.physicalElectromagnetic->electricContravariantRadial;
   double maxSolutionError = 0.0;
+  double maxConformalElectricError = 0.0;
+  double maxPhysicalElectricError = 0.0;
   for (std::size_t point = 0; point < solution.coordinates.size(); ++point) {
     const double radius = solution.coordinates[point];
     const double expected = std::isinf(radius)
@@ -6037,18 +6044,108 @@ static bool testReissnerNordstromEinsteinMaxwellPaperSolution() {
                                           (4.0 * radius * radius));
     maxSolutionError =
         std::max(maxSolutionError, std::abs(psi[point] - expected));
+    const double expectedConformalElectric =
+        std::isinf(radius) ? 0.0 : charge / (radius * radius);
+    maxConformalElectricError =
+        std::max(maxConformalElectricError,
+                 std::abs(electric[point] - expectedConformalElectric));
+    const double expectedPhysicalElectric =
+        expectedConformalElectric / std::pow(expected, 6.0);
+    maxPhysicalElectricError =
+        std::max(maxPhysicalElectricError,
+                 std::abs(physicalElectric[point] - expectedPhysicalElectric));
   }
 
   const double horizonArealRadius =
       psi.front() * psi.front() * solution.coordinates.front();
   const double expectedHorizonRadius =
       mass + std::sqrt(mass * mass - charge * charge);
-  if (maxSolutionError > 1.0e-9 ||
+  if (maxSolutionError > 1.0e-9 || maxConformalElectricError > 1.0e-9 ||
+      maxPhysicalElectricError > 1.0e-9 ||
       std::abs(horizonArealRadius - expectedHorizonRadius) > 1.0e-9) {
     std::cerr << "FAIL: Reissner-Nordstrom paper benchmark errors: psi="
-              << maxSolutionError
+              << maxSolutionError << " Ebar=" << maxConformalElectricError
+              << " E=" << maxPhysicalElectricError
               << " horizon_areal_radius=" << horizonArealRadius << "\n";
     return false;
+  }
+
+  const std::array<double, 3> x = {0.5, 0.0, 0.0};
+  const std::array<double, 3> y = {0.0, 1.0, 0.0};
+  const std::array<double, 3> z = {0.0, 0.0, 4.0};
+  tensorium::solver::CttTargetGrid target;
+  target.coordinates = tensorium::solver::CttTargetCoordinates::Cartesian;
+  target.pointCount = x.size();
+  target.coordinateComponents = {x.data(), y.data(), z.data()};
+  std::array<std::array<double, 3>, 3> electricOutput{};
+  std::array<std::array<double, 3>, 3> magneticOutput{};
+  tensorium::solver::ElectromagneticEvolutionBuffers outputs;
+  for (std::size_t component = 0; component < 3; ++component) {
+    outputs.electricField[component] = electricOutput[component].data();
+    outputs.magneticField[component] = magneticOutput[component].data();
+  }
+  tensorium::solver::interpolateRadialElectromagneticToGrid(solution, target,
+                                                            outputs);
+
+  double maxHandoffError = 0.0;
+  for (std::size_t point = 0; point < x.size(); ++point) {
+    const double radius = x[point] + y[point] + z[point];
+    const double exactPsi =
+        std::sqrt(std::pow(1.0 + mass / (2.0 * radius), 2) -
+                  charge * charge / (4.0 * radius * radius));
+    const double exactElectric =
+        charge / (radius * radius * std::pow(exactPsi, 6.0));
+    for (std::size_t component = 0; component < 3; ++component) {
+      const double expected = component == point ? exactElectric : 0.0;
+      maxHandoffError =
+          std::max(maxHandoffError,
+                   std::abs(electricOutput[component][point] - expected));
+      maxHandoffError =
+          std::max(maxHandoffError, std::abs(magneticOutput[component][point]));
+    }
+  }
+  if (maxHandoffError > 1.0e-8) {
+    std::cerr << "FAIL: Reissner-Nordstrom electromagnetic handoff error="
+              << maxHandoffError << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testElectromagneticReconstructionDiagnostics() {
+  const std::string missingElectricUnknown = R"(
+initial_data MissingElectricUnknown {
+  domain shell { coordinates = spherical topology = shell resolution = [5]
+    basis = chebyshev bounds = [1,2] }
+  unknown scalar psi
+  equation scalar hamiltonian = laplacian(psi)
+  boundary inner { psi = 1 }
+  boundary outer { psi = 1 }
+  seed psi = 1
+  reconstruct ctt {
+    conformal_factor = psi
+    conformal_electric_radial = missing_electric
+    mean_curvature = 0
+  }
+  solve { nonlinear = newton linear = direct tolerance = 1e-10
+    max_iterations = 2 }
+}
+)";
+  try {
+    (void)buildModuleFromSource(missingElectricUnknown,
+                                CompilationMode::Executable);
+    std::cerr << "FAIL: missing electromagnetic reconstruction unknown was "
+                 "accepted\n";
+    return false;
+  } catch (const std::exception &exception) {
+    const std::string message = exception.what();
+    if (message.find("conformal_electric_radial references unknown symbol "
+                     "'missing_electric'") == std::string::npos) {
+      std::cerr << "FAIL: unexpected electromagnetic reconstruction "
+                   "diagnostic: "
+                << message << "\n";
+      return false;
+    }
   }
   return true;
 }
@@ -6848,6 +6945,8 @@ int main() {
        &testBrillLindquistSchwarzschildPaperSolution},
       {"testReissnerNordstromEinsteinMaxwellPaperSolution",
        &testReissnerNordstromEinsteinMaxwellPaperSolution},
+      {"testElectromagneticReconstructionDiagnostics",
+       &testElectromagneticReconstructionDiagnostics},
       {"testConstraintGeometryDiagnostics",
        &testConstraintGeometryDiagnostics},
       {"testCttRadialVacuumConstraintSolve",

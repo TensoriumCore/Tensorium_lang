@@ -1313,8 +1313,10 @@ RadialCttPhysicalSolution reconstructRadialCtt(
 
   const auto &psiLayout = findScalarLayout(reconstruction.conformalFactor,
                                            "conformal factor");
-  const auto &wLayout = findScalarLayout(reconstruction.radialVectorPotential,
-                                         "radial vector potential");
+  const UnknownComponentLayout *wLayout = nullptr;
+  if (!reconstruction.radialVectorPotential.empty())
+    wLayout = &findScalarLayout(reconstruction.radialVectorPotential,
+                                "radial vector potential");
   const std::vector<double> zeroTangent(unknown.size(), 0.0);
   const auto localStates = buildLocalStates(
       problem, domainLayout, componentLayout, unknown, zeroTangent);
@@ -1334,7 +1336,9 @@ RadialCttPhysicalSolution reconstructRadialCtt(
     const auto &grid = domainLayout.grids[domainIndex];
     const auto &state = localStates[domainIndex];
     const auto &psi = state.at(psiLayout.name).components.front().value;
-    const auto &w = state.at(wLayout.name).components.front().value;
+    const std::vector<double> zeroVectorPotential(grid.size, 0.0);
+    const auto &w = wLayout ? state.at(wLayout->name).components.front().value
+                            : zeroVectorPotential;
     const auto wPrime = applyMatrix(grid.firstDerivative, grid.size, w);
     const auto meanCurvature =
         evalExpr(reconstruction.meanCurvature.get(), grid, state, {},
@@ -1372,14 +1376,69 @@ RadialCttPhysicalSolution reconstructRadialCtt(
   return physical;
 }
 
+RadialElectromagneticPhysicalSolution
+reconstructRadialElectromagnetic(const backend::ConstraintProblemIR &problem,
+                                 const RadialDomainLayout &domainLayout,
+                                 const ComponentSystemLayout &componentLayout,
+                                 const std::vector<double> &unknown) {
+  const auto &reconstruction = problem.cttReconstruction;
+  auto findScalarLayout =
+      [&](const std::string &name,
+          const std::string &role) -> const UnknownComponentLayout & {
+    auto it = std::find_if(componentLayout.unknowns.begin(),
+                           componentLayout.unknowns.end(),
+                           [&](const UnknownComponentLayout &layout) {
+                             return layout.name == name;
+                           });
+    if (it == componentLayout.unknowns.end())
+      fail("Einstein-Maxwell reconstruction " + role + " unknown '" + name +
+           "' is missing from the component layout");
+    if (it->componentCount != 1)
+      fail("Einstein-Maxwell reconstruction " + role + " must be scalar");
+    return *it;
+  };
+
+  const auto &psiLayout =
+      findScalarLayout(reconstruction.conformalFactor, "conformal factor");
+  const auto &electricLayout = findScalarLayout(
+      reconstruction.conformalElectricRadial, "conformal electric field");
+  const std::vector<double> zeroTangent(unknown.size(), 0.0);
+  const auto localStates = buildLocalStates(
+      problem, domainLayout, componentLayout, unknown, zeroTangent);
+
+  RadialElectromagneticPhysicalSolution physical;
+  physical.conformalFactorUnknown = reconstruction.conformalFactor;
+  physical.conformalElectricRadialUnknown =
+      reconstruction.conformalElectricRadial;
+  physical.electricContravariantRadial.reserve(domainLayout.totalSize);
+
+  for (std::size_t domainIndex = 0; domainIndex < domainLayout.grids.size();
+       ++domainIndex) {
+    const auto &state = localStates[domainIndex];
+    const auto &psi = state.at(psiLayout.name).components.front().value;
+    const auto &conformalElectric =
+        state.at(electricLayout.name).components.front().value;
+    for (std::size_t point = 0; point < psi.size(); ++point) {
+      if (!std::isfinite(psi[point]) || psi[point] <= 0.0)
+        fail("Einstein-Maxwell reconstruction requires a finite positive "
+             "conformal factor");
+      if (!std::isfinite(conformalElectric[point]))
+        fail("Einstein-Maxwell reconstruction electric field is non-finite");
+      physical.electricContravariantRadial.push_back(conformalElectric[point] /
+                                                     std::pow(psi[point], 6.0));
+    }
+  }
+  return physical;
+}
+
 const ConstraintDomainSolution &
 selectInterpolationDomain(const ConstraintSolution &solution, double radius) {
   if (!std::isfinite(radius) || radius <= 0.0)
-    fail("CTT target-grid radii must be finite and strictly positive");
+    fail("radial target-grid radii must be finite and strictly positive");
   for (const auto &domain : solution.domains) {
     if (domain.pointCount < 2 ||
         domain.offset + domain.pointCount > solution.coordinates.size())
-      fail("invalid domain metadata in CTT solution");
+      fail("invalid domain metadata in radial constraint solution");
     const double lower = solution.coordinates[domain.offset];
     const double upper =
         solution.coordinates[domain.offset + domain.pointCount - 1];
@@ -1393,7 +1452,7 @@ selectInterpolationDomain(const ConstraintSolution &solution, double radius) {
     if (domain.compactified || radius <= upper + tolerance)
       return domain;
   }
-  fail("target radius lies outside the solved CTT domains");
+  fail("target radius lies outside the solved radial domains");
 }
 
 double interpolateDomainProfile(const ConstraintSolution &solution,
@@ -1401,7 +1460,7 @@ double interpolateDomainProfile(const ConstraintSolution &solution,
                                 const std::vector<double> &profile,
                                 double radius) {
   if (profile.size() != solution.coordinates.size())
-    fail("CTT profile size does not match solution coordinates");
+    fail("radial profile size does not match solution coordinates");
   const std::size_t n = domain.pointCount;
   const double lower = solution.coordinates[domain.offset];
   double spectralCoordinate = 0.0;
@@ -1591,6 +1650,9 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
     solution.physicalCtt = reconstructRadialCtt(
         problem, layout, geometries, componentLayout, unknown,
         request.parameters);
+    if (!problem.cttReconstruction.conformalElectricRadial.empty())
+      solution.physicalElectromagnetic = reconstructRadialElectromagnetic(
+          problem, layout, componentLayout, unknown);
   }
   return solution;
 }
@@ -1694,6 +1756,58 @@ void interpolateRadialCttToGrid(const ConstraintSolution &solution,
     storeSymmetricTensor(outputs.extrinsicCurvature, point, extrinsic);
     if (outputs.meanCurvature)
       outputs.meanCurvature[point] = meanCurvature;
+  }
+}
+
+void interpolateRadialElectromagneticToGrid(
+    const ConstraintSolution &solution, const CttTargetGrid &target,
+    const ElectromagneticEvolutionBuffers &outputs) {
+  if (!solution.converged)
+    fail("cannot interpolate an unconverged constraint solution");
+  if (!solution.physicalElectromagnetic)
+    fail("constraint solution has no reconstructed electromagnetic fields");
+  if (target.pointCount == 0)
+    fail("electromagnetic target grid must contain at least one point");
+  for (const double *coordinate : target.coordinateComponents)
+    if (!coordinate)
+      fail("electromagnetic target grid has a null coordinate component");
+  for (std::size_t component = 0; component < 3; ++component) {
+    if (!outputs.electricField[component] || !outputs.magneticField[component])
+      fail("electromagnetic output has a null vector component");
+  }
+
+  const auto &physical = *solution.physicalElectromagnetic;
+  for (std::size_t point = 0; point < target.pointCount; ++point) {
+    for (const double *coordinate : target.coordinateComponents)
+      if (!std::isfinite(coordinate[point]))
+        fail("electromagnetic target-grid coordinates must be finite");
+
+    double radius = 0.0;
+    std::array<double, 3> radialUnit{};
+    if (target.coordinates == CttTargetCoordinates::Spherical) {
+      radius = target.coordinateComponents[0][point];
+    } else {
+      const double x = target.coordinateComponents[0][point];
+      const double y = target.coordinateComponents[1][point];
+      const double z = target.coordinateComponents[2][point];
+      radius = std::sqrt(x * x + y * y + z * z);
+      if (radius > 0.0)
+        radialUnit = {x / radius, y / radius, z / radius};
+    }
+
+    const auto &domain = selectInterpolationDomain(solution, radius);
+    const double electricRadial = interpolateDomainProfile(
+        solution, domain, physical.electricContravariantRadial, radius);
+    if (!std::isfinite(electricRadial))
+      fail("interpolated electromagnetic field is non-finite");
+
+    for (std::size_t component = 0; component < 3; ++component) {
+      outputs.electricField[component][point] =
+          target.coordinates == CttTargetCoordinates::Spherical
+              ? (component == 0 ? electricRadial : 0.0)
+              : electricRadial * radialUnit[component];
+      outputs.magneticField[component][point] = 0.0;
+    }
   }
 }
 

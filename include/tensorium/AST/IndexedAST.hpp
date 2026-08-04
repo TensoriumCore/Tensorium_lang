@@ -102,6 +102,7 @@ struct IndexedConstraintCttReconstruction {
   bool enabled = false;
   std::string conformalFactor;
   std::string radialVectorPotential;
+  std::string conformalElectricRadial;
   std::unique_ptr<IndexedExpr> meanCurvature;
 };
 

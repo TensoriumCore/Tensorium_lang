@@ -64,6 +64,14 @@ typedef struct tensorium_ctt_physical_buffers_v1 {
   double *mean_curvature;
 } tensorium_ctt_physical_buffers_v1;
 
+typedef struct tensorium_electromagnetic_buffers_v1 {
+  uint64_t struct_size;
+  int64_t point_count;
+  /* Physical contravariant vectors in the target coordinate basis. */
+  double *electric_field[3];
+  double *magnetic_field[3];
+} tensorium_electromagnetic_buffers_v1;
+
 typedef struct tensorium_bssn_gauge_seed_v1 {
   uint64_t struct_size;
   double lapse;
@@ -112,6 +120,12 @@ tensorium_constraint_status_v1 tensorium_interpolate_radial_ctt_v1(
     const tensorium_constraint_solution_v1 *solution,
     const tensorium_ctt_target_grid_v1 *target,
     const tensorium_ctt_physical_buffers_v1 *outputs, char *error_message,
+    int64_t error_capacity);
+
+tensorium_constraint_status_v1 tensorium_interpolate_radial_electromagnetic_v1(
+    const tensorium_constraint_solution_v1 *solution,
+    const tensorium_ctt_target_grid_v1 *target,
+    const tensorium_electromagnetic_buffers_v1 *outputs, char *error_message,
     int64_t error_capacity);
 
 tensorium_constraint_status_v1 tensorium_initialize_bssn_from_radial_ctt_v1(

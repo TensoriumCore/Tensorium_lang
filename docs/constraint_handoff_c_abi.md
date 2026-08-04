@@ -8,7 +8,8 @@ Tensorium DSL source or file
   -> parse, semantic analysis, IR validation
   -> radial spectral CTT solve
   -> opaque converged solution
-  -> physical CTT tensors or Cartesian BSSN buffers owned by the caller
+  -> physical CTT tensors, electromagnetic vectors, or Cartesian BSSN buffers
+     owned by the caller
 ```
 
 The public declarations are in
@@ -64,6 +65,12 @@ because gauge data is not fixed by the constraints. If any shift component is
 provided, all three must be provided. BSSN initialization currently requires
 a Cartesian target grid.
 
+Einstein-Maxwell interpolation writes physical contravariant electric and
+magnetic vectors through `tensorium_electromagnetic_buffers_v1`. Each of the
+three component pointers addresses `point_count` doubles. The electrostatic
+radial backend currently reconstructs `E^i = psi^(-6) Ebar^i` and writes a
+zero magnetic field.
+
 ## Minimal C integration
 
 ```c
@@ -109,6 +116,17 @@ gauge.lapse = 1.0;
 status = tensorium_initialize_bssn_from_radial_ctt_v1(
     solution, &grid, &bssn, &gauge, error, sizeof(error));
 
+/* When reconstruct ctt declares conformal_electric_radial: */
+tensorium_electromagnetic_buffers_v1 electromagnetic = {0};
+electromagnetic.struct_size = sizeof(electromagnetic);
+electromagnetic.point_count = point_count;
+for (int c = 0; c < 3; ++c) {
+  electromagnetic.electric_field[c] = electric[c];
+  electromagnetic.magnetic_field[c] = magnetic[c];
+}
+status = tensorium_interpolate_radial_electromagnetic_v1(
+    solution, &grid, &electromagnetic, error, sizeof(error));
+
 tensorium_constraint_solution_destroy_v1(solution);
 ```
 
@@ -121,12 +139,15 @@ integration. The ABI supplies initial data; it is not a time-stepping API.
 ABI v1 exposes the current radial backend: multidomain Chebyshev-Lobatto
 collocation, Newton iteration with a dense direct linear solve, spherical
 symmetry, a flat conformal metric, and the reduced radial vector potential used
-by the CTT fixture. It does not yet provide generic three-dimensional CTT/XCTS,
-puncture or excision data, distributed arrays, or parallel interpolation.
+by the CTT fixture. It also exports the coupled radial electrostatic
+Einstein-Maxwell solution. It does not yet provide generic three-dimensional
+CTT/XCTS, non-radial electromagnetic fields, puncture or excision data,
+distributed arrays, or parallel interpolation.
 It also does not currently emit the BSSN conformal connection functions;
 external BSSN codes must derive any additional formulation-specific state from
 the transferred fields.
 
 `Tensorium_constraint_handoff_c_probe` is compiled as C and exercises the
-file-to-solution-to-BSSN path, numerical tensor invariants, gauge transfer, and
-ABI mismatch handling.
+file-to-solution-to-BSSN path, coupled Einstein-Maxwell solve, Cartesian
+electric-field transfer, numerical tensor invariants, gauge transfer, and ABI
+mismatch handling.

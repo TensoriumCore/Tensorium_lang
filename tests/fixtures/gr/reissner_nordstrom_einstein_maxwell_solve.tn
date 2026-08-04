@@ -6,8 +6,9 @@
 # Units normalize the ADM mass to M = 1. For charge = 0.6, the inner boundary
 # r = sqrt(M^2-Q^2)/2 = 0.4 is the outer Reissner-Nordstrom horizon in
 # isotropic coordinates. The conformal electric field is Q/r^2, so the
-# time-symmetric Hamiltonian constraint is
-#   laplacian(psi) + Q^2 * psi^(-3) / (4*r^4) = 0.
+# time-symmetric constraints solved here are
+#   laplacian(psi) + electric^2 * psi^(-3) / 4 = 0,
+#   radial_derivative(electric) + 2*electric/r = 0.
 params { charge }
 
 initial_data ReissnerNordstromEinsteinMaxwell {
@@ -30,18 +31,30 @@ initial_data ReissnerNordstromEinsteinMaxwell {
   interface near_horizon -> infinity
 
   unknown scalar psi
+  unknown scalar electric
   equation scalar hamiltonian =
-      laplacian(psi) + (charge^2 / (4 * r^4)) * psi^(-3)
+      laplacian(psi) + (electric^2 / 4) * psi^(-3)
+  equation scalar gauss =
+      radial_derivative(electric) + 2 * electric / r
 
   boundary inner {
     psi = sqrt((1 + 1 / (2 * r))^2 - charge^2 / (4 * r^2))
+    electric = charge / r^2
   }
 
   boundary outer {
     psi = 1
+    electric = 0
   }
 
   seed psi = 1 + 1 / (2 * r)
+  seed electric = 0.5 * charge / r^2
+
+  reconstruct ctt {
+    conformal_factor = psi
+    conformal_electric_radial = electric
+    mean_curvature = 0
+  }
 
   solve {
     nonlinear = newton

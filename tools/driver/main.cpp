@@ -140,25 +140,39 @@ static void writeConstraintCsv(
   const auto &physical = *solution.physicalCtt;
   const auto &conformalFactor =
       solution.unknowns.at(physical.conformalFactorUnknown);
-  const auto &radialVector =
-      solution.unknowns.at(physical.radialVectorPotentialUnknown);
+  const std::vector<double> *radialVector = nullptr;
+  if (!physical.radialVectorPotentialUnknown.empty())
+    radialVector = &solution.unknowns.at(physical.radialVectorPotentialUnknown);
+  const std::vector<double> *conformalElectric = nullptr;
+  if (solution.physicalElectromagnetic)
+    conformalElectric = &solution.unknowns.at(
+        solution.physicalElectromagnetic->conformalElectricRadialUnknown);
 
   std::ofstream file(path);
   if (!file)
     throw std::runtime_error("cannot open constraint CSV output: " + path);
   file << std::setprecision(17);
   file << "domain,r,conformal_factor,radial_vector,mean_curvature,"
-          "gamma_radial,gamma_tangential,k_radial,k_tangential\n";
+          "gamma_radial,gamma_tangential,k_radial,k_tangential";
+  if (solution.physicalElectromagnetic)
+    file << ",conformal_electric_radial,electric_contravariant_radial";
+  file << '\n';
   for (const auto &domain : solution.domains) {
     for (std::size_t local = 0; local < domain.pointCount; ++local) {
       const std::size_t i = domain.offset + local;
       file << domain.name << ',' << solution.coordinates[i] << ','
-           << conformalFactor[i] << ',' << radialVector[i] << ','
+           << conformalFactor[i] << ','
+           << (radialVector ? (*radialVector)[i] : 0.0) << ','
            << physical.meanCurvature[i] << ','
            << physical.spatialMetricRadial[i] << ','
            << physical.spatialMetricTangential[i] << ','
            << physical.extrinsicCurvatureRadial[i] << ','
-           << physical.extrinsicCurvatureTangential[i] << '\n';
+           << physical.extrinsicCurvatureTangential[i];
+      if (solution.physicalElectromagnetic)
+        file
+            << ',' << (*conformalElectric)[i] << ','
+            << solution.physicalElectromagnetic->electricContravariantRadial[i];
+      file << '\n';
     }
   }
   if (!file.good())
@@ -721,6 +735,16 @@ int main(int argc, char **argv) {
                     << physical.extrinsicCurvatureRadial.front()
                     << " k_radial_outer="
                     << physical.extrinsicCurvatureRadial.back() << "\n";
+        }
+        if (solution.physicalElectromagnetic) {
+          const auto &physical = *solution.physicalElectromagnetic;
+          std::cout << "[ConstraintSolve] physical_electromagnetic basis="
+                    << physical.basis
+                    << " points=" << physical.electricContravariantRadial.size()
+                    << " electric_radial_inner="
+                    << physical.electricContravariantRadial.front()
+                    << " electric_radial_outer="
+                    << physical.electricContravariantRadial.back() << "\n";
         }
         if (!constraintCsvPath.empty()) {
           writeConstraintCsv(constraintCsvPath, solution);

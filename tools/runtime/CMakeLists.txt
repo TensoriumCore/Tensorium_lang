@@ -36,5 +36,6 @@ if (BUILD_TESTING)
   add_test(NAME tensorium_constraint_handoff_c_probe
     COMMAND Tensorium_constraint_handoff_c_probe
       ${PROJECT_SOURCE_DIR}/tests/fixtures/gr/ctt_radial_vacuum_solve.tn
+      ${PROJECT_SOURCE_DIR}/tests/fixtures/gr/reissner_nordstrom_einstein_maxwell_solve.tn
   )
 endif()
