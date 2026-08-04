@@ -1,5 +1,11 @@
-# Executable multidomain radial problem with a finite shell matched C0/C1 to
-# a compactified exterior domain whose final collocation point is infinity.
+# Published time-symmetric, conformally flat vacuum data from
+# D. R. Brill and R. W. Lindquist, Phys. Rev. 131, 471 (1963),
+# https://doi.org/10.1103/PhysRev.131.471
+#
+# In the one-centre sector supported by the radial backend, the paper's
+# conformal factor is the isotropic Schwarzschild solution
+# psi = 1 + mass/(2*r). The finite shell is matched C0/C1 to a compactified
+# exterior domain whose final collocation point is spatial infinity.
 params { mass }
 
 initial_data BrillLindquistMultidomain {

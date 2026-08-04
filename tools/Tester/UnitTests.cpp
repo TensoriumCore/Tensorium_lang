@@ -5956,6 +5956,103 @@ static bool testCttCurvedBackgroundConstraintSolve() {
   return true;
 }
 
+static bool testBrillLindquistSchwarzschildPaperSolution() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn");
+  constexpr double mass = 2.0;
+  tensorium::solver::ConstraintSolveRequest request;
+  request.parameters["mass"] = mass;
+  const auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module, request);
+
+  if (!solution.converged || solution.iterations != 1 ||
+      solution.residualNorm > 1.0e-10 || solution.domains.size() != 2 ||
+      solution.coordinates.size() != 42 ||
+      !std::isinf(solution.coordinates.back())) {
+    std::cerr << "FAIL: Brill-Lindquist paper benchmark did not converge as "
+                 "expected; iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+
+  const auto &psi = solution.unknowns.at("psi");
+  double maxSolutionError = 0.0;
+  double maxAdmMassError = 0.0;
+  for (std::size_t point = 0; point < solution.coordinates.size(); ++point) {
+    const double radius = solution.coordinates[point];
+    const double expected =
+        std::isinf(radius) ? 1.0 : 1.0 + mass / (2.0 * radius);
+    maxSolutionError =
+        std::max(maxSolutionError, std::abs(psi[point] - expected));
+    if (!std::isinf(radius)) {
+      const double inferredMass = 2.0 * radius * (psi[point] - 1.0);
+      maxAdmMassError =
+          std::max(maxAdmMassError, std::abs(inferredMass - mass));
+    }
+  }
+
+  const double throatArealRadius =
+      psi.front() * psi.front() * solution.coordinates.front();
+  if (maxSolutionError > 1.0e-9 || maxAdmMassError > 1.0e-8 ||
+      std::abs(throatArealRadius - 2.0 * mass) > 1.0e-9) {
+    std::cerr << "FAIL: Brill-Lindquist paper benchmark errors: psi="
+              << maxSolutionError << " ADM_mass=" << maxAdmMassError
+              << " throat_areal_radius=" << throatArealRadius << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testReissnerNordstromEinsteinMaxwellPaperSolution() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/reissner_nordstrom_einstein_maxwell_solve.tn");
+  constexpr double mass = 1.0;
+  constexpr double charge = 0.6;
+  tensorium::solver::ConstraintSolveRequest request;
+  request.parameters["charge"] = charge;
+  const auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module, request);
+
+  if (!solution.converged || solution.iterations != 4 ||
+      solution.residualNorm > 1.0e-11 || solution.domains.size() != 2 ||
+      solution.coordinates.size() != 58 ||
+      !std::isinf(solution.coordinates.back())) {
+    std::cerr << "FAIL: Reissner-Nordstrom paper benchmark did not converge "
+                 "as expected; iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+
+  const auto &psi = solution.unknowns.at("psi");
+  double maxSolutionError = 0.0;
+  for (std::size_t point = 0; point < solution.coordinates.size(); ++point) {
+    const double radius = solution.coordinates[point];
+    const double expected = std::isinf(radius)
+                                ? 1.0
+                                : std::sqrt(
+                                      std::pow(1.0 + mass / (2.0 * radius), 2) -
+                                      charge * charge /
+                                          (4.0 * radius * radius));
+    maxSolutionError =
+        std::max(maxSolutionError, std::abs(psi[point] - expected));
+  }
+
+  const double horizonArealRadius =
+      psi.front() * psi.front() * solution.coordinates.front();
+  const double expectedHorizonRadius =
+      mass + std::sqrt(mass * mass - charge * charge);
+  if (maxSolutionError > 1.0e-9 ||
+      std::abs(horizonArealRadius - expectedHorizonRadius) > 1.0e-9) {
+    std::cerr << "FAIL: Reissner-Nordstrom paper benchmark errors: psi="
+              << maxSolutionError
+              << " horizon_areal_radius=" << horizonArealRadius << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testConstraintGeometryDiagnostics() {
   const std::string missingScale = R"(
 initial_data MissingGeometryScale {
@@ -6747,6 +6844,10 @@ int main() {
        &testCovariantTensorLaplacianRadialConstraintSolve},
       {"testCttCurvedBackgroundConstraintSolve",
        &testCttCurvedBackgroundConstraintSolve},
+      {"testBrillLindquistSchwarzschildPaperSolution",
+       &testBrillLindquistSchwarzschildPaperSolution},
+      {"testReissnerNordstromEinsteinMaxwellPaperSolution",
+       &testReissnerNordstromEinsteinMaxwellPaperSolution},
       {"testConstraintGeometryDiagnostics",
        &testConstraintGeometryDiagnostics},
       {"testCttRadialVacuumConstraintSolve",

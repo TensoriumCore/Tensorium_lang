@@ -168,6 +168,78 @@ This problem joins `[1,4]` to `[4,infinity]`. It imposes both value and radial
 derivative continuity at `r = 4`, applies `psi(infinity) = 1`, and reproduces
 `psi = 1 + mass/(2*r)` with a maximum error below `1e-9`.
 
+## Published exact-solution benchmarks
+
+The test suite distinguishes published physical solutions from manufactured
+operator tests. A fixture is labelled as paper-backed only when the equations,
+symmetry assumptions, boundary data, and diagnostic quantities all fit the
+current executable backend without an unmentioned reduction.
+
+### Brill-Lindquist one-centre data
+
+The multidomain fixture implements the one-centre sector of
+[Brill and Lindquist, *Interaction Energy in Geometrostatics*](https://doi.org/10.1103/PhysRev.131.471).
+It is the time-symmetric, conformally flat Schwarzschild slice
+
+```text
+psi(r) = 1 + M/(2 r),
+Delta psi = 0.
+```
+
+The strict unit regression uses `M = 2`, so the inner shell boundary `r = 1`
+is the Einstein-Rosen throat `r = M/2`. It checks every finite collocation
+value against the exact conformal factor, recovers `M` from
+`2 r (psi - 1)`, and verifies the throat areal radius
+`R = psi^2 r = 2 M`. This is a genuine published solution, but only the
+SO(3)-invariant one-hole member of the Brill-Lindquist family.
+
+### Reissner-Nordstrom Einstein-Maxwell data
+
+The charged nonlinear fixture follows the isotropic Reissner-Nordstrom data
+and conformal Einstein-Maxwell equations reviewed by
+[Bozzola and Paschalidis, *Initial data for general relativistic simulations of multiple electrically charged black holes with linear and angular momenta*](https://doi.org/10.1103/PhysRevD.99.104044),
+especially Eqs. (21), (22), and (43a). For a time-symmetric slice with
+conformal electric field `Ebar^r = Q/r^2`, the solved equation is
+
+```text
+Delta psi + Q^2 psi^(-3)/(4 r^4) = 0,
+psi(r) = sqrt((1 + M/(2 r))^2 - Q^2/(4 r^2)).
+```
+
+Run the normalized `M = 1`, `Q = 0.6` benchmark from `build`:
+
+```sh
+./tools/driver/Tensorium_cc \
+  --solve-constraints --param charge=0.6 \
+  ../tests/fixtures/gr/reissner_nordstrom_einstein_maxwell_solve.tn
+```
+
+The solve joins `[0.4,2]` to compactified infinity and converges from an
+uncharged Schwarzschild seed. The unit regression checks the exact conformal
+factor at all 58 collocation points and verifies that the inner isotropic
+horizon `r_H = sqrt(M^2-Q^2)/2 = 0.4` has areal radius
+`R_+ = M + sqrt(M^2-Q^2) = 1.8`.
+
+This fixture solves the Einstein Hamiltonian constraint with the analytic
+electric-energy source inserted in the residual. It does not make the
+electric field a solver unknown, independently solve the Maxwell Gauss
+constraint, or export electromagnetic evolution buffers.
+
+### Published cases that are not yet faithful executable tests
+
+| Published case | Missing capability |
+| --- | --- |
+| Multi-hole Brill-Lindquist or Misner data | Executable multidimensional or bispherical domains, multiple punctures or throats, and their matching conditions. |
+| Boosted or spinning Bowen-York black holes | Angular dependence beyond SO(3), executable 3D vector/tensor fields, and puncture or excision treatment. The original data are explicitly non-spherical. |
+| Generic charged black-hole binaries | The same 3D puncture machinery plus Maxwell unknowns, Gauss constraints, and electromagnetic handoff buffers. |
+| TOV or rotating neutron-star data | An executable ball domain with regularity at `r = 0`, matter variables, an equation of state, surface matching, and coupled matter constraints. |
+| Kerr/XCTS quasi-equilibrium data | Axisymmetric or 3D bases, coupled XCTS lapse and shift equations, and apparent-horizon/excision boundary conditions. |
+| `f(R)`, DHOST, or other modified-gravity initial data | A theory-level declaration of the extra gravitational fields and their constraints, theory-specific source terms, physical boundary conditions, and reference solutions compatible with the chosen symmetry. Rank-two storage alone is not sufficient. |
+
+Until those capabilities exist, promoting a manufactured radial equation or a
+symmetry-reduced zero-momentum limit under one of these paper names would not
+constitute a validation of the published physical case.
+
 For a coupled system, unknowns and equations are paired by declaration order.
 Every global boundary must constrain every unknown. For example, the coupled
 regression problem contains

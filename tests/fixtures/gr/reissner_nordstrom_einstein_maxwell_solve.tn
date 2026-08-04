@@ -1,0 +1,52 @@
+# Published time-symmetric Einstein-Maxwell black-hole data reviewed in
+# G. Bozzola and V. Paschalidis, Phys. Rev. D 99, 104044 (2019),
+# Eqs. (21), (22), and (43a),
+# https://doi.org/10.1103/PhysRevD.99.104044
+#
+# Units normalize the ADM mass to M = 1. For charge = 0.6, the inner boundary
+# r = sqrt(M^2-Q^2)/2 = 0.4 is the outer Reissner-Nordstrom horizon in
+# isotropic coordinates. The conformal electric field is Q/r^2, so the
+# time-symmetric Hamiltonian constraint is
+#   laplacian(psi) + Q^2 * psi^(-3) / (4*r^4) = 0.
+params { charge }
+
+initial_data ReissnerNordstromEinsteinMaxwell {
+  domain near_horizon {
+    coordinates = spherical
+    topology = shell
+    resolution = [33]
+    basis = chebyshev
+    bounds = [0.4, 2]
+  }
+
+  domain infinity {
+    coordinates = spherical
+    topology = compactified
+    resolution = [25]
+    basis = chebyshev
+    bounds = [2]
+  }
+
+  interface near_horizon -> infinity
+
+  unknown scalar psi
+  equation scalar hamiltonian =
+      laplacian(psi) + (charge^2 / (4 * r^4)) * psi^(-3)
+
+  boundary inner {
+    psi = sqrt((1 + 1 / (2 * r))^2 - charge^2 / (4 * r^2))
+  }
+
+  boundary outer {
+    psi = 1
+  }
+
+  seed psi = 1 + 1 / (2 * r)
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-11
+    max_iterations = 15
+  }
+}
