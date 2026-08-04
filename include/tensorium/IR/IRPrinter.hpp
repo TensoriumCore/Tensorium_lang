@@ -276,6 +276,15 @@ inline void printModuleIR(const ModuleIR &m) {
   if (m.constraintProblem) {
     const auto &problem = *m.constraintProblem;
     std::cout << "  ConstraintProblem " << problem.name << ":\n";
+    if (problem.geometry.enabled) {
+      std::cout << "    Geometry " << problem.geometry.kind << " metric="
+                << problem.geometry.metricName << " inverse_metric="
+                << problem.geometry.inverseMetricName << " radial_scale=";
+      printExprIR(problem.geometry.radialScale.get());
+      std::cout << " tangential_scale=";
+      printExprIR(problem.geometry.tangentialScale.get());
+      std::cout << "\n";
+    }
     std::cout << "    Domains:\n";
     for (const auto &domain : problem.domains) {
       std::cout << "      " << domain.name

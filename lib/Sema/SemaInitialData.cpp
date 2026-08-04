@@ -1,5 +1,6 @@
 #include "tensorium/Sema/Sema.hpp"
 #include <cmath>
+#include <functional>
 #include <set>
 #include <stdexcept>
 
@@ -391,6 +392,73 @@ void SemanticAnalyzer::validateConstraintProblem(
     }
   }
 
+  if (problem.geometry.enabled) {
+    const auto &geometry = problem.geometry;
+    if (geometry.kind != "spherical_orthonormal") {
+      throw std::runtime_error("unsupported constraint geometry '" +
+                               geometry.kind + "'");
+    }
+    if (coordinateSystem != "spherical" || domainDimension != 1) {
+      throw std::runtime_error(
+          "spherical_orthonormal geometry requires one-dimensional spherical "
+          "constraint domains");
+    }
+    if (geometry.metricName.empty() || geometry.inverseMetricName.empty() ||
+        geometry.metricName == geometry.inverseMetricName) {
+      throw std::runtime_error(
+          "constraint geometry requires distinct metric and inverse_metric "
+          "symbols");
+    }
+    auto rejectSymbolCollision = [&](const std::string &name) {
+      if (params.count(name) || fields.count(name)) {
+        throw std::runtime_error("constraint geometry symbol '" + name +
+                                 "' collides with an existing declaration");
+      }
+    };
+    rejectSymbolCollision(geometry.metricName);
+    rejectSymbolCollision(geometry.inverseMetricName);
+    if (!geometry.radialScale || !geometry.tangentialScale) {
+      throw std::runtime_error(
+          "constraint geometry requires radial_scale and tangential_scale");
+    }
+
+    std::function<void(const Expr *, const std::string &)> validateScale;
+    validateScale = [&](const Expr *expr, const std::string &label) {
+      if (dynamic_cast<const NumberExpr *>(expr))
+        return;
+      if (const auto *var = dynamic_cast<const VarExpr *>(expr)) {
+        if (var->name == "r" || params.count(var->name))
+          return;
+        throw std::runtime_error("constraint geometry " + label +
+                                 " may reference only r and scalar parameters");
+      }
+      if (const auto *binary = dynamic_cast<const BinaryExpr *>(expr)) {
+        validateScale(binary->lhs.get(), label);
+        validateScale(binary->rhs.get(), label);
+        return;
+      }
+      if (const auto *paren = dynamic_cast<const ParenExpr *>(expr)) {
+        validateScale(paren->inner.get(), label);
+        return;
+      }
+      if (const auto *call = dynamic_cast<const CallExpr *>(expr)) {
+        static const std::set<std::string> allowed = {"sin", "cos", "sqrt",
+                                                       "exp"};
+        if (!allowed.count(call->callee) || call->args.size() != 1) {
+          throw std::runtime_error("constraint geometry " + label +
+                                   " uses unsupported scalar function '" +
+                                   call->callee + "'");
+        }
+        validateScale(call->args.front().get(), label);
+        return;
+      }
+      throw std::runtime_error("constraint geometry " + label +
+                               " contains a non-scalar tensor expression");
+    };
+    validateScale(geometry.radialScale.get(), "radial_scale");
+    validateScale(geometry.tangentialScale.get(), "tangential_scale");
+  }
+
   std::set<std::pair<std::string, std::string>> interfacePairs;
   std::set<std::string> interfaceInputs;
   std::set<std::string> interfaceOutputs;
@@ -420,6 +488,12 @@ void SemanticAnalyzer::validateConstraintProblem(
 
   std::set<std::string> unknownNames;
   for (const auto &unknown : problem.unknowns) {
+    if (problem.geometry.enabled &&
+        (unknown.name == problem.geometry.metricName ||
+         unknown.name == problem.geometry.inverseMetricName)) {
+      throw std::runtime_error("constraint unknown '" + unknown.name +
+                               "' collides with a geometry symbol");
+    }
     if (!unknownNames.insert(unknown.name).second)
       throw std::runtime_error("constraint unknown redeclared: " +
                                unknown.name);

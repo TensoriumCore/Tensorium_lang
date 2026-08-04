@@ -381,6 +381,11 @@ lowerIndexedExpr(const tensorium::IndexedExpr *e,
       auto div = std::make_unique<DivergenceIR>(
           lowerIndexedExpr(c->args[0].get(), materializeImplicitContraction,
                            hasConnectionTensor));
+      if (const auto *tensor =
+              dynamic_cast<const tensorium::IndexedVar *>(c->args[0].get());
+          tensor && !tensor->tensorIndexNames.empty()) {
+        div->contractedIndex = tensor->tensorIndexNames.front();
+      }
       if (c->args.size() >= 2) {
         std::string idx;
         if (tryExtractIndexName(c->args[1].get(), idx))
@@ -671,6 +676,21 @@ ModuleIR BackendBuilder::build(const Program &prog,
     auto indexed = sem.analyzeConstraintProblem(problem);
     ConstraintProblemIR out;
     out.name = problem.name;
+    const bool constraintConnectionAvailable =
+        hasConnectionTensor || indexed.geometry.enabled;
+
+    if (indexed.geometry.enabled) {
+      out.geometry.enabled = true;
+      out.geometry.kind = indexed.geometry.kind;
+      out.geometry.metricName = indexed.geometry.metricName;
+      out.geometry.inverseMetricName = indexed.geometry.inverseMetricName;
+      out.geometry.radialScale = lowerIndexedExpr(
+          indexed.geometry.radialScale.get(), true,
+          constraintConnectionAvailable);
+      out.geometry.tangentialScale = lowerIndexedExpr(
+          indexed.geometry.tangentialScale.get(), true,
+          constraintConnectionAvailable);
+    }
 
     for (const auto &domain : problem.domains) {
       SpectralDomainIR lowered;
@@ -696,17 +716,19 @@ ModuleIR BackendBuilder::build(const Program &prog,
       lowered.tensorType = lowerTensorType(equation.type);
       lowered.indices = equation.indices;
       lowered.residual =
-          lowerIndexedExpr(equation.residual.get(), true, hasConnectionTensor);
+          lowerIndexedExpr(equation.residual.get(), true,
+                           constraintConnectionAvailable);
       out.equations.push_back(std::move(lowered));
     }
 
-    auto lowerAssignment =
-        [hasConnectionTensor](const IndexedConstraintAssignment &assignment) {
+    auto lowerAssignment = [constraintConnectionAvailable](
+                               const IndexedConstraintAssignment &assignment) {
           ConstraintAssignmentIR lowered;
           lowered.unknown = assignment.unknown;
           lowered.indices = assignment.indices;
           lowered.rhs =
-              lowerIndexedExpr(assignment.rhs.get(), true, hasConnectionTensor);
+              lowerIndexedExpr(assignment.rhs.get(), true,
+                               constraintConnectionAvailable);
           return lowered;
         };
     for (const auto &boundary : indexed.boundaries) {
@@ -733,7 +755,7 @@ ModuleIR BackendBuilder::build(const Program &prog,
           indexed.cttReconstruction.radialVectorPotential;
       out.cttReconstruction.meanCurvature =
           lowerIndexedExpr(indexed.cttReconstruction.meanCurvature.get(), true,
-                           hasConnectionTensor);
+                           constraintConnectionAvailable);
     }
 
     out.solve.nonlinear = problem.solve.nonlinear;

@@ -180,6 +180,15 @@ std::unique_ptr<IndexedExpr> SemanticAnalyzer::transformExpr(const Expr *e) {
     if (c->callee == "laplacian") {
       if (c->args.size() != 1)
         throw std::runtime_error("laplacian() expects exactly 1 argument");
+      if (analyzingConstraintProblem && constraintGeometryAvailable) {
+        auto out = std::make_unique<IndexedCall>();
+        out->callee = "laplacian";
+        out->declaredArity = 1;
+        out->args.push_back(transformExpr(c->args[0].get()));
+        TensorTypeChecker geometryChecker(true);
+        geometryChecker.infer(out.get());
+        return out;
+      }
       TensorTypeChecker checker;
       auto arg = transformExpr(c->args[0].get());
       TensorType argT = checker.infer(arg.get());

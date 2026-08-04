@@ -264,6 +264,11 @@ void printProgram(const Program &prog) {
     if (prog.initialData->hasConstraintProblem) {
       const auto &problem = prog.initialData->constraintProblem;
       std::cout << "  constraint_problem " << problem.name << ":\n";
+      if (problem.geometry.enabled) {
+        std::cout << "    geometry " << problem.geometry.kind << " metric="
+                  << problem.geometry.metricName << " inverse_metric="
+                  << problem.geometry.inverseMetricName << "\n";
+      }
       for (const auto &domain : problem.domains) {
         std::cout << "    domain " << domain.name << " (" << domain.coordinates
                   << ", " << domain.topology << ", basis=" << domain.basis

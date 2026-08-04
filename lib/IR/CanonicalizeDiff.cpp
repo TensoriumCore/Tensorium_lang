@@ -139,16 +139,24 @@ void canonicalizeDifferentialIR(backend::ModuleIR &module) {
   }
   if (module.constraintProblem) {
     auto &problem = *module.constraintProblem;
+    const bool constraintConnectionAvailable =
+        connectionAvailable || problem.geometry.enabled;
+    if (problem.geometry.enabled) {
+      canonicalizeExpr(problem.geometry.radialScale,
+                       constraintConnectionAvailable);
+      canonicalizeExpr(problem.geometry.tangentialScale,
+                       constraintConnectionAvailable);
+    }
     for (auto &equation : problem.equations)
-      canonicalizeExpr(equation.residual, connectionAvailable);
+      canonicalizeExpr(equation.residual, constraintConnectionAvailable);
     for (auto &boundary : problem.boundaries)
       for (auto &condition : boundary.conditions)
-        canonicalizeExpr(condition.rhs, connectionAvailable);
+        canonicalizeExpr(condition.rhs, constraintConnectionAvailable);
     for (auto &seed : problem.seeds)
-      canonicalizeExpr(seed.rhs, connectionAvailable);
+      canonicalizeExpr(seed.rhs, constraintConnectionAvailable);
     if (problem.cttReconstruction.enabled)
       canonicalizeExpr(problem.cttReconstruction.meanCurvature,
-                       connectionAvailable);
+                       constraintConnectionAvailable);
   }
 }
 

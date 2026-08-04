@@ -4,6 +4,8 @@
 namespace tensorium {
 
 bool isExecutableBuiltin(std::string_view name) {
+  if (name == "sin" || name == "cos" || name == "sqrt" || name == "exp")
+    return true;
   if (name == "contract")
     return true;
   if (name == "christoffel")

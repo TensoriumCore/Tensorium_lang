@@ -165,6 +165,10 @@ ValidationResult verifyIR(const backend::ModuleIR &module) {
 
   if (module.constraintProblem) {
     const auto &problem = *module.constraintProblem;
+    if (problem.geometry.enabled) {
+      verifyExpr(problem.geometry.radialScale.get(), ctx);
+      verifyExpr(problem.geometry.tangentialScale.get(), ctx);
+    }
     for (const auto &equation : problem.equations)
       verifyExpr(equation.residual.get(), ctx);
     for (const auto &boundary : problem.boundaries)

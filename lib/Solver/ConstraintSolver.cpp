@@ -36,6 +36,17 @@ struct ComponentField {
 using UnknownState = std::unordered_map<std::string, ComponentField>;
 using ComponentEnvironment = std::unordered_map<std::string, std::size_t>;
 
+struct RadialGeometry {
+  bool enabled = false;
+  std::string metricName;
+  std::string inverseMetricName;
+  std::vector<double> radialScale;
+  std::vector<double> tangentialScale;
+  std::vector<double> radialScaleDerivative;
+  std::vector<double> tangentialScaleDerivative;
+  std::vector<double> connectionRate;
+};
+
 constexpr std::size_t kSpatialComponentCount = 3;
 constexpr std::size_t kSymmetricRankTwoComponentCount = 6;
 constexpr std::array<std::array<std::size_t, 2>,
@@ -209,6 +220,79 @@ DualGrid applyRadialLaplacian(const DualGrid &input, const RadialGrid &grid) {
   return result;
 }
 
+DualGrid applyGeometryScalarLaplacian(const DualGrid &input,
+                                      const RadialGrid &grid,
+                                      const RadialGeometry &geometry) {
+  if (!geometry.enabled || geometry.radialScale.size() != grid.size ||
+      geometry.tangentialScale.size() != grid.size ||
+      geometry.radialScaleDerivative.size() != grid.size ||
+      geometry.tangentialScaleDerivative.size() != grid.size)
+    fail("invalid spherical-orthonormal geometry layout");
+
+  const auto first = applyMatrix(grid.firstDerivative, grid.size, input.value);
+  const auto second = applyMatrix(grid.secondDerivative, grid.size, input.value);
+  const auto tangentFirst =
+      applyMatrix(grid.firstDerivative, grid.size, input.tangent);
+  const auto tangentSecond =
+      applyMatrix(grid.secondDerivative, grid.size, input.tangent);
+  DualGrid result = constantGrid(grid.size, 0.0);
+  for (std::size_t point = 0; point < grid.size; ++point) {
+    const double radialScale = geometry.radialScale[point];
+    const double tangentialScale = geometry.tangentialScale[point];
+    const double inverseRadialSquared =
+        1.0 / (radialScale * radialScale);
+    const double inverseRadius = std::isinf(grid.radius[point])
+                                     ? 0.0
+                                     : 1.0 / grid.radius[point];
+    const double firstCoefficient =
+        inverseRadialSquared *
+        (2.0 * inverseRadius +
+         2.0 * geometry.tangentialScaleDerivative[point] / tangentialScale -
+         geometry.radialScaleDerivative[point] / radialScale);
+    result.value[point] = inverseRadialSquared * second[point] +
+                          firstCoefficient * first[point];
+    result.tangent[point] = inverseRadialSquared * tangentSecond[point] +
+                            firstCoefficient * tangentFirst[point];
+  }
+  return result;
+}
+
+DualGrid applyFrameDerivative(const DualGrid &input, const RadialGrid &grid,
+                              const RadialGeometry &geometry,
+                              std::size_t direction) {
+  if (direction != 0)
+    return constantGrid(grid.size, 0.0);
+  const auto derivative =
+      applyMatrix(grid.firstDerivative, grid.size, input.value);
+  const auto tangentDerivative =
+      applyMatrix(grid.firstDerivative, grid.size, input.tangent);
+  DualGrid result = constantGrid(grid.size, 0.0);
+  for (std::size_t point = 0; point < grid.size; ++point) {
+    result.value[point] = derivative[point] / geometry.radialScale[point];
+    result.tangent[point] =
+        tangentDerivative[point] / geometry.radialScale[point];
+  }
+  return result;
+}
+
+double frameConnection(const RadialGeometry &geometry, std::size_t output,
+                       std::size_t input, std::size_t direction,
+                       std::size_t point) {
+  if (direction == 1) {
+    if (output == 1 && input == 0)
+      return geometry.connectionRate[point];
+    if (output == 0 && input == 1)
+      return -geometry.connectionRate[point];
+  }
+  if (direction == 2) {
+    if (output == 2 && input == 0)
+      return geometry.connectionRate[point];
+    if (output == 0 && input == 2)
+      return -geometry.connectionRate[point];
+  }
+  return 0.0;
+}
+
 DualGrid applyRadialDerivative(const DualGrid &input, const RadialGrid &grid) {
   return {applyMatrix(grid.firstDerivative, grid.size, input.value),
           applyMatrix(grid.firstDerivative, grid.size, input.tangent)};
@@ -246,6 +330,7 @@ DualGrid applyRadialConformalVectorLaplacian(const DualGrid &input,
 DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
                   const UnknownState &unknowns,
                   const ComponentEnvironment &componentEnvironment,
+                  const RadialGeometry *geometry,
                   const std::unordered_map<std::string, double> &parameters) {
   using backend::ExprIR;
   if (!expr)
@@ -306,6 +391,22 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
         fail("only the radial coordinate is executable");
       return {grid.radius, std::vector<double>(grid.size, 0.0)};
     case backend::VarKind::Field:
+      if (geometry && geometry->enabled &&
+          (variable->name == geometry->metricName ||
+           variable->name == geometry->inverseMetricName)) {
+        if (variable->tensorIndexNames.size() != 2)
+          fail("geometry metric access requires two component indices");
+        auto first =
+            componentEnvironment.find(variable->tensorIndexNames.front());
+        auto second =
+            componentEnvironment.find(variable->tensorIndexNames.back());
+        if (first == componentEnvironment.end() ||
+            second == componentEnvironment.end())
+          fail("geometry metric access has an unbound component index");
+        return constantGrid(grid.size,
+                            first->second == second->second ? 1.0 : 0.0);
+      }
+      fail("unsupported fixed field '" + variable->name + "'");
     case backend::VarKind::Local:
       fail("unsupported variable '" + variable->name + "'");
     }
@@ -314,9 +415,9 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
   case ExprIR::Kind::Binary: {
     const auto *binary = static_cast<const backend::BinaryIR *>(expr);
     DualGrid lhs = evalExpr(binary->lhs.get(), grid, unknowns,
-                            componentEnvironment, parameters);
+                            componentEnvironment, geometry, parameters);
     DualGrid rhs = evalExpr(binary->rhs.get(), grid, unknowns,
-                            componentEnvironment, parameters);
+                            componentEnvironment, geometry, parameters);
     DualGrid result = constantGrid(grid.size, 0.0);
     for (std::size_t i = 0; i < grid.size; ++i) {
       if (binary->op == "+") {
@@ -358,9 +459,16 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
     if (call->args.size() != 1)
       fail("radial call '" + call->callee + "' expects one argument");
     DualGrid argument = evalExpr(call->args[0].get(), grid, unknowns,
-                                 componentEnvironment, parameters);
-    if (call->callee == "laplacian")
+                                 componentEnvironment, geometry, parameters);
+    if (call->callee == "laplacian") {
+      if (geometry && geometry->enabled) {
+        if (call->args[0]->exprType.rank() != 0)
+          fail("tensor laplacian is not executable with spherical-orthonormal "
+               "geometry");
+        return applyGeometryScalarLaplacian(argument, grid, *geometry);
+      }
       return applyRadialLaplacian(argument, grid);
+    }
     if (call->callee == "radial_derivative")
       return applyRadialDerivative(argument, grid);
     if (call->callee == "radial_conformal_vector_laplacian")
@@ -390,7 +498,13 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
     const auto *derivative =
         static_cast<const backend::PartialDerivativeIR *>(expr);
     DualGrid input = evalExpr(derivative->in.get(), grid, unknowns,
-                              componentEnvironment, parameters);
+                              componentEnvironment, geometry, parameters);
+    if (geometry && geometry->enabled) {
+      auto direction = componentEnvironment.find(derivative->coordIndex);
+      if (direction == componentEnvironment.end())
+        fail("unbound frame derivative index '" + derivative->coordIndex + "'");
+      return applyFrameDerivative(input, grid, *geometry, direction->second);
+    }
     return {applyMatrix(grid.firstDerivative, grid.size, input.value),
             applyMatrix(grid.firstDerivative, grid.size, input.tangent)};
   }
@@ -411,7 +525,9 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
         contraction->summedIndices.size() == 1 &&
         contraction->summedIndices.front() == outer->coordIndex) {
       DualGrid input = evalExpr(inner->in.get(), grid, unknowns,
-                                componentEnvironment, parameters);
+                                componentEnvironment, geometry, parameters);
+      if (geometry && geometry->enabled)
+        return applyGeometryScalarLaplacian(input, grid, *geometry);
       return applyRadialLaplacian(input, grid);
     }
 
@@ -431,7 +547,7 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
     auto accumulate = [&](auto &&self, std::size_t depth) -> void {
       if (depth == contraction->summedIndices.size()) {
         DualGrid term = evalExpr(contraction->in.get(), grid, unknowns,
-                                 contractedEnvironment, parameters);
+                                 contractedEnvironment, geometry, parameters);
         for (std::size_t point = 0; point < grid.size; ++point) {
           result.value[point] += term.value[point];
           result.tangent[point] += term.tangent[point];
@@ -453,16 +569,70 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
   case ExprIR::Kind::TensorProduct: {
     const auto *product = static_cast<const backend::TensorProductIR *>(expr);
     DualGrid lhs = evalExpr(product->lhs.get(), grid, unknowns,
-                            componentEnvironment, parameters);
+                            componentEnvironment, geometry, parameters);
     DualGrid rhs = evalExpr(product->rhs.get(), grid, unknowns,
-                            componentEnvironment, parameters);
+                            componentEnvironment, geometry, parameters);
     return multiplyPointwise(lhs, rhs, grid.size);
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    const auto *derivative =
+        static_cast<const backend::CovariantDerivativeIR *>(expr);
+    if (!geometry || !geometry->enabled)
+      fail("covariant derivative requires spherical-orthonormal geometry");
+    auto directionIt = componentEnvironment.find(derivative->derivIndex);
+    if (directionIt == componentEnvironment.end())
+      fail("unbound covariant derivative index '" + derivative->derivIndex +
+           "'");
+    const std::size_t direction = directionIt->second;
+    DualGrid input = evalExpr(derivative->in.get(), grid, unknowns,
+                              componentEnvironment, geometry, parameters);
+    DualGrid result = applyFrameDerivative(input, grid, *geometry, direction);
+    if (derivative->in->exprType.rank() == 0)
+      return result;
+
+    const auto *variable =
+        dynamic_cast<const backend::VarIR *>(derivative->in.get());
+    if (!variable ||
+        variable->tensorIndexNames.size() !=
+            static_cast<std::size_t>(derivative->in->exprType.rank())) {
+      fail("covariant derivative currently requires a directly indexed tensor "
+           "unknown or geometry field");
+    }
+
+    for (std::size_t slot = 0; slot < variable->tensorIndexNames.size();
+         ++slot) {
+      const auto &slotIndex = variable->tensorIndexNames[slot];
+      auto slotComponentIt = componentEnvironment.find(slotIndex);
+      if (slotComponentIt == componentEnvironment.end())
+        fail("unbound covariant tensor slot index '" + slotIndex + "'");
+      const std::size_t slotComponent = slotComponentIt->second;
+      const bool slotIsContravariant =
+          slot < static_cast<std::size_t>(derivative->in->exprType.up);
+
+      for (std::size_t replacement = 0;
+           replacement < kSpatialComponentCount; ++replacement) {
+        ComponentEnvironment shiftedEnvironment = componentEnvironment;
+        shiftedEnvironment[slotIndex] = replacement;
+        DualGrid shifted = evalExpr(derivative->in.get(), grid, unknowns,
+                                    shiftedEnvironment, geometry, parameters);
+        for (std::size_t point = 0; point < grid.size; ++point) {
+          const double coefficient =
+              slotIsContravariant
+                  ? frameConnection(*geometry, slotComponent, replacement,
+                                    direction, point)
+                  : -frameConnection(*geometry, replacement, slotComponent,
+                                     direction, point);
+          result.value[point] += coefficient * shifted.value[point];
+          result.tangent[point] += coefficient * shifted.tangent[point];
+        }
+      }
+    }
+    return result;
   }
   case ExprIR::Kind::IndexRename:
   case ExprIR::Kind::IndexPermute:
   case ExprIR::Kind::Trace:
   case ExprIR::Kind::Gradient:
-  case ExprIR::Kind::CovariantDerivative:
   case ExprIR::Kind::Divergence:
     fail("expression kind is not executable by the component radial backend");
   }
@@ -553,6 +723,65 @@ buildDomainLayout(const backend::ConstraintProblemIR &problem) {
     }
   }
   return layout;
+}
+
+std::vector<RadialGeometry> buildRadialGeometries(
+    const backend::ConstraintProblemIR &problem,
+    const RadialDomainLayout &domainLayout,
+    const std::unordered_map<std::string, double> &parameters) {
+  std::vector<RadialGeometry> geometries(domainLayout.grids.size());
+  if (!problem.geometry.enabled)
+    return geometries;
+  if (problem.geometry.kind != "spherical_orthonormal")
+    fail("unsupported constraint geometry '" + problem.geometry.kind + "'");
+  if (!problem.geometry.radialScale || !problem.geometry.tangentialScale)
+    fail("spherical-orthonormal geometry has missing scale expressions");
+
+  const UnknownState noUnknowns;
+  const ComponentEnvironment noComponents;
+  for (std::size_t domainIndex = 0;
+       domainIndex < domainLayout.grids.size(); ++domainIndex) {
+    const auto &grid = domainLayout.grids[domainIndex];
+    auto &geometry = geometries[domainIndex];
+    geometry.enabled = true;
+    geometry.metricName = problem.geometry.metricName;
+    geometry.inverseMetricName = problem.geometry.inverseMetricName;
+    geometry.radialScale =
+        evalExpr(problem.geometry.radialScale.get(), grid, noUnknowns,
+                 noComponents, nullptr, parameters)
+            .value;
+    geometry.tangentialScale =
+        evalExpr(problem.geometry.tangentialScale.get(), grid, noUnknowns,
+                 noComponents, nullptr, parameters)
+            .value;
+    geometry.radialScaleDerivative = applyMatrix(
+        grid.firstDerivative, grid.size, geometry.radialScale);
+    geometry.tangentialScaleDerivative = applyMatrix(
+        grid.firstDerivative, grid.size, geometry.tangentialScale);
+    geometry.connectionRate.resize(grid.size);
+
+    for (std::size_t point = 0; point < grid.size; ++point) {
+      const double radialScale = geometry.radialScale[point];
+      const double tangentialScale = geometry.tangentialScale[point];
+      if (!std::isfinite(radialScale) || radialScale <= 0.0)
+        fail("geometry radial_scale must be finite and strictly positive");
+      if (!std::isfinite(tangentialScale) || tangentialScale <= 0.0)
+        fail("geometry tangential_scale must be finite and strictly positive");
+      if (!std::isfinite(geometry.radialScaleDerivative[point]) ||
+          !std::isfinite(geometry.tangentialScaleDerivative[point]))
+        fail("geometry scale derivative is non-finite");
+      const double inverseRadius = std::isinf(grid.radius[point])
+                                       ? 0.0
+                                       : 1.0 / grid.radius[point];
+      geometry.connectionRate[point] =
+          (inverseRadius +
+           geometry.tangentialScaleDerivative[point] / tangentialScale) /
+          radialScale;
+      if (!std::isfinite(geometry.connectionRate[point]))
+        fail("geometry connection coefficient is non-finite");
+    }
+  }
+  return geometries;
 }
 
 std::vector<double> domainSlice(const std::vector<double> &values,
@@ -685,12 +914,15 @@ buildLocalStates(const backend::ConstraintProblemIR &problem,
 DualGrid
 evaluateResidual(const backend::ConstraintProblemIR &problem,
                  const RadialDomainLayout &domainLayout,
+                 const std::vector<RadialGeometry> &geometries,
                  const ComponentSystemLayout &componentLayout,
                  const std::vector<double> &unknown,
                  const std::vector<double> &unknownTangent,
                  const std::unordered_map<std::string, double> &parameters) {
   const std::size_t dofCount =
       componentLayout.totalComponents * domainLayout.totalSize;
+  if (geometries.size() != domainLayout.grids.size())
+    fail("internal radial geometry/domain count mismatch");
   DualGrid residual = constantGrid(dofCount, 0.0);
   const auto localStates = buildLocalStates(
       problem, domainLayout, componentLayout, unknown, unknownTangent);
@@ -717,10 +949,12 @@ evaluateResidual(const backend::ConstraintProblemIR &problem,
       for (std::size_t domainIndex = 0; domainIndex < domainLayout.grids.size();
            ++domainIndex) {
         const auto &grid = domainLayout.grids[domainIndex];
+        const RadialGeometry *geometry =
+            geometries[domainIndex].enabled ? &geometries[domainIndex] : nullptr;
         const std::size_t offset = rowBase + domainLayout.offsets[domainIndex];
         DualGrid localResidual =
             evalExpr(equation.residual.get(), grid, localStates[domainIndex],
-                     equationEnvironment, parameters);
+                     equationEnvironment, geometry, parameters);
         for (std::size_t i = 1; i + 1 < grid.size; ++i) {
           residual.value[offset + i] = localResidual.value[i];
           residual.tangent[offset + i] = localResidual.tangent[i];
@@ -735,10 +969,14 @@ evaluateResidual(const backend::ConstraintProblemIR &problem,
                                    unknownLayout.symmetric);
       const DualGrid innerValue =
           evalExpr(inner.rhs.get(), firstGrid, localStates.front(),
-                   innerEnvironment, parameters);
+                   innerEnvironment,
+                   geometries.front().enabled ? &geometries.front() : nullptr,
+                   parameters);
       const DualGrid outerValue =
           evalExpr(outer.rhs.get(), lastGrid, localStates.back(),
-                   outerEnvironment, parameters);
+                   outerEnvironment,
+                   geometries.back().enabled ? &geometries.back() : nullptr,
+                   parameters);
       const auto &firstUnknown =
           localStates.front().at(unknownLayout.name).components[component];
       const auto &lastUnknown =
@@ -831,6 +1069,7 @@ std::vector<double> solveDense(Matrix matrix, std::vector<double> rhs,
 RadialCttPhysicalSolution reconstructRadialCtt(
     const backend::ConstraintProblemIR &problem,
     const RadialDomainLayout &domainLayout,
+    const std::vector<RadialGeometry> &geometries,
     const ComponentSystemLayout &componentLayout,
     const std::vector<double> &unknown,
     const std::unordered_map<std::string, double> &parameters) {
@@ -877,7 +1116,10 @@ RadialCttPhysicalSolution reconstructRadialCtt(
     const auto &w = state.at(wLayout.name).components.front().value;
     const auto wPrime = applyMatrix(grid.firstDerivative, grid.size, w);
     const auto meanCurvature =
-        evalExpr(reconstruction.meanCurvature.get(), grid, state, {}, parameters)
+        evalExpr(reconstruction.meanCurvature.get(), grid, state, {},
+                 geometries[domainIndex].enabled ? &geometries[domainIndex]
+                                                 : nullptr,
+                 parameters)
             .value;
 
     for (std::size_t i = 0; i < grid.size; ++i) {
@@ -991,6 +1233,8 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
     fail("radial backend currently requires newton with a direct linear solve");
 
   RadialDomainLayout layout = buildDomainLayout(problem);
+  const std::vector<RadialGeometry> geometries =
+      buildRadialGeometries(problem, layout, request.parameters);
   ComponentSystemLayout componentLayout = buildComponentLayout(problem);
   const std::size_t dofCount =
       componentLayout.totalComponents * layout.totalSize;
@@ -1025,7 +1269,10 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
             layout.offsets[domainIndex];
         auto localSeed =
             evalExpr(seed.rhs.get(), grid, localStates[domainIndex],
-                     environment, request.parameters)
+                     environment,
+                     geometries[domainIndex].enabled ? &geometries[domainIndex]
+                                                     : nullptr,
+                     request.parameters)
                 .value;
         std::copy(localSeed.begin(), localSeed.end(), unknown.begin() + offset);
       }
@@ -1057,8 +1304,8 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
 
   for (std::size_t iteration = 0; iteration <= maxIterations; ++iteration) {
     DualGrid residual =
-        evaluateResidual(problem, layout, componentLayout, unknown, zeroTangent,
-                         request.parameters);
+        evaluateResidual(problem, layout, geometries, componentLayout, unknown,
+                         zeroTangent, request.parameters);
     const double norm = infinityNorm(residual.value);
     solution.residualHistory.push_back(norm);
     solution.residualNorm = norm;
@@ -1077,8 +1324,8 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
       std::vector<double> direction(dofCount, 0.0);
       direction[col] = 1.0;
       DualGrid differentiated =
-          evaluateResidual(problem, layout, componentLayout, unknown, direction,
-                           request.parameters);
+          evaluateResidual(problem, layout, geometries, componentLayout,
+                           unknown, direction, request.parameters);
       for (std::size_t row = 0; row < dofCount; ++row)
         at(jacobian, dofCount, row, col) = differentiated.tangent[row];
     }
@@ -1096,8 +1343,8 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
       for (std::size_t i = 0; i < dofCount; ++i)
         candidate[i] += damping * update[i];
       const double candidateNorm = infinityNorm(
-          evaluateResidual(problem, layout, componentLayout, candidate,
-                           zeroTangent, request.parameters)
+          evaluateResidual(problem, layout, geometries, componentLayout,
+                           candidate, zeroTangent, request.parameters)
               .value);
       if (std::isfinite(candidateNorm) && candidateNorm < norm) {
         unknown = std::move(candidate);
@@ -1121,7 +1368,8 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
   }
   if (problem.cttReconstruction.enabled) {
     solution.physicalCtt = reconstructRadialCtt(
-        problem, layout, componentLayout, unknown, request.parameters);
+        problem, layout, geometries, componentLayout, unknown,
+        request.parameters);
   }
   return solution;
 }

@@ -1,0 +1,52 @@
+# Manufactured spherical-orthonormal geometry regression. The background is
+# ds^2 = 4 dr^2 + r^2 dOmega^2. The exact fields are psi = r^2,
+# T_ij = r delta_ij, and V_j = div(T)_j = (1/2, 0, 0).
+initial_data CovariantGeometryRadial {
+  domain shell {
+    coordinates = spherical
+    topology = shell
+    resolution = [7]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+
+  geometry spherical_orthonormal {
+    metric = gamma
+    inverse_metric = gammaU
+    radial_scale = 2
+    tangential_scale = 1
+  }
+
+  unknown scalar psi
+  unknown symmetric cov_tensor2 T[i,j]
+  unknown covector V[j]
+
+  equation scalar scalar_geometry =
+      laplacian(psi) + trace(gammaU[i,k] * T[k,i]) - 3 * r - 1.5
+  equation cov_tensor2 tensor_profile[i,j] = T[i,j] - r * gamma[i,j]
+  equation covector tensor_divergence[j] =
+      V[j] - divergence(T[i,j])
+
+  boundary inner {
+    psi = r^2
+    T[i,j] = r * gamma[i,j]
+    V[j] = nabla_j(r)
+  }
+
+  boundary outer {
+    psi = r^2
+    T[i,j] = r * gamma[i,j]
+    V[j] = nabla_j(r)
+  }
+
+  seed psi = 1
+  seed T[i,j] = 0
+  seed V[j] = 0
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-11
+    max_iterations = 8
+  }
+}

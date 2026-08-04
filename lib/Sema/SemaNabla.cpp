@@ -513,6 +513,23 @@ SemanticAnalyzer::transformNablaCall(const CallExpr &call,
   std::string derivIdx(1, call.callee[6]);
   validateSpatialIndex(derivIdx);
 
+  if (analyzingConstraintProblem && constraintGeometryAvailable) {
+    auto out = std::make_unique<IndexedCall>();
+    out->callee = call.callee;
+    out->declaredArity = 1;
+    out->args.push_back(transformExpr(call.args[0].get()));
+    TensorTypeChecker geometryChecker(true);
+    const TensorType argumentType =
+        geometryChecker.infer(out->args.front().get());
+    if (!argumentType.isScalar() &&
+        !dynamic_cast<const IndexedVar *>(out->args.front().get())) {
+      throw std::runtime_error(
+          "nabla on non-scalar tensor requires an indexed tensor argument");
+    }
+    geometryChecker.infer(out.get());
+    return out;
+  }
+
   TensorTypeChecker checker;
   auto arg = transformExpr(call.args[0].get());
   TensorType argT = checker.infer(arg.get());

@@ -496,6 +496,10 @@ void canonicalizeEinsteinIR(backend::ModuleIR &module) {
   }
   if (module.constraintProblem) {
     auto &problem = *module.constraintProblem;
+    if (problem.geometry.enabled) {
+      canonicalizeExpr(problem.geometry.radialScale);
+      canonicalizeExpr(problem.geometry.tangentialScale);
+    }
     for (auto &equation : problem.equations)
       canonicalizeExpr(equation.residual);
     for (auto &boundary : problem.boundaries)

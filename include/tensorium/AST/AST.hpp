@@ -255,8 +255,18 @@ struct ConstraintCttReconstructionDecl {
   std::unique_ptr<Expr> meanCurvature;
 };
 
+struct ConstraintGeometryDecl {
+  bool enabled = false;
+  std::string kind;
+  std::string metricName;
+  std::string inverseMetricName;
+  std::unique_ptr<Expr> radialScale;
+  std::unique_ptr<Expr> tangentialScale;
+};
+
 struct ConstraintProblemDecl {
   std::string name;
+  ConstraintGeometryDecl geometry;
   std::vector<SpectralDomainDecl> domains;
   std::vector<ConstraintUnknownDecl> unknowns;
   std::vector<ConstraintEquationDecl> equations;

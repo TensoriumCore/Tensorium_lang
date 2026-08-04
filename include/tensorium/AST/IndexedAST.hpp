@@ -105,8 +105,18 @@ struct IndexedConstraintCttReconstruction {
   std::unique_ptr<IndexedExpr> meanCurvature;
 };
 
+struct IndexedConstraintGeometry {
+  bool enabled = false;
+  std::string kind;
+  std::string metricName;
+  std::string inverseMetricName;
+  std::unique_ptr<IndexedExpr> radialScale;
+  std::unique_ptr<IndexedExpr> tangentialScale;
+};
+
 struct IndexedConstraintProblem {
   std::string name;
+  IndexedConstraintGeometry geometry;
   std::vector<IndexedConstraintEquation> equations;
   std::vector<IndexedConstraintBoundary> boundaries;
   std::vector<IndexedConstraintAssignment> seeds;

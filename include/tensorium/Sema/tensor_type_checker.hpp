@@ -241,6 +241,36 @@ class TensorTypeChecker {
         return;
       }
 
+      if (isDivergenceBuiltin(cal)) {
+        if (c->args.empty())
+          throw std::runtime_error(cal + "() expects at least 1 argument");
+        const auto *tensor =
+            dynamic_cast<const IndexedVar *>(c->args.front().get());
+        if (!tensor || tensor->tensorIndexNames.empty())
+          return;
+        for (std::size_t slot = 1; slot < tensor->tensorIndexNames.size();
+             ++slot) {
+          const auto &name = tensor->tensorIndexNames[slot];
+          if (name.size() != 1)
+            continue;
+          auto &entry = analysis.entries[(unsigned char)name.front()];
+          entry.count++;
+          if (insideExplicitContract)
+            entry.insideExplicitContraction = true;
+          else
+            entry.outsideExplicitContraction = true;
+          const bool isUp =
+              slot < tensor->tensorIndexIsUp.size()
+                  ? tensor->tensorIndexIsUp[slot]
+                  : slot < static_cast<std::size_t>(tensor->up);
+          if (isUp)
+            entry.variance.contravariant += 1;
+          else
+            entry.variance.covariant += 1;
+        }
+        return;
+      }
+
       for (const auto &arg : c->args)
         collectIndexAnalysis(arg.get(), insideExplicitContract, analysis);
 
@@ -273,7 +303,7 @@ class TensorTypeChecker {
         return;
       }
 
-      if (isGradientBuiltin(cal) || isDivergenceBuiltin(cal)) {
+      if (isGradientBuiltin(cal)) {
         if (c->args.empty())
           throw std::runtime_error(cal + "() expects at least 1 argument");
         return;

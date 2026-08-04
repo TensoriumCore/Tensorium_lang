@@ -263,8 +263,18 @@ struct ConstraintCttReconstructionIR {
   std::unique_ptr<ExprIR> meanCurvature;
 };
 
+struct ConstraintGeometryIR {
+  bool enabled = false;
+  std::string kind;
+  std::string metricName;
+  std::string inverseMetricName;
+  std::unique_ptr<ExprIR> radialScale;
+  std::unique_ptr<ExprIR> tangentialScale;
+};
+
 struct ConstraintProblemIR {
   std::string name;
+  ConstraintGeometryIR geometry;
   std::vector<SpectralDomainIR> domains;
   std::vector<ConstraintUnknownIR> unknowns;
   std::vector<ConstraintEquationIR> equations;

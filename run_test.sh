@@ -171,6 +171,7 @@ CONSTRAINT_SOLVE_TESTS=(
   "tests/fixtures/gr/coupled_nonlinear_radial_solve.tn|22|2|5|mass=1"
   "tests/fixtures/gr/scalar_vector_radial_solve.tn|22|2|3|mass=1"
   "tests/fixtures/gr/tensor_contraction_radial_solve.tn|7|1|2|mass=1"
+  "tests/fixtures/gr/covariant_geometry_radial_solve.tn|7|1|1|mass=1"
   "tests/fixtures/gr/ctt_radial_vacuum_solve.tn|50|2|4|amplitude=0.2"
 )
 
@@ -541,6 +542,13 @@ for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
        ! grep -q "unknown=B points=7 components=6 values=42" "$OUT_FILE" ||
        ! grep -q "unknown=C points=7 components=9 values=63" "$OUT_FILE"; }; then
     echo "ERROR: expected symmetric and mixed tensor solutions for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
+  if [[ "$f" == *"covariant_geometry_radial_solve.tn"* ]] &&
+     { ! grep -q "unknown=T points=7 components=6 values=42" "$OUT_FILE" ||
+       ! grep -q "unknown=V points=7 components=3 values=21" "$OUT_FILE"; }; then
+    echo "ERROR: expected covariant geometry tensor solutions for $f"
     cat "$OUT_FILE"
     exit 1
   fi

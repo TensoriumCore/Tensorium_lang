@@ -5773,6 +5773,251 @@ static bool testTensorContractionRadialConstraintSolve() {
   return true;
 }
 
+static bool testCovariantGeometryRadialConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/covariant_geometry_radial_solve.tn");
+  if (!result.module.constraintProblem ||
+      !result.module.constraintProblem->geometry.enabled ||
+      result.module.constraintProblem->geometry.kind !=
+          "spherical_orthonormal" ||
+      result.module.constraintProblem->geometry.metricName != "gamma" ||
+      result.module.constraintProblem->geometry.inverseMetricName != "gammaU") {
+    std::cerr << "FAIL: spherical-orthonormal geometry IR is incomplete\n";
+    return false;
+  }
+
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module);
+  if (!solution.converged || solution.iterations != 1 ||
+      solution.residualNorm > 1.0e-11 ||
+      solution.unknownLayouts.size() != 3) {
+    std::cerr << "FAIL: covariant geometry solve did not converge as expected; "
+                 "iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+
+  const auto &coordinates = solution.coordinates;
+  const auto &psi = solution.unknowns.at("psi");
+  const auto &tensor = solution.unknowns.at("T");
+  const auto &divergence = solution.unknowns.at("V");
+  if (coordinates.size() != 7 || psi.size() != 7 || tensor.size() != 42 ||
+      divergence.size() != 21) {
+    std::cerr << "FAIL: covariant geometry solution layout is incorrect\n";
+    return false;
+  }
+
+  double maxError = 0.0;
+  for (std::size_t point = 0; point < coordinates.size(); ++point) {
+    const double radius = coordinates[point];
+    maxError = std::max(maxError, std::abs(psi[point] - radius * radius));
+    for (std::size_t component = 0; component < 6; ++component) {
+      const bool diagonal = component == 0 || component == 3 || component == 5;
+      const double expected = diagonal ? radius : 0.0;
+      maxError = std::max(
+          maxError,
+          std::abs(tensor[component * coordinates.size() + point] - expected));
+    }
+    maxError = std::max(maxError, std::abs(divergence[point] - 0.5));
+    maxError = std::max(
+        maxError, std::abs(divergence[coordinates.size() + point]));
+    maxError = std::max(
+        maxError, std::abs(divergence[2 * coordinates.size() + point]));
+  }
+  if (maxError > 1.0e-10) {
+    std::cerr << "FAIL: covariant geometry manufactured solution max error="
+              << maxError << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testConstraintGeometryDiagnostics() {
+  const std::string missingScale = R"(
+initial_data MissingGeometryScale {
+  domain shell { coordinates = spherical topology = shell resolution = [5]
+    basis = chebyshev bounds = [1,2] }
+  geometry spherical_orthonormal { metric = gamma inverse_metric = gammaU
+    radial_scale = 1 }
+  unknown scalar psi
+  equation scalar hamiltonian = laplacian(psi)
+  boundary inner { psi = 0 }
+  boundary outer { psi = 0 }
+  seed psi = 0
+  solve { nonlinear = newton linear = direct tolerance = 1e-10
+    max_iterations = 2 }
+}
+)";
+  try {
+    (void)buildModuleFromSource(missingScale, CompilationMode::Executable);
+    std::cerr << "FAIL: incomplete geometry block was accepted\n";
+    return false;
+  } catch (const std::exception &exception) {
+    if (std::string(exception.what()).find("geometry requires") ==
+        std::string::npos) {
+      std::cerr << "FAIL: unexpected incomplete geometry diagnostic: "
+                << exception.what() << "\n";
+      return false;
+    }
+  }
+
+  const std::string collidingMetricName = R"(
+initial_data CollidingGeometryMetric {
+  domain shell { coordinates = spherical topology = shell resolution = [5]
+    basis = chebyshev bounds = [1,2] }
+  geometry spherical_orthonormal { metric = psi inverse_metric = gammaU
+    radial_scale = 1 tangential_scale = 1 }
+  unknown scalar psi
+  equation scalar hamiltonian = laplacian(psi)
+  boundary inner { psi = 0 }
+  boundary outer { psi = 0 }
+  seed psi = 0
+  solve { nonlinear = newton linear = direct tolerance = 1e-10
+    max_iterations = 2 }
+}
+)";
+  try {
+    (void)buildModuleFromSource(collidingMetricName,
+                                CompilationMode::Executable);
+    std::cerr << "FAIL: colliding geometry metric name was accepted\n";
+    return false;
+  } catch (const std::exception &exception) {
+    if (std::string(exception.what()).find("collides") == std::string::npos) {
+      std::cerr << "FAIL: unexpected geometry name collision diagnostic: "
+                << exception.what() << "\n";
+      return false;
+    }
+  }
+
+  const std::string nonPositiveScale = R"(
+initial_data InvalidGeometryScale {
+  domain shell { coordinates = spherical topology = shell resolution = [5]
+    basis = chebyshev bounds = [1,2] }
+  geometry spherical_orthonormal { metric = gamma inverse_metric = gammaU
+    radial_scale = 0 tangential_scale = 1 }
+  unknown scalar psi
+  equation scalar hamiltonian = laplacian(psi)
+  boundary inner { psi = 0 }
+  boundary outer { psi = 0 }
+  seed psi = 0
+  solve { nonlinear = newton linear = direct tolerance = 1e-10
+    max_iterations = 2 }
+}
+)";
+  try {
+    auto module =
+        buildModuleFromSource(nonPositiveScale, CompilationMode::Executable);
+    validation::canonicalizeDifferentialIR(module);
+    validation::canonicalizeEinsteinIR(module);
+    (void)tensorium::solver::solveRadialConstraintProblem(module);
+    std::cerr << "FAIL: non-positive geometry scale was accepted\n";
+    return false;
+  } catch (const std::exception &exception) {
+    if (std::string(exception.what()).find("strictly positive") ==
+        std::string::npos) {
+      std::cerr << "FAIL: unexpected non-positive geometry diagnostic: "
+                << exception.what() << "\n";
+      return false;
+    }
+  }
+
+  const std::string unknownDependentScale = R"(
+initial_data InvalidGeometryDependency {
+  domain shell { coordinates = spherical topology = shell resolution = [5]
+    basis = chebyshev bounds = [1,2] }
+  geometry spherical_orthonormal { metric = gamma inverse_metric = gammaU
+    radial_scale = psi tangential_scale = 1 }
+  unknown scalar psi
+  equation scalar hamiltonian = laplacian(psi)
+  boundary inner { psi = 0 }
+  boundary outer { psi = 0 }
+  seed psi = 0
+  solve { nonlinear = newton linear = direct tolerance = 1e-10
+    max_iterations = 2 }
+}
+)";
+  try {
+    (void)buildModuleFromSource(unknownDependentScale,
+                                CompilationMode::Executable);
+    std::cerr << "FAIL: unknown-dependent geometry scale was accepted\n";
+    return false;
+  } catch (const std::exception &exception) {
+    if (std::string(exception.what()).find(
+            "may reference only r and scalar parameters") ==
+        std::string::npos) {
+      std::cerr << "FAIL: unexpected geometry dependency diagnostic: "
+                << exception.what() << "\n";
+      return false;
+    }
+  }
+
+  const std::string nonFiniteScale = R"(
+initial_data InvalidFiniteGeometryScale {
+  domain shell { coordinates = spherical topology = shell resolution = [5]
+    basis = chebyshev bounds = [1,2] }
+  geometry spherical_orthonormal { metric = gamma inverse_metric = gammaU
+    radial_scale = sqrt(0 - 1) tangential_scale = 1 }
+  unknown scalar psi
+  equation scalar hamiltonian = laplacian(psi)
+  boundary inner { psi = 0 }
+  boundary outer { psi = 0 }
+  seed psi = 0
+  solve { nonlinear = newton linear = direct tolerance = 1e-10
+    max_iterations = 2 }
+}
+)";
+  try {
+    auto module =
+        buildModuleFromSource(nonFiniteScale, CompilationMode::Executable);
+    validation::canonicalizeDifferentialIR(module);
+    validation::canonicalizeEinsteinIR(module);
+    (void)tensorium::solver::solveRadialConstraintProblem(module);
+    std::cerr << "FAIL: non-finite geometry scale was accepted\n";
+    return false;
+  } catch (const std::exception &exception) {
+    if (std::string(exception.what()).find("finite and strictly positive") ==
+        std::string::npos) {
+      std::cerr << "FAIL: unexpected non-finite geometry diagnostic: "
+                << exception.what() << "\n";
+      return false;
+    }
+  }
+
+  const std::string tensorLaplacian = R"(
+initial_data InvalidGeometryTensorLaplacian {
+  domain shell { coordinates = spherical topology = shell resolution = [5]
+    basis = chebyshev bounds = [1,2] }
+  geometry spherical_orthonormal { metric = gamma inverse_metric = gammaU
+    radial_scale = 1 tangential_scale = 1 }
+  unknown symmetric cov_tensor2 A[i,j]
+  equation cov_tensor2 tensor_equation[i,j] = laplacian(A[i,j])
+  boundary inner { A[i,j] = 0 }
+  boundary outer { A[i,j] = 0 }
+  seed A[i,j] = 0
+  solve { nonlinear = newton linear = direct tolerance = 1e-10
+    max_iterations = 2 }
+}
+)";
+  try {
+    auto module =
+        buildModuleFromSource(tensorLaplacian, CompilationMode::Executable);
+    validation::canonicalizeDifferentialIR(module);
+    validation::canonicalizeEinsteinIR(module);
+    (void)tensorium::solver::solveRadialConstraintProblem(module);
+    std::cerr << "FAIL: geometry-aware tensor laplacian was accepted\n";
+    return false;
+  } catch (const std::exception &exception) {
+    if (std::string(exception.what()).find(
+            "tensor laplacian is not executable") == std::string::npos) {
+      std::cerr << "FAIL: unexpected tensor laplacian diagnostic: "
+                << exception.what() << "\n";
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool testCttRadialVacuumConstraintSolve() {
   auto result = tensorium::api::parseAndValidateFile(
       "tests/fixtures/gr/ctt_radial_vacuum_solve.tn");
@@ -6404,6 +6649,10 @@ int main() {
        &testRankTwoRadialConstraintSolve},
       {"testTensorContractionRadialConstraintSolve",
        &testTensorContractionRadialConstraintSolve},
+      {"testCovariantGeometryRadialConstraintSolve",
+       &testCovariantGeometryRadialConstraintSolve},
+      {"testConstraintGeometryDiagnostics",
+       &testConstraintGeometryDiagnostics},
       {"testCttRadialVacuumConstraintSolve",
        &testCttRadialVacuumConstraintSolve},
       {"testCttPhysicalGridHandoff", &testCttPhysicalGridHandoff},

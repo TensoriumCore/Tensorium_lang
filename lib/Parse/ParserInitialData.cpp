@@ -73,6 +73,14 @@ InitialDataDecl Parser::parseInitialData() {
       continue;
     }
 
+    if (cur.type == TokenType::Identifier && cur.text == "geometry") {
+      if (init.constraintProblem.geometry.enabled)
+        syntaxError("duplicate geometry block in initial_data");
+      init.hasConstraintProblem = true;
+      init.constraintProblem.geometry = parseConstraintGeometry();
+      continue;
+    }
+
     if (cur.type == TokenType::Identifier && cur.text == "unknown") {
       init.hasConstraintProblem = true;
       init.constraintProblem.unknowns.push_back(parseConstraintUnknown());
@@ -423,6 +431,79 @@ ConstraintUnknownDecl Parser::parseConstraintUnknown() {
     expect(TokenType::RBracket);
   }
   return unknown;
+}
+
+ConstraintGeometryDecl Parser::parseConstraintGeometry() {
+  if (cur.type != TokenType::Identifier || cur.text != "geometry")
+    syntaxError("expected geometry block");
+  advance();
+
+  if (cur.type != TokenType::Identifier)
+    syntaxError("geometry expects a geometry kind");
+  ConstraintGeometryDecl geometry;
+  geometry.enabled = true;
+  geometry.kind = cur.text;
+  advance();
+  expect(TokenType::LBrace);
+
+  bool hasMetric = false;
+  bool hasInverseMetric = false;
+  bool hasRadialScale = false;
+  bool hasTangentialScale = false;
+  while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+    if (cur.type == TokenType::Semicolon) {
+      advance();
+      continue;
+    }
+    if (cur.type != TokenType::Identifier && cur.type != TokenType::KwMetric &&
+        cur.type != TokenType::KwInverseMetric)
+      syntaxError("geometry expects a property name");
+    const std::string key = cur.text;
+    advance();
+    expect(TokenType::Equals);
+
+    if (key == "metric" || key == "inverse_metric") {
+      if (cur.type != TokenType::Identifier)
+        syntaxError("geometry " + key + " expects a symbol name");
+      if (key == "metric") {
+        if (hasMetric)
+          syntaxError("duplicate geometry metric property");
+        geometry.metricName = cur.text;
+        hasMetric = true;
+      } else {
+        if (hasInverseMetric)
+          syntaxError("duplicate geometry inverse_metric property");
+        geometry.inverseMetricName = cur.text;
+        hasInverseMetric = true;
+      }
+      advance();
+      continue;
+    }
+
+    if (key == "radial_scale") {
+      if (hasRadialScale)
+        syntaxError("duplicate geometry radial_scale property");
+      geometry.radialScale = parseExpr();
+      hasRadialScale = true;
+      continue;
+    }
+    if (key == "tangential_scale") {
+      if (hasTangentialScale)
+        syntaxError("duplicate geometry tangential_scale property");
+      geometry.tangentialScale = parseExpr();
+      hasTangentialScale = true;
+      continue;
+    }
+    syntaxError("unknown geometry property '" + key + "'");
+  }
+  expect(TokenType::RBrace);
+
+  if (!hasMetric || !hasInverseMetric || !hasRadialScale ||
+      !hasTangentialScale) {
+    syntaxError("geometry requires metric, inverse_metric, radial_scale and "
+                "tangential_scale");
+  }
+  return geometry;
 }
 
 ConstraintEquationDecl Parser::parseConstraintEquation() {

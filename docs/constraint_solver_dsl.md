@@ -130,6 +130,9 @@ The current numerical backend supports:
 - the flat conformal vector Laplacian for a radial vector amplitude;
 - algebraic nonlinearities, powers, pointwise tensor products, and Einstein
   contractions over one or two repeated spatial indices;
+- an optional fixed spherical-orthonormal background geometry, including
+  covariant derivatives, gradients, divergences, traces, and its scalar
+  Laplacian;
 - radial derivatives;
 - global `inner` and `outer` Dirichlet conditions;
 - automatic `C0` and `C1` matching at every declared interface;
@@ -428,6 +431,69 @@ factors, so these terms populate the cross-field blocks of the Newton
 Jacobian. The current executable limit is two simultaneously summed spatial
 indices.
 
+## Spherical-orthonormal background geometry
+
+A radial constraint problem may declare one fixed background geometry:
+
+```tensorium
+geometry spherical_orthonormal {
+  metric = gamma
+  inverse_metric = gammaU
+  radial_scale = 2
+  tangential_scale = 1
+}
+```
+
+The two positive scalar profiles define
+
+```text
+ds^2 = A(r)^2 dr^2 + (r B(r))^2 dOmega^2,
+A = radial_scale,
+B = tangential_scale.
+```
+
+Profiles may contain `r`, scalar parameters, arithmetic, powers, and the
+executable scalar functions `sin`, `cos`, `sqrt`, and `exp`. They are fixed
+during Newton iteration and cannot depend on an unknown or another field. Both
+profiles must be finite and strictly positive at every collocation point.
+
+Tensor components use the physical orthonormal frame
+`(r_hat, theta_hat, phi_hat)`. Consequently, the declared `gamma[i,j]` and
+`gammaU[i,j]` symbols both have numerical components `delta_ij`; they retain
+opposite variance in the type system. The scale profiles enter frame
+derivatives and the connection through
+
+```text
+e_r = (1/A) d/dr,
+H = (1/A) (1/r + B'/B).
+```
+
+This first geometry backend represents SO(3)-invariant radial reductions. It
+does not represent arbitrary angular dependence or general spherical-harmonic
+modes; tangential components are interpreted in a transported orthonormal
+frame, and the manufactured contractions below are valid in that reduction.
+
+Within this geometry, `nabla_i` and `nabla^i` execute the connection corrections
+for directly indexed scalar, rank-one, and rank-two unknowns or geometry
+fields. `gradient`, `divergence`, `trace`, and contractions compose with those
+operations and participate in automatic differentiation. The scalar Laplacian
+is
+
+```text
+Delta f = 1/(A B^2 r^2) d/dr [(B^2 r^2/A) df/dr].
+```
+
+Run the manufactured geometry regression with:
+
+```sh
+./tools/driver/Tensorium_cc --solve-constraints \
+  ../tests/fixtures/gr/covariant_geometry_radial_solve.tn
+```
+
+For `A=2` and `B=1`, it verifies `Delta(r^2)=3/2`,
+`T_ij=r delta_ij`, `trace(T)=3r`, and
+`nabla^i T_ij=(1/2,0,0)`.
+
 Scalar boundary or seed expressions are broadcast to every component, which
 makes homogeneous tensor data concise:
 
@@ -479,11 +545,11 @@ Solution buffers are component-major: all radial points for component `0`,
 followed by all points for component `1`, and so on. The CLI reports both the
 point count per component and the total number of stored values.
 
-At this stage `laplacian(W[i])` and `laplacian(A[i,j])` apply the scalar radial
-Laplacian to each component independently. They are not yet covariant tensor
-Laplacians in a spherical basis. Algebraic contractions are executable, but
-connection terms and covariant derivatives are the next geometric lowering
-steps.
+Without a `geometry` block, `laplacian(W[i])` and `laplacian(A[i,j])` retain the
+legacy component-wise scalar radial behavior. With spherical-orthonormal
+geometry, the scalar Laplacian and covariant first derivatives are geometric,
+but tensor Laplacians are rejected until the rough-Laplacian connection terms
+are implemented.
 
 ## Pipeline status
 
@@ -497,12 +563,13 @@ constrained initial_data DSL
   -> coupled scalar/rank-one/rank-two layout and Jacobian [implemented]
   -> compact six-component symmetric rank-two storage [implemented]
   -> algebraic Einstein tensor contractions [implemented]
+  -> fixed spherical-orthonormal geometry and covariant first derivatives [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] connection terms and covariant derivatives
+  -> [next] covariant tensor Laplacians and non-flat CTT residuals
 ```
 
 The physical target includes the 3+1 constraint equations

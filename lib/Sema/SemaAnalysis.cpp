@@ -34,6 +34,17 @@ struct BoolScopeGuard {
   ~BoolScopeGuard() { value = saved; }
 };
 
+struct FieldScopeGuard {
+  std::unordered_map<std::string, const FieldDecl *> &fields;
+  std::unordered_map<std::string, const FieldDecl *> saved;
+
+  explicit FieldScopeGuard(
+      std::unordered_map<std::string, const FieldDecl *> &fieldsIn)
+      : fields(fieldsIn), saved(fieldsIn) {}
+
+  ~FieldScopeGuard() { fields = std::move(saved); }
+};
+
 static TensorKind deduceKind(int up, int down) {
   if (up == 0 && down == 0)
     return TensorKind::Scalar;
@@ -333,6 +344,25 @@ IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
   LocalScopeGuard localsScope(
       locals, std::unordered_map<std::string, TensorTypeDesc>{});
   BoolScopeGuard constraintScope(analyzingConstraintProblem, true);
+  BoolScopeGuard geometryScope(constraintGeometryAvailable,
+                               problem.geometry.enabled);
+  FieldScopeGuard fieldScope(fields);
+  FieldDecl geometryMetric;
+  FieldDecl geometryInverseMetric;
+  if (problem.geometry.enabled) {
+    geometryMetric.kind = TensorKind::Metric;
+    geometryMetric.name = problem.geometry.metricName;
+    geometryMetric.indices = {"i", "j"};
+    geometryMetric.down = 2;
+    geometryMetric.isMetric = true;
+    geometryInverseMetric.kind = TensorKind::InverseMetric;
+    geometryInverseMetric.name = problem.geometry.inverseMetricName;
+    geometryInverseMetric.indices = {"i", "j"};
+    geometryInverseMetric.up = 2;
+    geometryInverseMetric.isInverseMetric = true;
+    fields.emplace(geometryMetric.name, &geometryMetric);
+    fields.emplace(geometryInverseMetric.name, &geometryInverseMetric);
+  }
   coordIndex.clear();
   locals.clear();
 
@@ -371,9 +401,23 @@ IndexedConstraintProblem SemanticAnalyzer::analyzeConstraintProblem(
   for (const auto &seed : problem.seeds)
     registerIndices(seed.lhs.indices);
 
-  TensorTypeChecker checker(hasConnectionTensor);
+  TensorTypeChecker checker(hasConnectionTensor || problem.geometry.enabled);
   IndexedConstraintProblem out;
   out.name = problem.name;
+
+  if (problem.geometry.enabled) {
+    out.geometry.enabled = true;
+    out.geometry.kind = problem.geometry.kind;
+    out.geometry.metricName = problem.geometry.metricName;
+    out.geometry.inverseMetricName = problem.geometry.inverseMetricName;
+    out.geometry.radialScale = transformExpr(problem.geometry.radialScale.get());
+    out.geometry.tangentialScale =
+        transformExpr(problem.geometry.tangentialScale.get());
+    if (!checker.infer(out.geometry.radialScale.get()).isScalar() ||
+        !checker.infer(out.geometry.tangentialScale.get()).isScalar()) {
+      throw std::runtime_error("constraint geometry scales must be scalar");
+    }
+  }
 
   if (problem.cttReconstruction.enabled) {
     out.cttReconstruction.enabled = true;
