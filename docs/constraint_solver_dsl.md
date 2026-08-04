@@ -133,6 +133,8 @@ The current numerical backend supports:
 - an optional fixed spherical-orthonormal background geometry, including
   composable covariant derivatives, scalar gradients, divergences, traces,
   and scalar/rank-one/rank-two rough Laplacians;
+- curved-background longitudinal CTT, momentum-divergence, and sourced
+  Hamiltonian residuals assembled directly from those tensor primitives;
 - radial derivatives;
 - global `inner` and `outer` Dirichlet conditions;
 - automatic `C0` and `C1` matching at every declared interface;
@@ -383,13 +385,14 @@ described in [Constraint handoff C ABI](constraint_handoff_c_abi.md). It owns
 the DSL-to-solution lifetime and writes physical CTT or Cartesian BSSN data
 directly into caller-owned structure-of-arrays buffers.
 
-This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
-interval under spherical symmetry and a conformally flat ansatz. It is not yet
-a complete asymptotically flat data set or generic CTT/XCTS: the conformal
-metric is fixed and `w` is a radial vector amplitude rather than three
-independent angular fields. The reconstructed radial tensors can now be
-interpolated into full spherical or Cartesian evolution buffers, but the
-constraint solve itself remains spherically symmetric.
+The legacy reconstruction fixture is a genuine coupled vacuum Einstein
+constraint solve on a bounded radial interval under spherical symmetry and a
+conformally flat ansatz. The curved-background fixture additionally solves a
+three-component `W`, its symmetric longitudinal tensor, and a sourced
+Hamiltonian residual, but remains an SO(3)-invariant radial reduction. It is
+not yet a complete asymptotically flat data set or generic CTT/XCTS system.
+Only the legacy flat reconstruction is currently interpolated into spherical
+or Cartesian evolution buffers.
 
 ## Tensor component layout
 
@@ -520,6 +523,56 @@ Writing `n_i = 2 nabla_i(r)`, its exact fields are
 `D^a D_a V_i = 2 nabla_i(r)` and
 `D^a D_a T_ij = delta_ij/2`.
 
+### Curved-background CTT residuals
+
+The same primitives now express the conformal longitudinal operator without a
+backend-specific shortcut:
+
+```tensorium
+equation con_tensor2 longitudinal[i,j] =
+    L[i,j]
+    - nabla^i(W[j])
+    - nabla^j(W[i])
+    + (2 / 3) * gammaU[i,j] * divergence(W[k])
+
+equation vector momentum[j] =
+    divergence(L[i,j]) - (2 / 3) * psi^6 * nabla^j(K)
+```
+
+These equations implement
+
+```text
+(L W)^ij = D^i W^j + D^j W^i - (2/3) gamma^ij D_k W^k,
+D_i (L W)^ij - (2/3) psi^6 D^j K = 0.
+```
+
+The Hamiltonian residual can use an explicitly lowered covariant copy
+`A_ij = gamma_ik gamma_jl L^kl` and the two-index contraction `L^ij A_ij`:
+
+```text
+Delta psi - (Rtilde/8) psi
+  + (A_ij A^ij/8) psi^(-7)
+  - (K^2/12) psi^5 + source = 0.
+```
+
+Run the coupled manufactured system with:
+
+```sh
+./tools/driver/Tensorium_cc --solve-constraints \
+  ../tests/fixtures/gr/ctt_curved_background_solve.tn
+```
+
+It uses `A=2`, `B=1`, `Rtilde=3/(2 r^2)`, `psi=1`, and a polynomial radial
+vector potential that vanishes with its longitudinal tensor at both shell
+boundaries. A prescribed polynomial `K` makes the momentum equation exact;
+the Hamiltonian includes a manufactured matter source. The solve recovers the
+scalar, all three vector components, both compact symmetric tensors, and the
+cross-field Newton derivatives simultaneously.
+
+This curved residual path is not yet connected to `reconstruct ctt`, whose
+current public export contract still accepts the legacy scalar radial vector
+amplitude on a flat conformal background.
+
 Scalar boundary or seed expressions are broadcast to every component, which
 makes homogeneous tensor data concise:
 
@@ -591,11 +644,12 @@ constrained initial_data DSL
   -> fixed spherical-orthonormal geometry and covariant first derivatives [implemented]
   -> composable covariant derivatives and rank-one/rank-two rough Laplacians [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
+  -> curved-background longitudinal CTT and sourced Hamiltonian residuals [implemented radial subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] curved-background longitudinal CTT operator and residuals
+  -> [next] generalized curved-CTT reconstruction and physical-source declarations
 ```
 
 The physical target includes the 3+1 constraint equations

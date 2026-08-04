@@ -5890,6 +5890,72 @@ static bool testCovariantTensorLaplacianRadialConstraintSolve() {
   return true;
 }
 
+static bool testCttCurvedBackgroundConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/ctt_curved_background_solve.tn");
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module);
+  if (!solution.converged || solution.iterations != 4 ||
+      solution.residualNorm > 1.0e-11 ||
+      solution.unknownLayouts.size() != 4) {
+    std::cerr << "FAIL: curved-background CTT solve did not converge as "
+                 "expected; iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+
+  const auto &coordinates = solution.coordinates;
+  const auto &psi = solution.unknowns.at("psi");
+  const auto &vector = solution.unknowns.at("W");
+  const auto &longitudinal = solution.unknowns.at("L");
+  const auto &lowered = solution.unknowns.at("A");
+  if (coordinates.size() != 9 || psi.size() != 9 || vector.size() != 27 ||
+      longitudinal.size() != 54 || lowered.size() != 54) {
+    std::cerr << "FAIL: curved-background CTT solution layout is incorrect\n";
+    return false;
+  }
+
+  double maxError = 0.0;
+  for (std::size_t point = 0; point < coordinates.size(); ++point) {
+    const double radius = coordinates[point];
+    const double profile =
+        radius * std::pow(radius - 1.0, 2) * std::pow(radius - 2.0, 2);
+    const double longitudinalAmplitude =
+        2.0 * std::pow(radius, 4) - 9.0 * std::pow(radius, 3) +
+        13.0 * radius * radius - 6.0 * radius;
+    maxError = std::max(maxError, std::abs(psi[point] - 1.0));
+    for (std::size_t component = 0; component < 3; ++component) {
+      const double expected = component == 0 ? profile : 0.0;
+      maxError = std::max(
+          maxError,
+          std::abs(vector[component * coordinates.size() + point] - expected));
+    }
+    for (std::size_t component = 0; component < 6; ++component) {
+      double expected = 0.0;
+      if (component == 0)
+        expected = (4.0 / 3.0) * longitudinalAmplitude;
+      else if (component == 3 || component == 5)
+        expected = (-2.0 / 3.0) * longitudinalAmplitude;
+      maxError = std::max(
+          maxError,
+          std::abs(longitudinal[component * coordinates.size() + point] -
+                   expected));
+      maxError = std::max(
+          maxError,
+          std::abs(lowered[component * coordinates.size() + point] -
+                   expected));
+    }
+  }
+  if (maxError > 1.0e-10) {
+    std::cerr << "FAIL: curved-background CTT manufactured solution max "
+                 "error="
+              << maxError << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testConstraintGeometryDiagnostics() {
   const std::string missingScale = R"(
 initial_data MissingGeometryScale {
@@ -6679,6 +6745,8 @@ int main() {
        &testCovariantGeometryRadialConstraintSolve},
       {"testCovariantTensorLaplacianRadialConstraintSolve",
        &testCovariantTensorLaplacianRadialConstraintSolve},
+      {"testCttCurvedBackgroundConstraintSolve",
+       &testCttCurvedBackgroundConstraintSolve},
       {"testConstraintGeometryDiagnostics",
        &testConstraintGeometryDiagnostics},
       {"testCttRadialVacuumConstraintSolve",

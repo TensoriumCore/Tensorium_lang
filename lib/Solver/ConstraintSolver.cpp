@@ -799,11 +799,12 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
       fail("radial Einstein contraction supports at most two summed indices");
 
     ComponentEnvironment contractedEnvironment = componentEnvironment;
-    for (const auto &index : contraction->summedIndices) {
-      if (contractedEnvironment.contains(index))
-        fail("Einstein contraction index '" + index +
-             "' collides with a free component index");
-    }
+    // ContractionIR gives dummy indices lexical scope over its input. The
+    // Einstein canonicalizer may reuse a canonical name that is free in a
+    // sibling expression, so a local dummy must shadow (not capture) the
+    // caller's component binding.
+    for (const auto &index : contraction->summedIndices)
+      contractedEnvironment.erase(index);
 
     DualGrid result = constantGrid(grid.size, 0.0);
     auto accumulate = [&](auto &&self, std::size_t depth) -> void {

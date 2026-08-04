@@ -1,0 +1,83 @@
+# Manufactured CTT system on ds^2 = 4 dr^2 + r^2 dOmega^2. In the
+# transported orthonormal frame, n^i = 2 nabla^i(r) = (1,0,0). The exact
+# fields are psi = 1 and W^i = w(r) n^i with
+# w = r (r-1)^2 (r-2)^2. If F = (r/2) d(w/r)/dr, then
+# (L W)^ij = 2 F n^i n^j - (2/3) F gammaU^ij and A_ij = (L W)_ij.
+initial_data CttCurvedBackground {
+  domain shell {
+    coordinates = spherical
+    topology = shell
+    resolution = [9]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+
+  geometry spherical_orthonormal {
+    metric = gamma
+    inverse_metric = gammaU
+    radial_scale = 2
+    tangential_scale = 1
+  }
+
+  unknown scalar psi
+  unknown vector W[i]
+  unknown symmetric con_tensor2 L[i,j]
+  unknown symmetric cov_tensor2 A[i,j]
+
+  # Rtilde = 3/(2 r^2), F = 2 r^4 - 9 r^3 + 13 r^2 - 6 r, and
+  # K = 7 r^4 - 36 r^3 + 65 r^2 - 48 r + 12. The final three terms
+  # are a manufactured matter source that makes psi = 1 exact.
+  equation scalar hamiltonian =
+      laplacian(psi)
+      - (3 / 16) * r^(-2) * psi
+      + (1 / 8) * contract(L[i,j] * A[i,j]) * psi^(-7)
+      - (1 / 12)
+          * (7 * r^4 - 36 * r^3 + 65 * r^2 - 48 * r + 12)^2
+          * psi^5
+      + (3 / 16) * r^(-2)
+      - (1 / 3) * (2 * r^4 - 9 * r^3 + 13 * r^2 - 6 * r)^2
+      + (1 / 12)
+          * (7 * r^4 - 36 * r^3 + 65 * r^2 - 48 * r + 12)^2
+
+  # D_i L^ij - 2/3 psi^6 D^j K = 0.
+  equation vector momentum[j] =
+      divergence(L[i,j])
+      - (2 / 3) * psi^6
+          * nabla^j(7 * r^4 - 36 * r^3 + 65 * r^2 - 48 * r + 12)
+
+  # L^ij = D^i W^j + D^j W^i - 2/3 gamma^ij D_k W^k.
+  equation con_tensor2 longitudinal[i,j] =
+      L[i,j]
+      - nabla^i(W[j])
+      - nabla^j(W[i])
+      + (2 / 3) * gammaU[i,j] * divergence(W[k])
+
+  equation cov_tensor2 lower_longitudinal[i,j] =
+      A[i,j] - contract(gamma[i,k] * gamma[j,l] * L[k,l])
+
+  boundary inner {
+    psi = 1
+    W[i] = 0
+    L[i,j] = 0
+    A[i,j] = 0
+  }
+
+  boundary outer {
+    psi = 1
+    W[i] = 0
+    L[i,j] = 0
+    A[i,j] = 0
+  }
+
+  seed psi = 0.9
+  seed W[i] = 2 * r * (r - 1)^2 * (r - 2)^2 * nabla^i(r)
+  seed L[i,j] = 0
+  seed A[i,j] = 0
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-11
+    max_iterations = 12
+  }
+}
