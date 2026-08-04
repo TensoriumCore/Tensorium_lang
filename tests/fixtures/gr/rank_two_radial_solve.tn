@@ -1,0 +1,47 @@
+# Component-aware rank-two regression problem. It exercises covariant,
+# contravariant, and mixed rank-two unknown layouts. Every tensor component has
+# a constant manufactured solution, while the transposed access couples the
+# off-diagonal component equations in the Newton Jacobian.
+initial_data RankTwoRadial {
+  domain shell {
+    coordinates = spherical
+    topology = shell
+    resolution = [7]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+
+  unknown cov_tensor2 A[i,j]
+  unknown con_tensor2 B[i,j]
+  unknown mixed_tensor(up=1,down=1) C[i,j]
+
+  equation cov_tensor2 covariant[i,j] =
+      laplacian(A[i,j]) + A[i,j] - A[j,i]
+  equation con_tensor2 contravariant[i,j] =
+      laplacian(B[i,j]) + B[i,j] - B[j,i]
+  equation mixed_tensor(up=1,down=1) mixed[i,j] =
+      laplacian(C[i,j])
+
+  boundary inner {
+    A[i,j] = 1
+    B[i,j] = 2
+    C[i,j] = 3
+  }
+
+  boundary outer {
+    A[i,j] = 1
+    B[i,j] = 2
+    C[i,j] = 3
+  }
+
+  seed A[i,j] = 0.25
+  seed B[i,j] = 0.5
+  seed C[i,j] = 0.75
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-11
+    max_iterations = 8
+  }
+}

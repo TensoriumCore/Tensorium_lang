@@ -88,8 +88,9 @@ struct CttBssnBuffers {
   std::array<double *, 3> shift{};
 };
 
-// Coupled scalar/rank-one radial constraint backend with Chebyshev-Lobatto
-// domains, optional compactified infinity, C0/C1 matching, and Newton solve.
+// Coupled radial constraint backend for scalar, rank-one, and rank-two
+// unknowns, with Chebyshev-Lobatto domains, optional compactified infinity,
+// C0/C1 matching, and a Newton solve.
 ConstraintSolution
 solveRadialConstraintProblem(const backend::ModuleIR &module,
                              const ConstraintSolveRequest &request = {});

@@ -492,15 +492,17 @@ buildComponentLayout(const backend::ConstraintProblemIR &problem) {
     const auto &equation = problem.equations[i];
     const std::size_t rank =
         static_cast<std::size_t>(unknown.tensorType.rank());
-    if (rank > 1)
-      fail("radial backend currently supports scalar and rank-one unknowns");
+    if (rank > 2)
+      fail("radial backend currently supports unknowns up to rank two");
     if (unknown.tensorType.up != equation.tensorType.up ||
         unknown.tensorType.down != equation.tensorType.down)
       fail("unknown '" + unknown.name +
            "' and its equation must have identical tensor variance");
     if (unknown.indices.size() != rank || equation.indices.size() != rank)
       fail("component layout rank does not match declared free indices");
-    const std::size_t componentCount = rank == 0 ? 1 : kSpatialComponentCount;
+    std::size_t componentCount = 1;
+    for (std::size_t index = 0; index < rank; ++index)
+      componentCount *= kSpatialComponentCount;
     layout.unknowns.push_back(
         {unknown.name, rank, componentCount, layout.totalComponents});
     layout.totalComponents += componentCount;
@@ -512,11 +514,25 @@ ComponentEnvironment
 makeComponentEnvironment(const std::vector<std::string> &indices,
                          std::size_t component) {
   ComponentEnvironment environment;
-  if (indices.empty())
+  if (indices.empty()) {
+    if (component != 0)
+      fail("scalar component index must be zero");
     return environment;
-  if (indices.size() != 1 || component >= kSpatialComponentCount)
-    fail("unsupported tensor component environment");
-  environment.emplace(indices.front(), component);
+  }
+
+  std::size_t componentCount = 1;
+  for (std::size_t index = 0; index < indices.size(); ++index)
+    componentCount *= kSpatialComponentCount;
+  if (component >= componentCount)
+    fail("tensor component is outside the declared rank");
+
+  for (std::size_t reverse = 0; reverse < indices.size(); ++reverse) {
+    const std::size_t index = indices.size() - 1 - reverse;
+    const std::size_t indexComponent = component % kSpatialComponentCount;
+    component /= kSpatialComponentCount;
+    if (!environment.emplace(indices[index], indexComponent).second)
+      fail("tensor component layout requires distinct free indices");
+  }
   return environment;
 }
 

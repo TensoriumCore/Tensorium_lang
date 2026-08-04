@@ -7,9 +7,9 @@ Tensorium now distinguishes two forms of initial data:
 - an **elliptic constraint problem**, described in the DSL and preserved in
   `ConstraintProblemIR` for spectral solver backends.
 
-The executable backend now solves scalar radial problems across multiple
-Chebyshev domains, including a compactified exterior domain. The full coupled
-tensor system remains under development.
+The executable backend now solves coupled scalar, rank-one, and rank-two radial
+problems across multiple Chebyshev domains, including a compactified exterior
+domain. Generic covariant tensor operators remain under development.
 
 ## Minimal example
 
@@ -118,8 +118,10 @@ The current numerical backend supports:
 
 - one or more spherical shell domains in declaration order;
 - an optional compactified final domain;
-- scalar and rank-one unknowns, paired with residuals of identical variance;
+- scalar, rank-one, and rank-two unknowns, paired with residuals of identical
+  variance;
 - three spatial components for each rank-one unknown;
+- nine row-major spatial components for each general rank-two unknown;
 - Chebyshev-Lobatto collocation;
 - the radial spherical Laplacian
   `d2/dr2 + (2/r) d/dr`;
@@ -383,12 +385,17 @@ independent angular fields. The reconstructed radial tensors can now be
 interpolated into full spherical or Cartesian evolution buffers, but the
 constraint solve itself remains spherically symmetric.
 
-## Rank-one component layout
+## Tensor component layout
 
-Rank-one equations preserve their free index through semantic analysis and
-IR lowering. The radial solver instantiates that index for components `0`,
-`1`, and `2`. Scalar boundary or seed expressions are broadcast to every
-component, which makes homogeneous vector data concise:
+Tensor equations preserve their free indices through semantic analysis and IR
+lowering. The radial solver instantiates each index with spatial components
+`0`, `1`, and `2`. Rank-one unknowns therefore have three components. General
+rank-two unknowns have nine components in row-major order,
+`component = 3*i + j`. This applies to `cov_tensor2`, `con_tensor2`, and
+`mixed_tensor(up=1,down=1)`.
+
+Scalar boundary or seed expressions are broadcast to every component, which
+makes homogeneous tensor data concise:
 
 ```tensorium
 unknown scalar psi
@@ -410,14 +417,27 @@ Run the component-layout regression with:
   ../tests/fixtures/gr/scalar_vector_radial_solve.tn
 ```
 
-The solution buffer for a rank-one unknown is component-major: all radial
-points for component `0`, followed by components `1` and `2`. The CLI reports
-both the point count per component and the total number of stored values.
+Run the rank-two regression problem with:
 
-At this stage `laplacian(W[i])` applies the scalar radial Laplacian to each
-component independently. It is not yet the covariant vector Laplacian in a
-spherical basis; connection terms and tensor contractions are the next
-geometric lowering step.
+```sh
+./tools/driver/Tensorium_cc --solve-constraints \
+  ../tests/fixtures/gr/rank_two_radial_solve.tn
+```
+
+It solves covariant, contravariant, and mixed rank-two equations together. The
+covariant and contravariant residuals also access the transposed component,
+which exercises cross-component entries in the automatic Newton Jacobian.
+
+Solution buffers are component-major: all radial points for component `0`,
+followed by all points for component `1`, and so on. The CLI reports both the
+point count per component and the total number of stored values.
+
+At this stage `laplacian(W[i])` and `laplacian(A[i,j])` apply the scalar radial
+Laplacian to each component independently. They are not yet covariant tensor
+Laplacians in a spherical basis. Rank-two storage is general and does not yet
+compress a declared symmetric tensor from nine to six components. Connection
+terms, contractions, and explicit tensor symmetry are the next geometric
+lowering steps.
 
 ## Pipeline status
 
@@ -428,13 +448,13 @@ constrained initial_data DSL
   -> ConstraintProblemIR
   -> multidomain radial maps and Chebyshev-Lobatto collocation [implemented]
   -> compactified exterior and C0/C1 matching [implemented]
-  -> coupled scalar/rank-one component layout and Jacobian [implemented]
+  -> coupled scalar/rank-one/rank-two layout and Jacobian [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] generic covariant contractions and rank-two unknowns
+  -> [next] generic covariant contractions and tensor symmetry metadata
 ```
 
 The physical target includes the 3+1 constraint equations

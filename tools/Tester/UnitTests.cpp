@@ -5616,6 +5616,61 @@ static bool testScalarVectorRadialConstraintSolve() {
   return true;
 }
 
+static bool testRankTwoRadialConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/rank_two_radial_solve.tn");
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module);
+  if (!solution.converged || solution.iterations != 1 ||
+      solution.unknownLayouts.size() != 3) {
+    std::cerr << "FAIL: rank-two radial solve did not converge as expected; "
+                 "iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+
+  struct ExpectedLayout {
+    const char *name;
+    std::size_t contravariantRank;
+    std::size_t covariantRank;
+    double value;
+  };
+  const std::array<ExpectedLayout, 3> expected = {
+      ExpectedLayout{"A", 0, 2, 1.0},
+      ExpectedLayout{"B", 2, 0, 2.0},
+      ExpectedLayout{"C", 1, 1, 3.0},
+  };
+
+  double maxError = 0.0;
+  for (std::size_t unknown = 0; unknown < expected.size(); ++unknown) {
+    const auto &layout = solution.unknownLayouts[unknown];
+    const auto &wanted = expected[unknown];
+    if (layout.name != wanted.name ||
+        layout.contravariantRank != wanted.contravariantRank ||
+        layout.covariantRank != wanted.covariantRank ||
+        layout.componentCount != 9 || layout.pointsPerComponent != 7) {
+      std::cerr << "FAIL: rank-two component layout is incorrect for "
+                << wanted.name << "\n";
+      return false;
+    }
+    const auto &values = solution.unknowns.at(wanted.name);
+    if (values.size() != 9 * layout.pointsPerComponent) {
+      std::cerr << "FAIL: rank-two flattened buffer size is incorrect for "
+                << wanted.name << "\n";
+      return false;
+    }
+    for (double value : values)
+      maxError = std::max(maxError, std::abs(value - wanted.value));
+  }
+  if (maxError > 1.0e-10) {
+    std::cerr << "FAIL: rank-two radial solution max error=" << maxError
+              << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testCttRadialVacuumConstraintSolve() {
   auto result = tensorium::api::parseAndValidateFile(
       "tests/fixtures/gr/ctt_radial_vacuum_solve.tn");
@@ -6241,6 +6296,8 @@ int main() {
        &testCoupledNonlinearRadialConstraintSolve},
       {"testScalarVectorRadialConstraintSolve",
        &testScalarVectorRadialConstraintSolve},
+      {"testRankTwoRadialConstraintSolve",
+       &testRankTwoRadialConstraintSolve},
       {"testCttRadialVacuumConstraintSolve",
        &testCttRadialVacuumConstraintSolve},
       {"testCttPhysicalGridHandoff", &testCttPhysicalGridHandoff},
