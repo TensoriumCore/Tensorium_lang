@@ -131,8 +131,8 @@ The current numerical backend supports:
 - algebraic nonlinearities, powers, pointwise tensor products, and Einstein
   contractions over one or two repeated spatial indices;
 - an optional fixed spherical-orthonormal background geometry, including
-  covariant derivatives, gradients, divergences, traces, and its scalar
-  Laplacian;
+  composable covariant derivatives, scalar gradients, divergences, traces,
+  and scalar/rank-one/rank-two rough Laplacians;
 - radial derivatives;
 - global `inner` and `outer` Dirichlet conditions;
 - automatic `C0` and `C1` matching at every declared interface;
@@ -474,14 +474,27 @@ modes; tangential components are interpreted in a transported orthonormal
 frame, and the manufactured contractions below are valid in that reduction.
 
 Within this geometry, `nabla_i` and `nabla^i` execute the connection corrections
-for directly indexed scalar, rank-one, and rank-two unknowns or geometry
-fields. `gradient`, `divergence`, `trace`, and contractions compose with those
-operations and participate in automatic differentiation. The scalar Laplacian
-is
+for scalar and tensor expressions whose arguments have rank at most two. The
+result may be differentiated again, so Hessians and derivatives of tensor
+products or contractions remain covariant. Scalar `gradient`, `divergence`,
+`trace`, and contractions compose with those operations and participate in
+automatic differentiation. The scalar Laplacian is
 
 ```text
 Delta f = 1/(A B^2 r^2) d/dr [(B^2 r^2/A) df/dr].
 ```
+
+For a rank-one or rank-two tensor, `laplacian(T)` is the connection-aware rough
+Laplacian
+
+```text
+D^a D_a T = sum_a [D_(e_a) D_(e_a) T - D_(D_(e_a) e_a) T].
+```
+
+The evaluator differentiates both the tensor-slot connection terms and the
+covariant slot introduced by the first derivative. It therefore includes
+radial derivatives of the connection and is not a component-wise scalar
+shortcut.
 
 Run the manufactured geometry regression with:
 
@@ -493,6 +506,19 @@ Run the manufactured geometry regression with:
 For `A=2` and `B=1`, it verifies `Delta(r^2)=3/2`,
 `T_ij=r delta_ij`, `trace(T)=3r`, and
 `nabla^i T_ij=(1/2,0,0)`.
+
+Run the second-order covariant regression with:
+
+```sh
+./tools/driver/Tensorium_cc --solve-constraints \
+  ../tests/fixtures/gr/covariant_tensor_laplacian_radial_solve.tn
+```
+
+Writing `n_i = 2 nabla_i(r)`, its exact fields are
+`V_i = r^2 n_i`, `T_ij = r^2 n_i n_j`, and
+`Q_ij = D_i D_j(r^2) = delta_ij/2`. It verifies
+`D^a D_a V_i = 2 nabla_i(r)` and
+`D^a D_a T_ij = delta_ij/2`.
 
 Scalar boundary or seed expressions are broadcast to every component, which
 makes homogeneous tensor data concise:
@@ -547,9 +573,8 @@ point count per component and the total number of stored values.
 
 Without a `geometry` block, `laplacian(W[i])` and `laplacian(A[i,j])` retain the
 legacy component-wise scalar radial behavior. With spherical-orthonormal
-geometry, the scalar Laplacian and covariant first derivatives are geometric,
-but tensor Laplacians are rejected until the rough-Laplacian connection terms
-are implemented.
+geometry, scalar, vector, and rank-two Laplacians include the frame and
+connection terms described above.
 
 ## Pipeline status
 
@@ -564,12 +589,13 @@ constrained initial_data DSL
   -> compact six-component symmetric rank-two storage [implemented]
   -> algebraic Einstein tensor contractions [implemented]
   -> fixed spherical-orthonormal geometry and covariant first derivatives [implemented]
+  -> composable covariant derivatives and rank-one/rank-two rough Laplacians [implemented]
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] covariant tensor Laplacians and non-flat CTT residuals
+  -> [next] curved-background longitudinal CTT operator and residuals
 ```
 
 The physical target includes the 3+1 constraint equations

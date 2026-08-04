@@ -5833,6 +5833,63 @@ static bool testCovariantGeometryRadialConstraintSolve() {
   return true;
 }
 
+static bool testCovariantTensorLaplacianRadialConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/covariant_tensor_laplacian_radial_solve.tn");
+  auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module);
+  if (!solution.converged || solution.iterations != 1 ||
+      solution.residualNorm > 1.0e-10 ||
+      solution.unknownLayouts.size() != 3) {
+    std::cerr << "FAIL: covariant tensor-laplacian solve did not converge as "
+                 "expected; iterations="
+              << solution.iterations
+              << " residual=" << solution.residualNorm << "\n";
+    return false;
+  }
+
+  const auto &coordinates = solution.coordinates;
+  const auto &vector = solution.unknowns.at("V");
+  const auto &tensor = solution.unknowns.at("T");
+  const auto &hessian = solution.unknowns.at("Q");
+  if (coordinates.size() != 9 || vector.size() != 27 ||
+      tensor.size() != 54 || hessian.size() != 54) {
+    std::cerr << "FAIL: covariant tensor-laplacian layout is incorrect\n";
+    return false;
+  }
+
+  double maxError = 0.0;
+  for (std::size_t point = 0; point < coordinates.size(); ++point) {
+    const double radiusSquared = coordinates[point] * coordinates[point];
+    for (std::size_t component = 0; component < 3; ++component) {
+      const double expected = component == 0 ? radiusSquared : 0.0;
+      maxError = std::max(
+          maxError,
+          std::abs(vector[component * coordinates.size() + point] - expected));
+    }
+    for (std::size_t component = 0; component < 6; ++component) {
+      const double expectedTensor = component == 0 ? radiusSquared : 0.0;
+      const bool diagonal = component == 0 || component == 3 || component == 5;
+      const double expectedHessian = diagonal ? 0.5 : 0.0;
+      maxError = std::max(
+          maxError,
+          std::abs(tensor[component * coordinates.size() + point] -
+                   expectedTensor));
+      maxError = std::max(
+          maxError,
+          std::abs(hessian[component * coordinates.size() + point] -
+                   expectedHessian));
+    }
+  }
+  if (maxError > 1.0e-10) {
+    std::cerr << "FAIL: covariant tensor-laplacian manufactured solution max "
+                 "error="
+              << maxError << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testConstraintGeometryDiagnostics() {
   const std::string missingScale = R"(
 initial_data MissingGeometryScale {
@@ -5984,37 +6041,6 @@ initial_data InvalidFiniteGeometryScale {
     }
   }
 
-  const std::string tensorLaplacian = R"(
-initial_data InvalidGeometryTensorLaplacian {
-  domain shell { coordinates = spherical topology = shell resolution = [5]
-    basis = chebyshev bounds = [1,2] }
-  geometry spherical_orthonormal { metric = gamma inverse_metric = gammaU
-    radial_scale = 1 tangential_scale = 1 }
-  unknown symmetric cov_tensor2 A[i,j]
-  equation cov_tensor2 tensor_equation[i,j] = laplacian(A[i,j])
-  boundary inner { A[i,j] = 0 }
-  boundary outer { A[i,j] = 0 }
-  seed A[i,j] = 0
-  solve { nonlinear = newton linear = direct tolerance = 1e-10
-    max_iterations = 2 }
-}
-)";
-  try {
-    auto module =
-        buildModuleFromSource(tensorLaplacian, CompilationMode::Executable);
-    validation::canonicalizeDifferentialIR(module);
-    validation::canonicalizeEinsteinIR(module);
-    (void)tensorium::solver::solveRadialConstraintProblem(module);
-    std::cerr << "FAIL: geometry-aware tensor laplacian was accepted\n";
-    return false;
-  } catch (const std::exception &exception) {
-    if (std::string(exception.what()).find(
-            "tensor laplacian is not executable") == std::string::npos) {
-      std::cerr << "FAIL: unexpected tensor laplacian diagnostic: "
-                << exception.what() << "\n";
-      return false;
-    }
-  }
   return true;
 }
 
@@ -6651,6 +6677,8 @@ int main() {
        &testTensorContractionRadialConstraintSolve},
       {"testCovariantGeometryRadialConstraintSolve",
        &testCovariantGeometryRadialConstraintSolve},
+      {"testCovariantTensorLaplacianRadialConstraintSolve",
+       &testCovariantTensorLaplacianRadialConstraintSolve},
       {"testConstraintGeometryDiagnostics",
        &testConstraintGeometryDiagnostics},
       {"testCttRadialVacuumConstraintSolve",

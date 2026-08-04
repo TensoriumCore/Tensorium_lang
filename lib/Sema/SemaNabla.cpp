@@ -521,10 +521,9 @@ SemanticAnalyzer::transformNablaCall(const CallExpr &call,
     TensorTypeChecker geometryChecker(true);
     const TensorType argumentType =
         geometryChecker.infer(out->args.front().get());
-    if (!argumentType.isScalar() &&
-        !dynamic_cast<const IndexedVar *>(out->args.front().get())) {
+    if (argumentType.rank() > 2) {
       throw std::runtime_error(
-          "nabla on non-scalar tensor requires an indexed tensor argument");
+          "nabla geometry backend supports arguments through rank two");
     }
     geometryChecker.infer(out.get());
     return out;

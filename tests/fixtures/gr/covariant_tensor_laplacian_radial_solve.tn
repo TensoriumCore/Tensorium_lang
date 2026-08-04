@@ -1,0 +1,54 @@
+# Manufactured second-order covariant regression in
+# ds^2 = 4 dr^2 + r^2 dOmega^2. In the transported orthonormal frame,
+# n_i = 2 nabla_i(r) = (1,0,0). The exact fields are
+# V_i = r^2 n_i, T_ij = r^2 n_i n_j, and Q_ij = 1/2 delta_ij.
+initial_data CovariantTensorLaplacianRadial {
+  domain shell {
+    coordinates = spherical
+    topology = shell
+    resolution = [9]
+    basis = chebyshev
+    bounds = [1, 2]
+  }
+
+  geometry spherical_orthonormal {
+    metric = gamma
+    inverse_metric = gammaU
+    radial_scale = 2
+    tangential_scale = 1
+  }
+
+  unknown covector V[i]
+  unknown symmetric cov_tensor2 T[i,j]
+  unknown symmetric cov_tensor2 Q[i,j]
+
+  equation covector vector_rough_laplacian[i] =
+      laplacian(V[i]) - 2 * nabla_i(r)
+  equation cov_tensor2 tensor_rough_laplacian[i,j] =
+      laplacian(T[i,j]) - 0.5 * gamma[i,j]
+  equation cov_tensor2 composed_scalar_hessian[i,j] =
+      Q[i,j] - nabla_i(2 * r * nabla_j(r))
+
+  boundary inner {
+    V[i] = 2 * r^2 * nabla_i(r)
+    T[i,j] = 4 * r^2 * nabla_i(r) * nabla_j(r)
+    Q[i,j] = 0.5 * gamma[i,j]
+  }
+
+  boundary outer {
+    V[i] = 2 * r^2 * nabla_i(r)
+    T[i,j] = 4 * r^2 * nabla_i(r) * nabla_j(r)
+    Q[i,j] = 0.5 * gamma[i,j]
+  }
+
+  seed V[i] = 0
+  seed T[i,j] = 0
+  seed Q[i,j] = 0
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-11
+    max_iterations = 8
+  }
+}

@@ -293,6 +293,263 @@ double frameConnection(const RadialGeometry &geometry, std::size_t output,
   return 0.0;
 }
 
+struct TensorSlot {
+  std::string index;
+  bool contravariant = false;
+};
+
+std::vector<TensorSlot> collectTensorSlots(const backend::ExprIR *expr) {
+  using backend::ExprIR;
+  if (!expr)
+    fail("cannot collect tensor slots from a null expression");
+
+  switch (expr->kind) {
+  case ExprIR::Kind::Number:
+    return {};
+  case ExprIR::Kind::Var: {
+    const auto *variable = static_cast<const backend::VarIR *>(expr);
+    std::vector<TensorSlot> slots;
+    slots.reserve(variable->tensorIndexNames.size());
+    for (std::size_t slot = 0; slot < variable->tensorIndexNames.size();
+         ++slot) {
+      slots.push_back(
+          {variable->tensorIndexNames[slot],
+           slot < static_cast<std::size_t>(variable->exprType.up)});
+    }
+    return slots;
+  }
+  case ExprIR::Kind::Binary: {
+    const auto *binary = static_cast<const backend::BinaryIR *>(expr);
+    auto lhs = collectTensorSlots(binary->lhs.get());
+    auto rhs = collectTensorSlots(binary->rhs.get());
+    const auto rank = static_cast<std::size_t>(expr->exprType.rank());
+    if (lhs.size() == rank)
+      return lhs;
+    if (rhs.size() == rank)
+      return rhs;
+    if (rank == 0)
+      return {};
+    fail("cannot determine the free tensor slots of a binary expression");
+  }
+  case ExprIR::Kind::Call: {
+    const auto *call = static_cast<const backend::CallIR *>(expr);
+    if (expr->exprType.rank() == 0)
+      return {};
+    if (call->args.empty())
+      fail("tensor call has no argument from which to recover indices");
+    return collectTensorSlots(call->args.front().get());
+  }
+  case ExprIR::Kind::TensorProduct: {
+    const auto *product = static_cast<const backend::TensorProductIR *>(expr);
+    auto slots = collectTensorSlots(product->lhs.get());
+    auto rhs = collectTensorSlots(product->rhs.get());
+    slots.insert(slots.end(), rhs.begin(), rhs.end());
+    return slots;
+  }
+  case ExprIR::Kind::Contraction: {
+    const auto *contraction =
+        static_cast<const backend::ContractionIR *>(expr);
+    auto slots = collectTensorSlots(contraction->in.get());
+    slots.erase(
+        std::remove_if(slots.begin(), slots.end(), [&](const TensorSlot &slot) {
+          return std::find(contraction->summedIndices.begin(),
+                           contraction->summedIndices.end(),
+                           slot.index) != contraction->summedIndices.end();
+        }),
+        slots.end());
+    return slots;
+  }
+  case ExprIR::Kind::IndexRename: {
+    const auto *rename = static_cast<const backend::IndexRenameIR *>(expr);
+    auto slots = collectTensorSlots(rename->in.get());
+    for (auto &slot : slots)
+      if (slot.index == rename->from)
+        slot.index = rename->to;
+    return slots;
+  }
+  case ExprIR::Kind::IndexPermute: {
+    const auto *permute = static_cast<const backend::IndexPermuteIR *>(expr);
+    return collectTensorSlots(permute->in.get());
+  }
+  case ExprIR::Kind::Trace: {
+    const auto *trace = static_cast<const backend::TraceIR *>(expr);
+    auto slots = collectTensorSlots(trace->in.get());
+    slots.erase(
+        std::remove_if(slots.begin(), slots.end(), [&](const TensorSlot &slot) {
+          return std::find(trace->tracedIndices.begin(),
+                           trace->tracedIndices.end(),
+                           slot.index) != trace->tracedIndices.end();
+        }),
+        slots.end());
+    return slots;
+  }
+  case ExprIR::Kind::PartialDerivative: {
+    const auto *derivative =
+        static_cast<const backend::PartialDerivativeIR *>(expr);
+    auto slots = collectTensorSlots(derivative->in.get());
+    slots.push_back({derivative->coordIndex, false});
+    return slots;
+  }
+  case ExprIR::Kind::CovariantDerivative: {
+    const auto *derivative =
+        static_cast<const backend::CovariantDerivativeIR *>(expr);
+    auto slots = collectTensorSlots(derivative->in.get());
+    slots.push_back({derivative->derivIndex, derivative->contravariant});
+    return slots;
+  }
+  case ExprIR::Kind::Divergence: {
+    const auto *divergence = static_cast<const backend::DivergenceIR *>(expr);
+    auto slots = collectTensorSlots(divergence->in.get());
+    slots.erase(
+        std::remove_if(slots.begin(), slots.end(), [&](const TensorSlot &slot) {
+          return slot.index == divergence->contractedIndex;
+        }),
+        slots.end());
+    return slots;
+  }
+  case ExprIR::Kind::Gradient:
+    fail("gradient must be canonicalized before tensor slot evaluation");
+  }
+  fail("unreachable tensor slot collection state");
+}
+
+void validateFreeTensorSlots(const backend::ExprIR *expr,
+                             const std::vector<TensorSlot> &slots) {
+  const auto expected = static_cast<std::size_t>(expr->exprType.rank());
+  if (slots.size() != expected) {
+    fail("tensor expression exposes " + std::to_string(slots.size()) +
+         " free component slots but its type has rank " +
+         std::to_string(expected));
+  }
+  for (std::size_t slot = 0; slot < slots.size(); ++slot) {
+    if (slots[slot].index.empty())
+      fail("tensor expression contains an unnamed free component slot");
+    for (std::size_t previous = 0; previous < slot; ++previous) {
+      if (slots[previous].index == slots[slot].index) {
+        fail("tensor expression has repeated free index '" +
+             slots[slot].index + "'");
+      }
+    }
+  }
+}
+
+DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
+                  const UnknownState &unknowns,
+                  const ComponentEnvironment &componentEnvironment,
+                  const RadialGeometry *geometry,
+                  const std::unordered_map<std::string, double> &parameters);
+
+DualGrid evalCovariantDerivative(
+    const backend::ExprIR *input, std::size_t direction,
+    const RadialGrid &grid, const UnknownState &unknowns,
+    const ComponentEnvironment &componentEnvironment,
+    const RadialGeometry &geometry,
+    const std::unordered_map<std::string, double> &parameters) {
+  DualGrid value = evalExpr(input, grid, unknowns, componentEnvironment,
+                            &geometry, parameters);
+  DualGrid result = applyFrameDerivative(value, grid, geometry, direction);
+  auto slots = collectTensorSlots(input);
+  validateFreeTensorSlots(input, slots);
+
+  for (const auto &slot : slots) {
+    auto slotComponentIt = componentEnvironment.find(slot.index);
+    if (slotComponentIt == componentEnvironment.end())
+      fail("unbound covariant tensor slot index '" + slot.index + "'");
+    const std::size_t slotComponent = slotComponentIt->second;
+
+    for (std::size_t replacement = 0;
+         replacement < kSpatialComponentCount; ++replacement) {
+      ComponentEnvironment shiftedEnvironment = componentEnvironment;
+      shiftedEnvironment[slot.index] = replacement;
+      DualGrid shifted = evalExpr(input, grid, unknowns, shiftedEnvironment,
+                                  &geometry, parameters);
+      for (std::size_t point = 0; point < grid.size; ++point) {
+        const double coefficient =
+            slot.contravariant
+                ? frameConnection(geometry, slotComponent, replacement,
+                                  direction, point)
+                : -frameConnection(geometry, replacement, slotComponent,
+                                   direction, point);
+        result.value[point] += coefficient * shifted.value[point];
+        result.tangent[point] += coefficient * shifted.tangent[point];
+      }
+    }
+  }
+  return result;
+}
+
+DualGrid applyGeometryRoughLaplacian(
+    const backend::ExprIR *input, const RadialGrid &grid,
+    const UnknownState &unknowns,
+    const ComponentEnvironment &componentEnvironment,
+    const RadialGeometry &geometry,
+    const std::unordered_map<std::string, double> &parameters) {
+  auto inputSlots = collectTensorSlots(input);
+  validateFreeTensorSlots(input, inputSlots);
+  DualGrid result = constantGrid(grid.size, 0.0);
+
+  for (std::size_t direction = 0; direction < kSpatialComponentCount;
+       ++direction) {
+    DualGrid first = evalCovariantDerivative(
+        input, direction, grid, unknowns, componentEnvironment, geometry,
+        parameters);
+    DualGrid second = applyFrameDerivative(first, grid, geometry, direction);
+
+    // The outer derivative acts on every original tensor slot of the first
+    // derivative.
+    for (const auto &slot : inputSlots) {
+      auto slotComponentIt = componentEnvironment.find(slot.index);
+      if (slotComponentIt == componentEnvironment.end())
+        fail("unbound rough-laplacian tensor slot index '" + slot.index +
+             "'");
+      const std::size_t slotComponent = slotComponentIt->second;
+      for (std::size_t replacement = 0;
+           replacement < kSpatialComponentCount; ++replacement) {
+        ComponentEnvironment shiftedEnvironment = componentEnvironment;
+        shiftedEnvironment[slot.index] = replacement;
+        DualGrid shiftedFirst = evalCovariantDerivative(
+            input, direction, grid, unknowns, shiftedEnvironment, geometry,
+            parameters);
+        for (std::size_t point = 0; point < grid.size; ++point) {
+          const double coefficient =
+              slot.contravariant
+                  ? frameConnection(geometry, slotComponent, replacement,
+                                    direction, point)
+                  : -frameConnection(geometry, replacement, slotComponent,
+                                     direction, point);
+          second.value[point] += coefficient * shiftedFirst.value[point];
+          second.tangent[point] +=
+              coefficient * shiftedFirst.tangent[point];
+        }
+      }
+    }
+
+    // The first derivative contributes one additional covariant slot. This
+    // term is -Gamma^b_{a a} D_b and supplies both the scalar radial measure
+    // term and the derivative-index connection for tensors.
+    for (std::size_t replacement = 0;
+         replacement < kSpatialComponentCount; ++replacement) {
+      DualGrid shiftedFirst = evalCovariantDerivative(
+          input, replacement, grid, unknowns, componentEnvironment, geometry,
+          parameters);
+      for (std::size_t point = 0; point < grid.size; ++point) {
+        const double coefficient =
+            -frameConnection(geometry, replacement, direction, direction,
+                             point);
+        second.value[point] += coefficient * shiftedFirst.value[point];
+        second.tangent[point] +=
+            coefficient * shiftedFirst.tangent[point];
+      }
+    }
+
+    for (std::size_t point = 0; point < grid.size; ++point) {
+      result.value[point] += second.value[point];
+      result.tangent[point] += second.tangent[point];
+    }
+  }
+  return result;
+}
+
 DualGrid applyRadialDerivative(const DualGrid &input, const RadialGrid &grid) {
   return {applyMatrix(grid.firstDerivative, grid.size, input.value),
           applyMatrix(grid.firstDerivative, grid.size, input.tangent)};
@@ -458,15 +715,20 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
     const auto *call = static_cast<const backend::CallIR *>(expr);
     if (call->args.size() != 1)
       fail("radial call '" + call->callee + "' expects one argument");
+    if (call->callee == "laplacian" && geometry && geometry->enabled) {
+      const int rank = call->args[0]->exprType.rank();
+      if (rank > 2)
+        fail("rough laplacian supports tensor arguments through rank two");
+      if (rank != 0)
+        return applyGeometryRoughLaplacian(
+            call->args[0].get(), grid, unknowns, componentEnvironment,
+            *geometry, parameters);
+    }
     DualGrid argument = evalExpr(call->args[0].get(), grid, unknowns,
                                  componentEnvironment, geometry, parameters);
     if (call->callee == "laplacian") {
-      if (geometry && geometry->enabled) {
-        if (call->args[0]->exprType.rank() != 0)
-          fail("tensor laplacian is not executable with spherical-orthonormal "
-               "geometry");
+      if (geometry && geometry->enabled)
         return applyGeometryScalarLaplacian(argument, grid, *geometry);
-      }
       return applyRadialLaplacian(argument, grid);
     }
     if (call->callee == "radial_derivative")
@@ -583,51 +845,9 @@ DualGrid evalExpr(const backend::ExprIR *expr, const RadialGrid &grid,
     if (directionIt == componentEnvironment.end())
       fail("unbound covariant derivative index '" + derivative->derivIndex +
            "'");
-    const std::size_t direction = directionIt->second;
-    DualGrid input = evalExpr(derivative->in.get(), grid, unknowns,
-                              componentEnvironment, geometry, parameters);
-    DualGrid result = applyFrameDerivative(input, grid, *geometry, direction);
-    if (derivative->in->exprType.rank() == 0)
-      return result;
-
-    const auto *variable =
-        dynamic_cast<const backend::VarIR *>(derivative->in.get());
-    if (!variable ||
-        variable->tensorIndexNames.size() !=
-            static_cast<std::size_t>(derivative->in->exprType.rank())) {
-      fail("covariant derivative currently requires a directly indexed tensor "
-           "unknown or geometry field");
-    }
-
-    for (std::size_t slot = 0; slot < variable->tensorIndexNames.size();
-         ++slot) {
-      const auto &slotIndex = variable->tensorIndexNames[slot];
-      auto slotComponentIt = componentEnvironment.find(slotIndex);
-      if (slotComponentIt == componentEnvironment.end())
-        fail("unbound covariant tensor slot index '" + slotIndex + "'");
-      const std::size_t slotComponent = slotComponentIt->second;
-      const bool slotIsContravariant =
-          slot < static_cast<std::size_t>(derivative->in->exprType.up);
-
-      for (std::size_t replacement = 0;
-           replacement < kSpatialComponentCount; ++replacement) {
-        ComponentEnvironment shiftedEnvironment = componentEnvironment;
-        shiftedEnvironment[slotIndex] = replacement;
-        DualGrid shifted = evalExpr(derivative->in.get(), grid, unknowns,
-                                    shiftedEnvironment, geometry, parameters);
-        for (std::size_t point = 0; point < grid.size; ++point) {
-          const double coefficient =
-              slotIsContravariant
-                  ? frameConnection(*geometry, slotComponent, replacement,
-                                    direction, point)
-                  : -frameConnection(*geometry, replacement, slotComponent,
-                                     direction, point);
-          result.value[point] += coefficient * shifted.value[point];
-          result.tangent[point] += coefficient * shifted.tangent[point];
-        }
-      }
-    }
-    return result;
+    return evalCovariantDerivative(
+        derivative->in.get(), directionIt->second, grid, unknowns,
+        componentEnvironment, *geometry, parameters);
   }
   case ExprIR::Kind::IndexRename:
   case ExprIR::Kind::IndexPermute:

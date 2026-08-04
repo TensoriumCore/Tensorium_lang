@@ -172,6 +172,7 @@ CONSTRAINT_SOLVE_TESTS=(
   "tests/fixtures/gr/scalar_vector_radial_solve.tn|22|2|3|mass=1"
   "tests/fixtures/gr/tensor_contraction_radial_solve.tn|7|1|2|mass=1"
   "tests/fixtures/gr/covariant_geometry_radial_solve.tn|7|1|1|mass=1"
+  "tests/fixtures/gr/covariant_tensor_laplacian_radial_solve.tn|9|1|1|mass=1"
   "tests/fixtures/gr/ctt_radial_vacuum_solve.tn|50|2|4|amplitude=0.2"
 )
 
@@ -526,8 +527,8 @@ for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
     cat "$OUT_FILE"
     exit 1
   fi
-  if ! grep -q "unknown=psi points=$expected_points" "$OUT_FILE"; then
-    echo "ERROR: expected $expected_points-point psi solution for $f"
+  if ! grep -Eq "unknown=[^ ]+ points=$expected_points" "$OUT_FILE"; then
+    echo "ERROR: expected a $expected_points-point unknown solution for $f"
     cat "$OUT_FILE"
     exit 1
   fi
@@ -549,6 +550,14 @@ for spec in "${CONSTRAINT_SOLVE_TESTS[@]}"; do
      { ! grep -q "unknown=T points=7 components=6 values=42" "$OUT_FILE" ||
        ! grep -q "unknown=V points=7 components=3 values=21" "$OUT_FILE"; }; then
     echo "ERROR: expected covariant geometry tensor solutions for $f"
+    cat "$OUT_FILE"
+    exit 1
+  fi
+  if [[ "$f" == *"covariant_tensor_laplacian_radial_solve.tn"* ]] &&
+     { ! grep -q "unknown=V points=9 components=3 values=27" "$OUT_FILE" ||
+       ! grep -q "unknown=T points=9 components=6 values=54" "$OUT_FILE" ||
+       ! grep -q "unknown=Q points=9 components=6 values=54" "$OUT_FILE"; }; then
+    echo "ERROR: expected covariant rough-laplacian solutions for $f"
     cat "$OUT_FILE"
     exit 1
   fi
