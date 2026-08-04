@@ -336,20 +336,20 @@ A_tilde_ij      = chi (K_ij - gamma_ij K/3).
 ```
 
 The resulting conformal metric has unit determinant and `A_tilde_ij` is
-trace-free with respect to its inverse. `CttBssnBuffers` uses the generated
-kernel's structure-of-arrays, component-major layout, so its buffers can be
-passed directly to a Tensorium RHS kernel. The conversion currently requires
-a Cartesian target grid; spherical BSSN needs a reference-metric formulation
-and is not approximated by this API.
+trace-free with respect to its inverse. `CttBssnBuffers` uses a
+structure-of-arrays, component-major layout suitable for transfer into an
+external evolution code. The conversion currently requires a Cartesian target
+grid; spherical BSSN needs a reference-metric formulation and is not
+approximated by this API.
 
 `BssnGaugeSeed` supplies the initial lapse and shift when their optional output
 buffers are present. These are explicit gauge choices rather than results of
 the elliptic CTT solve.
 
-A single DSL module may now contain both the constraint `initial_data` block
-and an `evolution` block. Constraint equations still execute through the
-spectral solver, while the evolution block lowers to MLIR and LLVM normally.
-For example, from `build`:
+A single DSL module may also contain both the constraint `initial_data` block
+and an `evolution` block. Constraint equations execute through the spectral
+solver, while the evolution block can still lower to MLIR and LLVM for
+verification. For example, from `build`:
 
 ```sh
 ./tools/driver/Tensorium_cc \
@@ -361,7 +361,14 @@ For example, from `build`:
 This emits `tensorium_rhs_grid_affine` after solving the same module's CTT
 problem. The generated analytic initialization entry point is not the
 constraint solver: a host must call `solveRadialConstraintProblem` followed by
-`initializeBssnFromRadialCtt`, then pass those buffers to the generated RHS.
+`initializeBssnFromRadialCtt`.
+
+Production time evolution is intentionally outside the constraint backend.
+An external solver should copy or bind the resulting BSSN buffers into its own
+grid storage and apply its own boundary conditions, gauge evolution,
+time-integration scheme, and mesh-refinement policy. The generated Tensorium
+RHS path is an optional verification path, not the required production
+evolution engine.
 
 This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
 interval under spherical symmetry and a conformally flat ansatz. It is not yet
@@ -420,7 +427,7 @@ constrained initial_data DSL
   -> radial vacuum CTT Hamiltonian-momentum system [implemented subset]
   -> reconstruct and export physical gamma_ij and K_ij profiles [implemented]
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
-  -> initialize Cartesian BSSN buffers and lower the same module's RHS [implemented]
+  -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
   -> [next] generic covariant contractions and rank-two unknowns
 ```
