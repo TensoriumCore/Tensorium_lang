@@ -9,7 +9,8 @@ Tensorium now distinguishes two forms of initial data:
 
 The executable backend now solves coupled scalar, rank-one, and rank-two radial
 problems across multiple Chebyshev domains, including a compactified exterior
-domain. Generic covariant tensor operators remain under development.
+domain. It also supports regular scalar problems on a spherical ball containing
+the origin. Generic covariant tensor operators remain under development.
 
 ## Minimal example
 
@@ -84,7 +85,7 @@ A constraint-only problem does not require a `simulation` block: its domains
 carry their own geometry and resolution. Time evolution still requires
 `simulation`.
 
-Finite mapped domains provide their two physical bounds:
+Finite shell domains provide their two physical bounds:
 
 ```tensorium
 domain exterior {
@@ -93,6 +94,18 @@ domain exterior {
   resolution = [49]
   basis = chebyshev
   bounds = [1, 20]
+}
+```
+
+A spherical ball contains the origin and provides only its outer radius:
+
+```tensorium
+domain interior {
+  coordinates = spherical
+  topology = ball
+  resolution = [17]
+  basis = chebyshev
+  bounds = [2]
 }
 ```
 
@@ -116,7 +129,8 @@ point is exactly `r = infinity`.
 
 The current numerical backend supports:
 
-- one or more spherical shell domains in declaration order;
+- an optional spherical ball as the first domain, followed by zero or more
+  spherical shells in declaration order;
 - an optional compactified final domain;
 - scalar, rank-one, and rank-two unknowns, paired with residuals of identical
   variance;
@@ -136,11 +150,45 @@ The current numerical backend supports:
 - curved-background longitudinal CTT, momentum-divergence, and sourced
   Hamiltonian residuals assembled directly from those tensor primitives;
 - radial derivatives;
-- global `inner` and `outer` Dirichlet conditions;
+- global `inner` and `outer` Dirichlet conditions for shell-only layouts;
+- an origin radial-derivative condition and an outer Dirichlet condition for
+  layouts beginning with a ball;
 - automatic `C0` and `C1` matching at every declared interface;
 - forward-mode automatic differentiation of the complete coupled residual,
   including off-diagonal Jacobian blocks;
 - damped Newton iteration and a pivoted dense linear solve.
+
+### Regular scalar ball domains
+
+For a layout whose first domain has `topology = ball`, the left boundary is
+named `origin`. Its assignment is a radial-derivative condition, not a value
+condition:
+
+```tensorium
+boundary origin {
+  u = 0  # du/dr = 0 at r = 0
+}
+```
+
+The backend evaluates the regular spherical-scalar limit
+`laplacian(u)(0) = 3 * d2u/dr2(0)` instead of dividing by `r`. The current ball
+implementation is intentionally limited to scalar unknowns on a flat
+background. Rank-one/rank-two regularity, a nontrivial background geometry,
+and expressions that contain their own explicit singular factors such as
+`1/r` are rejected or remain outside this subset.
+
+Run the manufactured regular Poisson problem from `build`:
+
+```sh
+./tools/driver/Tensorium_cc \
+  --solve-constraints --param source=6 \
+  ../tests/fixtures/gr/regular_ball_poisson_solve.tn
+```
+
+It solves `laplacian(u) = source` on `0 <= r <= 2`, with `u'(0) = 0` and
+`u(2) = 2*source/3`. The exact solution is
+`u(r) = source*r^2/6`; the regression checks every collocation value, including
+the origin.
 
 Run the Brill-Lindquist radial validation problem from `build`:
 
@@ -735,6 +783,7 @@ constrained initial_data DSL
   -> unknown/residual/boundary/seed analysis
   -> ConstraintProblemIR
   -> multidomain radial maps and Chebyshev-Lobatto collocation [implemented]
+  -> regular scalar ball domain and origin Laplacian limit [implemented subset]
   -> compactified exterior and C0/C1 matching [implemented]
   -> coupled scalar/rank-one/rank-two layout and Jacobian [implemented]
   -> compact six-component symmetric rank-two storage [implemented]
@@ -749,7 +798,7 @@ constrained initial_data DSL
   -> interpolate profiles into spherical or Cartesian evolution buffers [implemented]
   -> initialize Cartesian BSSN buffers for external evolution [implemented]
   -> damped Newton and dense linear solve [implemented subset]
-  -> [next] regular ball domains and general matter-source declarations
+  -> [next] general matter-source declarations and regular tensor fields at the origin
 ```
 
 The physical target includes the 3+1 constraint equations

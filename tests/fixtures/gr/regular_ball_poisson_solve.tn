@@ -1,0 +1,34 @@
+# Manufactured scalar Poisson problem on a spherical ball including r = 0.
+# The exact regular solution is u(r) = source * r^2 / 6.
+params { source }
+
+initial_data RegularBallPoisson {
+  domain interior {
+    coordinates = spherical
+    topology = ball
+    resolution = [17]
+    basis = chebyshev
+    bounds = [2]
+  }
+
+  unknown scalar u
+  equation scalar poisson = laplacian(u) - source
+
+  # On a ball, an origin assignment prescribes the radial derivative.
+  boundary origin {
+    u = 0
+  }
+
+  boundary outer {
+    u = source * 2 / 3
+  }
+
+  seed u = 1
+
+  solve {
+    nonlinear = newton
+    linear = direct
+    tolerance = 1e-11
+    max_iterations = 4
+  }
+}

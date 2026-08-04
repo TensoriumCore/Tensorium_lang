@@ -106,10 +106,10 @@ struct CttBssnBuffers {
 
 // Coupled radial constraint backend for scalar, rank-one, and rank-two
 // unknowns, including compact symmetric rank-two layouts, with
-// Chebyshev-Lobatto domains, optional compactified infinity, C0/C1 matching,
-// optional fixed spherical-orthonormal background geometry, composable
-// covariant derivatives, rank-one/rank-two rough Laplacians, and a Newton
-// solve.
+// Chebyshev-Lobatto domains, regular scalar ball domains, optional compactified
+// infinity, C0/C1 matching, optional fixed spherical-orthonormal background
+// geometry, composable covariant derivatives, rank-one/rank-two rough
+// Laplacians, and a Newton solve.
 ConstraintSolution
 solveRadialConstraintProblem(const backend::ModuleIR &module,
                              const ConstraintSolveRequest &request = {});

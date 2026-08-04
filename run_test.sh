@@ -166,6 +166,7 @@ CONSTRAINT_INITIAL_DATA_VALID_TESTS=(
 )
 
 CONSTRAINT_SOLVE_TESTS=(
+  "tests/fixtures/gr/regular_ball_poisson_solve.tn|17|1|1|source=6"
   "tests/fixtures/gr/brill_lindquist_radial_solve.tn|49|1|1|mass=1"
   "tests/fixtures/gr/brill_lindquist_multidomain_solve.tn|42|2|1|mass=1"
   "tests/fixtures/gr/reissner_nordstrom_einstein_maxwell_solve.tn|58|2|4|charge=0.6"

@@ -365,7 +365,14 @@ void SemanticAnalyzer::validateConstraintProblem(
             "constraint domain resolution entries must be > 0");
     }
     if (!domain.bounds.empty()) {
-      if (domain.topology == "compactified") {
+      if (domain.topology == "ball") {
+        if (domain.coordinates != "spherical" || domain.bounds.size() != 1 ||
+            !std::isfinite(domain.bounds[0]) || domain.bounds[0] <= 0.0) {
+          throw std::runtime_error(
+              "spherical ball bounds must contain one finite positive outer "
+              "radius");
+        }
+      } else if (domain.topology == "compactified") {
         if (domain.bounds.size() != 1 || !std::isfinite(domain.bounds[0]) ||
             domain.bounds[0] <= 0.0) {
           throw std::runtime_error(

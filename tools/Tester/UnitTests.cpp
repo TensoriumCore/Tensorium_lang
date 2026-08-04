@@ -5537,6 +5537,42 @@ static bool testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero() {
   return true;
 }
 
+static bool testRegularBallPoissonConstraintSolve() {
+  auto result = tensorium::api::parseAndValidateFile(
+      "tests/fixtures/gr/regular_ball_poisson_solve.tn");
+  constexpr double source = 6.0;
+  tensorium::solver::ConstraintSolveRequest request;
+  request.parameters["source"] = source;
+  const auto solution =
+      tensorium::solver::solveRadialConstraintProblem(result.module, request);
+
+  if (!solution.converged || solution.iterations != 1 ||
+      solution.residualNorm > 1.0e-10 || solution.domains.size() != 1 ||
+      solution.coordinates.size() != 17 ||
+      std::abs(solution.coordinates.front()) > 1.0e-15 ||
+      std::abs(solution.coordinates.back() - 2.0) > 1.0e-15) {
+    std::cerr << "FAIL: regular ball Poisson solve did not converge as "
+                 "expected; iterations="
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
+    return false;
+  }
+
+  const auto &u = solution.unknowns.at("u");
+  double maxError = 0.0;
+  for (std::size_t point = 0; point < solution.coordinates.size(); ++point) {
+    const double radius = solution.coordinates[point];
+    const double expected = source * radius * radius / 6.0;
+    maxError = std::max(maxError, std::abs(u[point] - expected));
+  }
+  if (maxError > 1.0e-10) {
+    std::cerr << "FAIL: regular ball Poisson solution max error=" << maxError
+              << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testCoupledNonlinearRadialConstraintSolve() {
   auto result = tensorium::api::parseAndValidateFile(
       "tests/fixtures/gr/coupled_nonlinear_radial_solve.tn");
@@ -6925,6 +6961,8 @@ int main() {
       {"testSchwarzschildChristoffelMLIRStructure",
        &testSchwarzschildChristoffelMLIRStructure},
       {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
+      {"testRegularBallPoissonConstraintSolve",
+       &testRegularBallPoissonConstraintSolve},
       {"testCoupledNonlinearRadialConstraintSolve",
        &testCoupledNonlinearRadialConstraintSolve},
       {"testScalarVectorRadialConstraintSolve",

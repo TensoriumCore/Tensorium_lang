@@ -16,6 +16,7 @@ using Matrix = std::vector<double>;
 struct RadialGrid {
   std::string name;
   std::size_t size = 0;
+  bool containsOrigin = false;
   bool compactified = false;
   std::vector<double> radius;
   Matrix firstDerivative;
@@ -105,6 +106,7 @@ RadialGrid buildChebyshevLobattoGrid(const backend::SpectralDomainIR &domain) {
   RadialGrid grid;
   grid.name = domain.name;
   grid.size = static_cast<std::size_t>(requestedSize);
+  grid.containsOrigin = domain.topology == "ball";
   grid.compactified = domain.topology == "compactified";
   grid.radius.resize(grid.size);
   const double pi = std::acos(-1.0);
@@ -163,10 +165,13 @@ RadialGrid buildChebyshevLobattoGrid(const backend::SpectralDomainIR &domain) {
       }
     }
   } else {
-    if (domain.bounds.size() != 2)
-      fail("finite radial domain requires bounds = [r_min, r_max]");
-    const double lower = domain.bounds[0];
-    const double upper = domain.bounds[1];
+    if (grid.containsOrigin && domain.bounds.size() != 1)
+      fail("radial ball domain requires bounds = [outer_radius]");
+    if (!grid.containsOrigin && domain.bounds.size() != 2)
+      fail("finite radial shell requires bounds = [r_min, r_max]");
+    const double lower = grid.containsOrigin ? 0.0 : domain.bounds[0];
+    const double upper =
+        grid.containsOrigin ? domain.bounds[0] : domain.bounds[1];
     const double midpoint = 0.5 * (lower + upper);
     const double halfWidth = 0.5 * (upper - lower);
     for (std::size_t row = 0; row < grid.size; ++row) {
@@ -213,9 +218,14 @@ DualGrid applyRadialLaplacian(const DualGrid &input, const RadialGrid &grid) {
   result.value.resize(grid.size);
   result.tangent.resize(grid.size);
   for (std::size_t i = 0; i < grid.size; ++i) {
-    result.value[i] = second[i] + (2.0 / grid.radius[i]) * first[i];
-    result.tangent[i] =
-        tangentSecond[i] + (2.0 / grid.radius[i]) * tangentFirst[i];
+    if (grid.radius[i] == 0.0) {
+      result.value[i] = 3.0 * second[i];
+      result.tangent[i] = 3.0 * tangentSecond[i];
+    } else {
+      result.value[i] = second[i] + (2.0 / grid.radius[i]) * first[i];
+      result.tangent[i] =
+          tangentSecond[i] + (2.0 / grid.radius[i]) * tangentFirst[i];
+    }
   }
   return result;
 }
@@ -906,8 +916,11 @@ buildDomainLayout(const backend::ConstraintProblemIR &problem) {
       fail("radial backend requires spherical domains");
     if (domain.basis != "chebyshev")
       fail("radial backend requires basis = chebyshev in every domain");
-    if (domain.topology != "shell" && domain.topology != "compactified")
-      fail("radial backend supports shell and compactified topologies");
+    if (domain.topology != "ball" && domain.topology != "shell" &&
+        domain.topology != "compactified")
+      fail("radial backend supports ball, shell, and compactified topologies");
+    if (domain.topology == "ball" && i != 0)
+      fail("a radial ball domain must be the first domain");
     if (domain.topology == "compactified" && i + 1 != problem.domains.size())
       fail("a compactified domain must be the final radial domain");
     layout.offsets.push_back(layout.totalSize);
@@ -1154,8 +1167,9 @@ evaluateResidual(const backend::ConstraintProblemIR &problem,
        unknownIndex < componentLayout.unknowns.size(); ++unknownIndex) {
     const auto &unknownLayout = componentLayout.unknowns[unknownIndex];
     const auto &equation = problem.equations[unknownIndex];
-    const auto &inner =
-        getBoundaryCondition(problem, "inner", unknownLayout.name);
+    const auto &inner = getBoundaryCondition(
+        problem, firstGrid.containsOrigin ? "origin" : "inner",
+        unknownLayout.name);
     const auto &outer =
         getBoundaryCondition(problem, "outer", unknownLayout.name);
 
@@ -1202,10 +1216,21 @@ evaluateResidual(const backend::ConstraintProblemIR &problem,
           localStates.front().at(unknownLayout.name).components[component];
       const auto &lastUnknown =
           localStates.back().at(unknownLayout.name).components[component];
-      residual.value[rowBase] =
-          firstUnknown.value.front() - innerValue.value.front();
-      residual.tangent[rowBase] =
-          firstUnknown.tangent.front() - innerValue.tangent.front();
+      if (firstGrid.containsOrigin) {
+        const auto firstDerivative = applyMatrix(
+            firstGrid.firstDerivative, firstGrid.size, firstUnknown.value);
+        const auto firstTangentDerivative = applyMatrix(
+            firstGrid.firstDerivative, firstGrid.size, firstUnknown.tangent);
+        residual.value[rowBase] =
+            firstDerivative.front() - innerValue.value.front();
+        residual.tangent[rowBase] =
+            firstTangentDerivative.front() - innerValue.tangent.front();
+      } else {
+        residual.value[rowBase] =
+            firstUnknown.value.front() - innerValue.value.front();
+        residual.tangent[rowBase] =
+            firstUnknown.tangent.front() - innerValue.tangent.front();
+      }
       residual.value[rowBase + domainLayout.totalSize - 1] =
           lastUnknown.value.back() - outerValue.value.back();
       residual.tangent[rowBase + domainLayout.totalSize - 1] =
@@ -1513,9 +1538,16 @@ solveRadialConstraintProblem(const backend::ModuleIR &module,
     fail("radial backend currently requires newton with a direct linear solve");
 
   RadialDomainLayout layout = buildDomainLayout(problem);
+  if (layout.grids.front().containsOrigin && problem.geometry.enabled)
+    fail("radial ball domains do not yet support a background geometry");
   const std::vector<RadialGeometry> geometries =
       buildRadialGeometries(problem, layout, request.parameters);
   ComponentSystemLayout componentLayout = buildComponentLayout(problem);
+  if (layout.grids.front().containsOrigin) {
+    for (const auto &unknownLayout : componentLayout.unknowns)
+      if (unknownLayout.rank != 0)
+        fail("radial ball domains currently support scalar unknowns only");
+  }
   const std::size_t dofCount =
       componentLayout.totalComponents * layout.totalSize;
   if (dofCount > 513)
