@@ -98,6 +98,15 @@ target_link_libraries(tensoriumValidation PUBLIC
   tensoriumIR
 )
 
+add_library(tensoriumConstraintHandoff
+  Solver/ConstraintHandoff.cpp
+)
+tensorium_configure_public_headers(tensoriumConstraintHandoff)
+target_link_libraries(tensoriumConstraintHandoff
+  PUBLIC tensoriumSolver
+  PRIVATE tensoriumParse tensoriumLowering tensoriumValidation
+)
+
 add_library(tensorium INTERFACE)
 target_include_directories(tensorium INTERFACE
   ${PROJECT_SOURCE_DIR}/include
@@ -106,6 +115,7 @@ target_link_libraries(tensorium INTERFACE
   tensoriumCore
   tensoriumLowering
   tensoriumSolver
+  tensoriumConstraintHandoff
   tensoriumValidation
 )
 

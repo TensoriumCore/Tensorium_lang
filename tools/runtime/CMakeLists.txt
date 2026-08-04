@@ -19,3 +19,22 @@ target_include_directories(Tensorium_abi_probe SYSTEM PRIVATE
 foreach(_tensorium_inc IN LISTS LLVM_INCLUDE_DIRS MLIR_INCLUDE_DIRS)
   target_compile_options(Tensorium_abi_probe PRIVATE "-isystem${_tensorium_inc}")
 endforeach()
+
+add_executable(Tensorium_constraint_handoff_c_probe
+  constraint_handoff_c_probe.c
+)
+set_target_properties(Tensorium_constraint_handoff_c_probe PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  LINKER_LANGUAGE CXX
+)
+target_link_libraries(Tensorium_constraint_handoff_c_probe PRIVATE
+  tensoriumConstraintHandoff
+)
+
+if (BUILD_TESTING)
+  add_test(NAME tensorium_constraint_handoff_c_probe
+    COMMAND Tensorium_constraint_handoff_c_probe
+      ${PROJECT_SOURCE_DIR}/tests/fixtures/gr/ctt_radial_vacuum_solve.tn
+  )
+endif()

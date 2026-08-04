@@ -370,6 +370,11 @@ time-integration scheme, and mesh-refinement policy. The generated Tensorium
 RHS path is an optional verification path, not the required production
 evolution engine.
 
+External C and C++ solvers can use the versioned, exception-safe handoff ABI
+described in [Constraint handoff C ABI](constraint_handoff_c_abi.md). It owns
+the DSL-to-solution lifetime and writes physical CTT or Cartesian BSSN data
+directly into caller-owned structure-of-arrays buffers.
+
 This is a genuine coupled vacuum Einstein constraint solve on a bounded radial
 interval under spherical symmetry and a conformally flat ansatz. It is not yet
 a complete asymptotically flat data set or generic CTT/XCTS: the conformal
