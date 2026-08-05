@@ -12,6 +12,8 @@
 #include "tensorium_mlir/Runtime/GeneratedHostStorage.h"
 #include "tensorium_mlir/Runtime/HostBuffers.h"
 #include "tensorium_mlir/Runtime/SpectralGrid.h"
+#include "tensorium_mlir/Runtime/SpectralResidualAssembly.h"
+#include "tensorium_mlir/Runtime/TwoPunctureMap.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
@@ -5537,6 +5539,190 @@ static bool testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero() {
   return true;
 }
 
+static bool testTwoPunctureCoordinateMapGeometry() {
+  using tensorium_mlir::runtime::mapTwoPunctureCoordinates;
+
+  constexpr double b = 1.7;
+  constexpr double A = 0.25;
+  constexpr double B = 0.45;
+  constexpr double phi = 0.73;
+  const auto positive = mapTwoPunctureCoordinates(A, B, phi, b);
+  const auto negative = mapTwoPunctureCoordinates(A, -B, phi, b);
+
+  const double cylindricalError =
+      std::abs(positive.y * positive.y + positive.z * positive.z -
+               positive.rho * positive.rho);
+  if (std::abs(positive.x + negative.x) > 2.0e-14 ||
+      std::abs(positive.rho - negative.rho) > 2.0e-14 ||
+      cylindricalError > 2.0e-14) {
+    std::cerr << "FAIL: two-puncture coordinate symmetry error x="
+              << std::abs(positive.x + negative.x) << " rho="
+              << std::abs(positive.rho - negative.rho) << " cylindrical="
+              << cylindricalError << "\n";
+    return false;
+  }
+
+  const auto rightPuncture =
+      mapTwoPunctureCoordinates(-1.0 + 1.0e-9, -1.0 + 1.0e-9, phi, b);
+  const auto leftPuncture =
+      mapTwoPunctureCoordinates(-1.0 + 1.0e-9, 1.0 - 1.0e-9, phi, b);
+  const auto farPoint =
+      mapTwoPunctureCoordinates(1.0 - 1.0e-7, 0.0, phi, b);
+  if (std::abs(rightPuncture.x - b) > 4.0e-9 ||
+      std::abs(leftPuncture.x + b) > 4.0e-9 ||
+      std::abs(rightPuncture.rho) > 4.0e-9 ||
+      std::abs(leftPuncture.rho) > 4.0e-9 ||
+      std::hypot(farPoint.x, farPoint.rho) < 1.0e6) {
+    std::cerr << "FAIL: two-puncture limiting geometry is incorrect\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testTwoPunctureMappedSpectralDerivatives() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::applySpectralDerivativeMap;
+  using tensorium_mlir::runtime::makeTwoPunctureDerivativeMap;
+  using tensorium_mlir::runtime::mapTwoPunctureCoordinates;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(9),
+                      SpectralAxis::chebyshevZeros(8),
+                      SpectralAxis::fourierPeriodic(10));
+  constexpr double b = 1.3;
+  const std::array<double, 1> mapParams = {b};
+  std::vector<double> values(grid.size(), 0.0);
+
+  const auto logicalFunction = [](double A, double B, double phi) {
+    return A * A + 0.3 * A * B + 0.2 * B * B +
+           0.1 * std::cos(2.0 * phi) + 0.15 * A * std::sin(phi) +
+           0.07 * B * std::cos(phi);
+  };
+
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const auto logical = grid.point(i, j, k);
+        values[logical.index] =
+            logicalFunction(logical.x1, logical.x2, logical.x3);
+      }
+    }
+  }
+
+  const auto physicalDerivatives = applySpectralDerivativeMap(
+      grid, grid.derivatives(values), makeTwoPunctureDerivativeMap(),
+      mapParams);
+  double maxGradientError = 0.0;
+  double maxHessianError = 0.0;
+  double maxLaplacianError = 0.0;
+  std::size_t checkedPoints = 0;
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const auto logical = grid.point(i, j, k);
+        if (std::abs(logical.x1) > 0.65 || std::abs(logical.x2) > 0.65)
+          continue;
+        const auto physical = mapTwoPunctureCoordinates(
+            logical.x1, logical.x2, logical.x3, b);
+        const std::array<double, 3> xyz = {physical.x, physical.y, physical.z};
+        const auto evaluatePhysical = [&](const std::array<double, 3> &q) {
+          const double rho = std::hypot(q[1], q[2]);
+          const std::complex<double> C =
+              std::acosh(std::complex<double>(q[0], rho) / b);
+          const double inverseA = 2.0 * std::tanh(0.5 * C.real()) - 1.0;
+          const double inverseB =
+              std::tan(0.5 *
+                       (C.imag() -
+                        0.5 * tensorium_mlir::runtime::kSpectralPi));
+          const double inversePhi = std::atan2(q[2], q[1]);
+          return logicalFunction(inverseA, inverseB, inversePhi);
+        };
+        const double h = 5.0e-5 *
+                         (1.0 + std::sqrt(xyz[0] * xyz[0] +
+                                          xyz[1] * xyz[1] +
+                                          xyz[2] * xyz[2]));
+        const double center = evaluatePhysical(xyz);
+        std::array<double, 3> numericalGradient{};
+        std::array<double, 3> numericalDiagonal{};
+        for (std::size_t d = 0; d < 3; ++d) {
+          auto plus = xyz;
+          auto minus = xyz;
+          plus[d] += h;
+          minus[d] -= h;
+          const double fPlus = evaluatePhysical(plus);
+          const double fMinus = evaluatePhysical(minus);
+          numericalGradient[d] = (fPlus - fMinus) / (2.0 * h);
+          numericalDiagonal[d] =
+              (fPlus - 2.0 * center + fMinus) / (h * h);
+        }
+        std::array<double, 3> numericalMixed{};
+        const std::array<std::array<std::size_t, 2>, 3> pairs = {
+            std::array<std::size_t, 2>{0, 1}, {0, 2}, {1, 2}};
+        for (std::size_t mixed = 0; mixed < pairs.size(); ++mixed) {
+          const auto [first, second] = pairs[mixed];
+          auto plusPlus = xyz;
+          auto plusMinus = xyz;
+          auto minusPlus = xyz;
+          auto minusMinus = xyz;
+          plusPlus[first] += h;
+          plusPlus[second] += h;
+          plusMinus[first] += h;
+          plusMinus[second] -= h;
+          minusPlus[first] -= h;
+          minusPlus[second] += h;
+          minusMinus[first] -= h;
+          minusMinus[second] -= h;
+          numericalMixed[mixed] =
+              (evaluatePhysical(plusPlus) - evaluatePhysical(plusMinus) -
+               evaluatePhysical(minusPlus) + evaluatePhysical(minusMinus)) /
+              (4.0 * h * h);
+        }
+
+        const std::size_t p = logical.index;
+        const std::array<double, 3> computedGradient = {
+            physicalDerivatives.d1[p], physicalDerivatives.d2[p],
+            physicalDerivatives.d3[p]};
+        const std::array<double, 3> computedDiagonal = {
+            physicalDerivatives.d11[p], physicalDerivatives.d22[p],
+            physicalDerivatives.d33[p]};
+        const std::array<double, 3> computedMixed = {
+            physicalDerivatives.d12[p], physicalDerivatives.d13[p],
+            physicalDerivatives.d23[p]};
+        for (std::size_t d = 0; d < 3; ++d) {
+          maxGradientError =
+              std::max(maxGradientError,
+                       std::abs(computedGradient[d] - numericalGradient[d]));
+          maxHessianError =
+              std::max(maxHessianError,
+                       std::abs(computedDiagonal[d] - numericalDiagonal[d]));
+          maxHessianError =
+              std::max(maxHessianError,
+                       std::abs(computedMixed[d] - numericalMixed[d]));
+        }
+        const double computedLaplacian = computedDiagonal[0] +
+                                         computedDiagonal[1] +
+                                         computedDiagonal[2];
+        const double numericalLaplacian = numericalDiagonal[0] +
+                                          numericalDiagonal[1] +
+                                          numericalDiagonal[2];
+        maxLaplacianError =
+            std::max(maxLaplacianError,
+                     std::abs(computedLaplacian - numericalLaplacian));
+        ++checkedPoints;
+      }
+    }
+  }
+
+  if (checkedPoints < 20 || maxGradientError > 2.0e-6 ||
+      maxHessianError > 2.0e-5 || maxLaplacianError > 3.0e-5) {
+    std::cerr << "FAIL: mapped two-puncture spectral derivative errors grad="
+              << maxGradientError << " Hessian=" << maxHessianError
+              << " laplacian=" << maxLaplacianError << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testRegularBallPoissonConstraintSolve() {
   auto result = tensorium::api::parseAndValidateFile(
       "tests/fixtures/gr/regular_ball_poisson_solve.tn");
@@ -6925,6 +7111,10 @@ int main() {
        &testSpectralPointwisePoissonResidualIsAnalyticallyZero},
       {"testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero",
        &testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero},
+      {"testTwoPunctureCoordinateMapGeometry",
+       &testTwoPunctureCoordinateMapGeometry},
+      {"testTwoPunctureMappedSpectralDerivatives",
+       &testTwoPunctureMappedSpectralDerivatives},
       {"testCompilerApiCompileFileToLLVMIR",
        &testCompilerApiCompileFileToLLVMIR},
       {"testCompilerApiSymbolicWarningPropagation",

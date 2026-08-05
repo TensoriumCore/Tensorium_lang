@@ -1,6 +1,10 @@
 # Front Next Steps: Post Init-Only Milestone
 
 ## Context
+- The active binary-black-hole initial-data roadmap is documented in
+  `docs/two_puncture_initial_data.md`. Its TP-1 compact geometry and mapped
+  derivative milestone is executable; TP-2 is the physical Bowen-York
+  Hamiltonian residual.
 - The Schwarzschild init-only front milestone is now materially complete.
 - The numeric init ABI is documented in `docs/front_abi_init_only.md`.
 - The codebase already has:

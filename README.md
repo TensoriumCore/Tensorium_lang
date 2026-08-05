@@ -130,3 +130,8 @@ The frozen C/C++ ABI contract for generated `tensorium_init*` and
 `tensorium_rhs*` functions is documented in:
 
 - `docs/generated_kernel_abi.md`
+
+The current compact binary-black-hole initial-data milestone and the remaining
+path to a physical TwoPunctures-style solve are documented in:
+
+- `docs/two_puncture_initial_data.md`

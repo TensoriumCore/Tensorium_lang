@@ -117,6 +117,17 @@ struct SpectralCoordinateMap {
   void *userData = nullptr;
 };
 
+using SpectralDerivativeMapFn = void (*)(
+    const double logical[3], const SpectralPointDerivatives3D *logicalDerivatives,
+    SpectralPointDerivatives3D *physicalDerivatives, const double *params,
+    std::int64_t paramCount, void *userData);
+
+struct SpectralDerivativeMap {
+  std::string symbolName = "tensorium_spectral_identity_derivative_map";
+  SpectralDerivativeMapFn transform = nullptr;
+  void *userData = nullptr;
+};
+
 struct SpectralResidualProblem {
   const SpectralGrid3D *grid = nullptr;
   SpectralResidualKernel kernel;
@@ -125,6 +136,7 @@ struct SpectralResidualProblem {
   SpectralCoordinateMap coordinateMap{};
   std::span<const double> coordinateParams{};
   SpectralResidualGridKernel gridKernel{};
+  SpectralDerivativeMap derivativeMap{};
 };
 
 struct SpectralResidualAssemblyResult {

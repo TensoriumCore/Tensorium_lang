@@ -160,7 +160,11 @@ consume directly:
   expose these through `tensorium_spectral_residual_kernels`.
 - `SpectralResidualProblem` is the runtime-side assembly surface for these point
   kernels. It binds the grid, generated callback, scalar params, optional
-  auxiliary fields, optional coordinate map, and optional generated grid kernel.
+  auxiliary fields, optional coordinate map, optional derivative map, and
+  optional generated grid kernel. A derivative map transforms the complete
+  first/second derivative bundle before either kernel path is evaluated; the
+  TwoPunctures implementation uses it to expose Cartesian derivatives from the
+  compact `(A,B,phi)` collocation domain.
   `assembleSpectralResidual(...)` computes the global collocation vector `F(u)`
   plus L2/max norms. When `SpectralResidualProblem::gridKernel` is set from
   `tensorium_spectral_residual_grid_kernels`, assembly uses the generated
@@ -214,6 +218,10 @@ consume directly:
   test keeps `A2` and `source` as auxiliary fields, solves from a non-exact
   guess with modal GMRES preconditioning, and checks against the analytic
   manufactured solution.
+- `tools/dev/test_generated_two_puncture_solve_ll.sh` exercises the first
+  mapped-domain vertical slice. It compiles a DSL Poisson residual to LLVM,
+  transforms the runtime derivative bundle through the compact two-puncture
+  geometry, and solves a manufactured `U=(A-1)v` correction with Newton.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

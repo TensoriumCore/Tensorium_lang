@@ -128,6 +128,55 @@ inline void validateSpectralDerivativeBundle(const SpectralGrid3D &grid,
   }
 }
 
+inline SpectralDerivatives3D applySpectralDerivativeMap(
+    const SpectralGrid3D &grid, const SpectralDerivatives3D &logicalDerivatives,
+    const SpectralDerivativeMap &derivativeMap,
+    std::span<const double> coordinateParams = {}) {
+  validateSpectralDerivativeBundle(grid, logicalDerivatives);
+  if (!derivativeMap.transform)
+    return logicalDerivatives;
+
+  SpectralDerivatives3D physicalDerivatives;
+  physicalDerivatives.value.resize(grid.size());
+  physicalDerivatives.d1.resize(grid.size());
+  physicalDerivatives.d2.resize(grid.size());
+  physicalDerivatives.d3.resize(grid.size());
+  physicalDerivatives.d11.resize(grid.size());
+  physicalDerivatives.d12.resize(grid.size());
+  physicalDerivatives.d13.resize(grid.size());
+  physicalDerivatives.d22.resize(grid.size());
+  physicalDerivatives.d23.resize(grid.size());
+  physicalDerivatives.d33.resize(grid.size());
+
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const SpectralPoint3D point = grid.point(i, j, k);
+        const double logical[3] = {point.x1, point.x2, point.x3};
+        const SpectralPointDerivatives3D logicalPoint =
+            grid.pointDerivatives(logicalDerivatives, point.index);
+        SpectralPointDerivatives3D physicalPoint{};
+        derivativeMap.transform(
+            logical, &logicalPoint, &physicalPoint, coordinateParams.data(),
+            static_cast<std::int64_t>(coordinateParams.size()),
+            derivativeMap.userData);
+
+        physicalDerivatives.value[point.index] = physicalPoint.value;
+        physicalDerivatives.d1[point.index] = physicalPoint.d1;
+        physicalDerivatives.d2[point.index] = physicalPoint.d2;
+        physicalDerivatives.d3[point.index] = physicalPoint.d3;
+        physicalDerivatives.d11[point.index] = physicalPoint.d11;
+        physicalDerivatives.d12[point.index] = physicalPoint.d12;
+        physicalDerivatives.d13[point.index] = physicalPoint.d13;
+        physicalDerivatives.d22[point.index] = physicalPoint.d22;
+        physicalDerivatives.d23[point.index] = physicalPoint.d23;
+        physicalDerivatives.d33[point.index] = physicalPoint.d33;
+      }
+    }
+  }
+  return physicalDerivatives;
+}
+
 inline double spectralVectorMaxAbs(std::span<const double> values) {
   double out = 0.0;
   for (double value : values) {
@@ -370,16 +419,24 @@ inline SpectralResidualAssemblyResult assembleSpectralResidual(
     const SpectralResidualProblem &problem,
     const SpectralDerivatives3D &derivs) {
   const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  SpectralDerivatives3D mappedDerivatives;
+  const SpectralDerivatives3D *assembledDerivatives = &derivs;
+  if (problem.derivativeMap.transform) {
+    mappedDerivatives = applySpectralDerivativeMap(
+        grid, derivs, problem.derivativeMap, problem.coordinateParams);
+    assembledDerivatives = &mappedDerivatives;
+  }
   if (problem.gridKernel.evaluate) {
     return makeSpectralResidualAssemblyResult(
         evaluateSpectralResidualWithGridKernel(
-            grid, derivs, problem.gridKernel, problem.params,
+            grid, *assembledDerivatives, problem.gridKernel, problem.params,
             problem.auxiliaryFields, problem.coordinateMap,
             problem.coordinateParams),
         true);
   }
   return makeSpectralResidualAssemblyResult(evaluateSpectralResidualWithAuxFields(
-      grid, derivs, problem.kernel, problem.params, problem.auxiliaryFields,
+      grid, *assembledDerivatives, problem.kernel, problem.params,
+      problem.auxiliaryFields,
       problem.coordinateMap, problem.coordinateParams));
 }
 
