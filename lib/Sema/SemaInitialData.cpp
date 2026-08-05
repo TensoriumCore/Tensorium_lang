@@ -1,4 +1,5 @@
 #include "tensorium/Sema/Sema.hpp"
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <set>
@@ -298,6 +299,147 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
     }
     if (init.split3p1.hasGammaU) {
       validateTarget(init.split3p1.gammaUTarget, 2, 0, "gammaU", false, true);
+    }
+  }
+
+  if (init.hasSpectralProblem) {
+    const auto &spectral = init.spectralProblem;
+    const auto system = std::find_if(
+        prog.constraints.begin(), prog.constraints.end(),
+        [&](const ConstraintDecl &candidate) {
+          return candidate.name == spectral.system;
+        });
+    if (system == prog.constraints.end()) {
+      throw std::runtime_error("spectral initial_data references unknown "
+                               "constraints system '" +
+                               spectral.system + "'");
+    }
+    if (system->residuals.empty()) {
+      throw std::runtime_error("spectral initial_data residual system '" +
+                               spectral.system + "' is empty");
+    }
+
+    if (spectral.resolution.size() != 3)
+      throw std::runtime_error(
+          "spectral initial_data resolution must have exactly 3 entries");
+    for (int extent : spectral.resolution) {
+      if (extent < 3)
+        throw std::runtime_error(
+            "spectral initial_data resolution entries must be >= 3");
+    }
+    if (spectral.basis.size() != 3)
+      throw std::runtime_error(
+          "spectral initial_data basis must have exactly 3 entries");
+    for (const auto &basis : spectral.basis) {
+      if (basis != "chebyshev" && basis != "fourier") {
+        throw std::runtime_error("unsupported spectral initial_data basis '" +
+                                 basis + "'");
+      }
+    }
+
+    static const std::set<std::string> kCoordinateMaps = {"identity",
+                                                           "two_puncture"};
+    static const std::set<std::string> kUnknownMaps = {"identity",
+                                                        "linear_boundary"};
+    static const std::set<std::string> kProjectors = {
+        "none", "two_puncture_inversion_even"};
+    static const std::set<std::string> kReconstructions = {
+        "none", "two_puncture_bssn"};
+    if (!kCoordinateMaps.count(spectral.coordinateMap))
+      throw std::runtime_error("unsupported spectral coordinate_map '" +
+                               spectral.coordinateMap + "'");
+    if (!kUnknownMaps.count(spectral.unknownMap))
+      throw std::runtime_error("unsupported spectral unknown_map '" +
+                               spectral.unknownMap + "'");
+    if (!kProjectors.count(spectral.fieldProjector))
+      throw std::runtime_error("unsupported spectral field_projector '" +
+                               spectral.fieldProjector + "'");
+    if (!kReconstructions.count(spectral.reconstruction))
+      throw std::runtime_error("unsupported spectral reconstruction '" +
+                               spectral.reconstruction + "'");
+
+    std::set<std::string> bindingNames;
+    for (const auto &binding : spectral.parameters) {
+      if (!params.count(binding.name))
+        throw std::runtime_error("spectral initial_data binds undeclared "
+                                 "parameter '" +
+                                 binding.name + "'");
+      if (!bindingNames.insert(binding.name).second)
+        throw std::runtime_error("spectral initial_data parameter rebound: " +
+                                 binding.name);
+      if (!std::isfinite(binding.value))
+        throw std::runtime_error("spectral initial_data parameter '" +
+                                 binding.name + "' must be finite");
+    }
+    for (const auto &name : spectral.coordinateParameters) {
+      if (!params.count(name))
+        throw std::runtime_error("spectral coordinate parameter '" + name +
+                                 "' is not declared in params");
+      if (!bindingNames.count(name))
+        throw std::runtime_error("spectral coordinate parameter '" + name +
+                                 "' has no default binding");
+    }
+    for (double value : spectral.unknownMapParameters) {
+      if (!std::isfinite(value))
+        throw std::runtime_error(
+            "spectral unknown_map_parameters must be finite");
+    }
+
+    if (!spectral.hasSolve)
+      throw std::runtime_error("spectral initial_data requires a solve block");
+    const auto &solve = spectral.solve;
+    if (solve.nonlinear != "newton")
+      throw std::runtime_error(
+          "spectral initial_data currently supports nonlinear = newton");
+    if (solve.linear != "direct" && solve.linear != "gmres")
+      throw std::runtime_error(
+          "spectral initial_data linear method must be direct or gmres");
+    static const std::set<std::string> kPreconditioners = {
+        "none", "diagonal_jvp", "dense_laplacian_shift",
+        "modal_laplacian_shift", "mapped_fd_laplacian_shift"};
+    if (!kPreconditioners.count(solve.preconditioner))
+      throw std::runtime_error("unsupported spectral preconditioner '" +
+                               solve.preconditioner + "'");
+    if (!(solve.tolerance > 0.0) || !(solve.linearTolerance >= 0.0) ||
+        !(solve.linearRelativeTolerance >= 0.0) ||
+        solve.maxIterations <= 0 || solve.maxLinearIterations <= 0 ||
+        solve.restart < 0 || solve.preconditionerSweeps <= 0 ||
+        !(solve.jvpRelativeStep > 0.0) || solve.jvpAbsoluteStep < 0.0) {
+      throw std::runtime_error(
+          "spectral initial_data contains invalid solve tolerances or limits");
+    }
+
+    if (spectral.coordinateMap == "two_puncture") {
+      if (spectral.coordinateParameters.size() != 1)
+        throw std::runtime_error(
+            "two_puncture coordinate_map requires [half_separation]");
+      if (spectral.basis[0] != "chebyshev" ||
+          spectral.basis[1] != "chebyshev" ||
+          spectral.basis[2] != "fourier")
+        throw std::runtime_error(
+            "two_puncture coordinate_map requires "
+            "basis = [chebyshev, chebyshev, fourier]");
+      if (spectral.resolution[2] % 2 != 0)
+        throw std::runtime_error(
+            "two_puncture Fourier resolution must be even");
+    }
+    if (spectral.unknownMap == "linear_boundary" &&
+        spectral.unknownMapParameters.size() != 3)
+      throw std::runtime_error(
+          "linear_boundary unknown_map requires 3 numeric parameters");
+    if (spectral.reconstruction == "two_puncture_bssn") {
+      if (spectral.coordinateMap != "two_puncture")
+        throw std::runtime_error(
+            "two_puncture_bssn reconstruction requires two_puncture map");
+      static const std::set<std::string> kRequired = {
+          "b",   "m1",  "m2",  "p1x", "p1y", "p1z", "s1x", "s1y",
+          "s1z", "p2x", "p2y", "p2z", "s2x", "s2y", "s2z"};
+      for (const auto &name : kRequired) {
+        if (!bindingNames.count(name))
+          throw std::runtime_error(
+              "two_puncture_bssn reconstruction requires parameter '" +
+              name + "'");
+      }
     }
   }
 

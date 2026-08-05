@@ -1,0 +1,30 @@
+# Minimal standalone multidimensional initial-data problem. The zero seed is
+# already the exact solution of H(U) = laplacian(U) = 0. No simulation block is needed:
+# the spectral declaration owns its grid metadata.
+field scalar U
+field scalar H
+
+initial_data SpectralIdentity {
+  spectral {
+    system = IdentityResidual
+    coordinate_map = identity
+    resolution = [3, 3, 4]
+    basis = [chebyshev, chebyshev, fourier]
+    coordinate_parameters = []
+    unknown_map = identity
+    unknown_map_parameters = []
+    field_projector = none
+    reconstruction = none
+
+    solve {
+      nonlinear = newton
+      linear = direct
+      tolerance = 1e-12
+      max_iterations = 4
+    }
+  }
+}
+
+constraints IdentityResidual {
+  residual H = laplacian(U)
+}

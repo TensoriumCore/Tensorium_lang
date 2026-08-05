@@ -246,6 +246,35 @@ struct ConstraintSolveConfig {
   std::string linear = "direct";
   double tolerance = 1.0e-10;
   int maxIterations = 30;
+  double linearTolerance = 1.0e-10;
+  double linearRelativeTolerance = 1.0e-10;
+  int maxLinearIterations = 64;
+  int restart = 0;
+  std::string preconditioner = "none";
+  int preconditionerSweeps = 4;
+  double jvpRelativeStep = 1.4901161193847656e-8;
+  double jvpAbsoluteStep = 0.0;
+};
+
+struct SpectralParameterBindingDecl {
+  std::string name;
+  double value = 0.0;
+};
+
+struct SpectralInitialDataDecl {
+  bool enabled = false;
+  std::string system;
+  std::string coordinateMap = "identity";
+  std::vector<int> resolution;
+  std::vector<std::string> basis;
+  std::vector<std::string> coordinateParameters;
+  std::string unknownMap = "identity";
+  std::vector<double> unknownMapParameters;
+  std::string fieldProjector = "none";
+  std::string reconstruction = "none";
+  std::vector<SpectralParameterBindingDecl> parameters;
+  ConstraintSolveConfig solve;
+  bool hasSolve = false;
 };
 
 struct ConstraintCttReconstructionDecl {
@@ -280,14 +309,17 @@ struct ConstraintProblemDecl {
 };
 
 struct InitialDataDecl {
+  std::string name;
   bool enforceSymmetry = false;
   bool hasMetric4 = false;
   bool hasDecomposed = false;
   bool hasConstraintProblem = false;
+  bool hasSpectralProblem = false;
   Metric4InitDecl metric4;
   DecomposedMetricInitDecl decomposed;
   Split3P1BindingDecl split3p1;
   ConstraintProblemDecl constraintProblem;
+  SpectralInitialDataDecl spectralProblem;
 };
 
 struct Program {

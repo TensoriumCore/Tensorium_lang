@@ -871,6 +871,12 @@ TP_SLICE_N=17 bash ./run_two_puncture_qc0.sh /tmp/tensorium_qc0_smoke.csv
 grep -q '^i,j,x,y,z,u,psi,chi,alpha,gammatilde_xx' \
   /tmp/tensorium_qc0_smoke.csv
 grep -q '"case": "QC0"' /tmp/tensorium_qc0_smoke.csv.json
+bash ./run_initial_data.sh \
+  tests/fixtures/elliptic/spectral_identity_initial_data_3d.tn \
+  /tmp/tensorium_spectral_identity.csv
+grep -q '^i,j,k,q1,q2,q3,x,y,z,U$' /tmp/tensorium_spectral_identity.csv
+grep -q '"case": "SpectralIdentity"' \
+  /tmp/tensorium_spectral_identity.csv.json
 bash tools/dev/test_parallel_residual_grid_ll.sh
 
 echo

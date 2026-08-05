@@ -593,6 +593,18 @@ ModuleIR BackendBuilder::build(const Program &prog,
 
   if (prog.simulation)
     mod.simulation = lowerSimulation(*prog.simulation);
+  else if (prog.initialData && prog.initialData->hasSpectralProblem) {
+    SimulationIR simulation;
+    simulation.coords = CoordSystem::Cartesian;
+    simulation.dimension = 3;
+    simulation.resolution = prog.initialData->spectralProblem.resolution;
+    simulation.time.dt = 1.0;
+    simulation.time.integrator = TimeIntegrator::Euler;
+    simulation.spatial.scheme = SpatialScheme::Spectral;
+    simulation.spatial.derivative = DerivativeScheme::Centered;
+    simulation.spatial.order = 0;
+    mod.simulation = std::move(simulation);
+  }
 
   if (prog.initialData) {
     InitialDataIR init;
@@ -654,6 +666,41 @@ ModuleIR BackendBuilder::build(const Program &prog,
       init.split3p1.gammaUField = prog.initialData->split3p1.gammaUTarget.base;
 
     mod.initialData = std::move(init);
+
+    if (prog.initialData->hasSpectralProblem) {
+      const auto &spectral = prog.initialData->spectralProblem;
+      SpectralInitialDataIR lowered;
+      lowered.name = prog.initialData->name;
+      lowered.system = spectral.system;
+      lowered.coordinateMap = spectral.coordinateMap;
+      lowered.resolution = spectral.resolution;
+      lowered.basis = spectral.basis;
+      lowered.coordinateParameters = spectral.coordinateParameters;
+      lowered.unknownMap = spectral.unknownMap;
+      lowered.unknownMapParameters = spectral.unknownMapParameters;
+      lowered.fieldProjector = spectral.fieldProjector;
+      lowered.reconstruction = spectral.reconstruction;
+      for (const auto &binding : spectral.parameters) {
+        lowered.parameters.push_back(
+            SpectralParameterBindingIR{binding.name, binding.value});
+      }
+      lowered.solve.nonlinear = spectral.solve.nonlinear;
+      lowered.solve.linear = spectral.solve.linear;
+      lowered.solve.tolerance = spectral.solve.tolerance;
+      lowered.solve.maxIterations = spectral.solve.maxIterations;
+      lowered.solve.linearTolerance = spectral.solve.linearTolerance;
+      lowered.solve.linearRelativeTolerance =
+          spectral.solve.linearRelativeTolerance;
+      lowered.solve.maxLinearIterations =
+          spectral.solve.maxLinearIterations;
+      lowered.solve.restart = spectral.solve.restart;
+      lowered.solve.preconditioner = spectral.solve.preconditioner;
+      lowered.solve.preconditionerSweeps =
+          spectral.solve.preconditionerSweeps;
+      lowered.solve.jvpRelativeStep = spectral.solve.jvpRelativeStep;
+      lowered.solve.jvpAbsoluteStep = spectral.solve.jvpAbsoluteStep;
+      mod.spectralInitialData = std::move(lowered);
+    }
   }
 
   mod.fields.reserve(prog.fields.size());
@@ -764,6 +811,14 @@ ModuleIR BackendBuilder::build(const Program &prog,
     out.solve.linear = problem.solve.linear;
     out.solve.tolerance = problem.solve.tolerance;
     out.solve.maxIterations = problem.solve.maxIterations;
+    out.solve.linearTolerance = problem.solve.linearTolerance;
+    out.solve.linearRelativeTolerance = problem.solve.linearRelativeTolerance;
+    out.solve.maxLinearIterations = problem.solve.maxLinearIterations;
+    out.solve.restart = problem.solve.restart;
+    out.solve.preconditioner = problem.solve.preconditioner;
+    out.solve.preconditionerSweeps = problem.solve.preconditionerSweeps;
+    out.solve.jvpRelativeStep = problem.solve.jvpRelativeStep;
+    out.solve.jvpAbsoluteStep = problem.solve.jvpAbsoluteStep;
     mod.constraintProblem = std::move(out);
   }
 

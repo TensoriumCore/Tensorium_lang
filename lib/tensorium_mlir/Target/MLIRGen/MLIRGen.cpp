@@ -27,6 +27,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
+#include <iomanip>
 #include <numeric>
 #include <sstream>
 #include <string>
@@ -625,6 +626,37 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "  const tensorium_spectral_residual_system_equation_desc *equations;\n"
      << "  int64_t equation_count;\n"
      << "} tensorium_spectral_residual_system_desc;\n\n"
+     << "typedef struct tensorium_spectral_initial_data_desc {\n"
+     << "  int64_t abi_version;\n"
+     << "  const char *symbol_name;\n"
+     << "  const char *system_name;\n"
+     << "  const char *coordinate_map;\n"
+     << "  const int64_t *resolution;\n"
+     << "  const char *const *basis;\n"
+     << "  int64_t dimension;\n"
+     << "  const char *const *coordinate_parameter_names;\n"
+     << "  int64_t coordinate_parameter_count;\n"
+     << "  const char *unknown_map;\n"
+     << "  const double *unknown_map_parameters;\n"
+     << "  int64_t unknown_map_parameter_count;\n"
+     << "  const char *field_projector;\n"
+     << "  const char *reconstruction;\n"
+     << "  const char *const *parameter_names;\n"
+     << "  const double *parameter_values;\n"
+     << "  int64_t parameter_count;\n"
+     << "  const char *nonlinear_solver;\n"
+     << "  const char *linear_solver;\n"
+     << "  double residual_tolerance;\n"
+     << "  int64_t max_newton_steps;\n"
+     << "  double linear_tolerance;\n"
+     << "  double linear_relative_tolerance;\n"
+     << "  int64_t max_linear_iterations;\n"
+     << "  int64_t restart;\n"
+     << "  const char *preconditioner;\n"
+     << "  int64_t preconditioner_sweeps;\n"
+     << "  double jvp_relative_step;\n"
+     << "  double jvp_absolute_step;\n"
+     << "} tensorium_spectral_initial_data_desc;\n\n"
      << "#endif /* TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H */\n\n";
 }
 
@@ -907,6 +939,22 @@ void emitI64Array(std::ostringstream &os, llvm::StringRef name,
   os << "};\n\n";
 }
 
+void emitDoubleArray(std::ostringstream &os, llvm::StringRef name,
+                     const std::vector<double> &values) {
+  os << "static const double " << name.str() << "["
+     << (values.empty() ? 1 : values.size()) << "] = {\n";
+  if (values.empty()) {
+    os << "  0.0\n";
+  } else {
+    os << std::setprecision(17);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      os << "  " << values[i]
+         << (i + 1 == values.size() ? "\n" : ",\n");
+    }
+  }
+  os << "};\n\n";
+}
+
 void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
                                            const HostModuleABI &abi) {
   const std::size_t count = abi.spectralResidualSystems.size();
@@ -997,6 +1045,89 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
     }
   }
   os << "};\n\n";
+}
+
+void emitSpectralInitialDataDescriptor(std::ostringstream &os,
+                                       const HostModuleABI &abi) {
+  os << "#define TENSORIUM_SPECTRAL_INITIAL_DATA_COUNT "
+     << (abi.spectralInitialData ? 1 : 0) << "\n\n";
+  if (!abi.spectralInitialData) {
+    os << "static const tensorium_spectral_initial_data_desc "
+          "tensorium_spectral_initial_data[1] = {{0}};\n\n";
+    return;
+  }
+
+  const auto &initialData = *abi.spectralInitialData;
+  emitI64Array(os, "tensorium_spectral_initial_data_resolution",
+               initialData.resolution);
+  emitStringPointerArray(os, "tensorium_spectral_initial_data_basis",
+                         initialData.basis);
+  emitStringPointerArray(
+      os, "tensorium_spectral_initial_data_coordinate_parameter_names",
+      initialData.coordinateParameters);
+  emitDoubleArray(os, "tensorium_spectral_initial_data_unknown_map_parameters",
+                  initialData.unknownMapParameters);
+  emitStringPointerArray(os,
+                         "tensorium_spectral_initial_data_parameter_names",
+                         initialData.parameterNames);
+  emitDoubleArray(os, "tensorium_spectral_initial_data_parameter_values",
+                  initialData.parameterValues);
+
+  const auto pointerOrZero = [](bool available, llvm::StringRef name) {
+    return available ? name.str() : std::string("0");
+  };
+  const auto &solve = initialData.solve;
+  os << std::setprecision(17)
+     << "static const tensorium_spectral_initial_data_desc "
+        "tensorium_spectral_initial_data[1] = {{\n"
+     << "  1,\n"
+     << "  " << cStringLiteral(initialData.name) << ",\n"
+     << "  " << cStringLiteral(initialData.system) << ",\n"
+     << "  " << cStringLiteral(initialData.coordinateMap) << ",\n"
+     << "  tensorium_spectral_initial_data_resolution,\n"
+     << "  tensorium_spectral_initial_data_basis,\n"
+     << "  " << static_cast<std::int64_t>(initialData.resolution.size())
+     << ",\n"
+     << "  "
+     << pointerOrZero(!initialData.coordinateParameters.empty(),
+                      "tensorium_spectral_initial_data_coordinate_parameter_names")
+     << ",\n"
+     << "  "
+     << static_cast<std::int64_t>(initialData.coordinateParameters.size())
+     << ",\n"
+     << "  " << cStringLiteral(initialData.unknownMap) << ",\n"
+     << "  "
+     << pointerOrZero(!initialData.unknownMapParameters.empty(),
+                      "tensorium_spectral_initial_data_unknown_map_parameters")
+     << ",\n"
+     << "  "
+     << static_cast<std::int64_t>(initialData.unknownMapParameters.size())
+     << ",\n"
+     << "  " << cStringLiteral(initialData.fieldProjector) << ",\n"
+     << "  " << cStringLiteral(initialData.reconstruction) << ",\n"
+     << "  "
+     << pointerOrZero(!initialData.parameterNames.empty(),
+                      "tensorium_spectral_initial_data_parameter_names")
+     << ",\n"
+     << "  "
+     << pointerOrZero(!initialData.parameterValues.empty(),
+                      "tensorium_spectral_initial_data_parameter_values")
+     << ",\n"
+     << "  " << static_cast<std::int64_t>(initialData.parameterNames.size())
+     << ",\n"
+     << "  " << cStringLiteral(solve.nonlinear) << ",\n"
+     << "  " << cStringLiteral(solve.linear) << ",\n"
+     << "  " << solve.tolerance << ",\n"
+     << "  " << solve.maxIterations << ",\n"
+     << "  " << solve.linearTolerance << ",\n"
+     << "  " << solve.linearRelativeTolerance << ",\n"
+     << "  " << solve.maxLinearIterations << ",\n"
+     << "  " << solve.restart << ",\n"
+     << "  " << cStringLiteral(solve.preconditioner) << ",\n"
+     << "  " << solve.preconditionerSweeps << ",\n"
+     << "  " << solve.jvpRelativeStep << ",\n"
+     << "  " << solve.jvpAbsoluteStep << "\n"
+     << "}};\n\n";
 }
 
 void emitPrinterFlatHelper(std::ostringstream &os) {
@@ -1139,6 +1270,7 @@ std::string renderHostHeader(const HostModuleABI &abi) {
   emitSpectralResidualDescriptors(os, abi);
   emitSpectralResidualGridDescriptors(os, abi);
   emitSpectralResidualSystemDescriptors(os, abi);
+  emitSpectralInitialDataDescriptor(os, abi);
   emitRuntimeInvokeAdapters(os, abi);
 
   emitPrintRequestHelper(os, abi);

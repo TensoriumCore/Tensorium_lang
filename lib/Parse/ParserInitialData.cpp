@@ -1,5 +1,6 @@
 #include "tensorium/Parse/Parser.hpp"
 
+#include <set>
 #include <string>
 #include <utility>
 
@@ -58,6 +59,7 @@ InitialDataDecl Parser::parseInitialData() {
   expect(TokenType::LBrace);
 
   InitialDataDecl init;
+  init.name = problemName.empty() ? "initial_data" : problemName;
   init.constraintProblem.name =
       problemName.empty() ? "constraints" : std::move(problemName);
 
@@ -70,6 +72,14 @@ InitialDataDecl Parser::parseInitialData() {
     if (cur.type == TokenType::Identifier && cur.text == "domain") {
       init.hasConstraintProblem = true;
       init.constraintProblem.domains.push_back(parseSpectralDomain());
+      continue;
+    }
+
+    if (cur.type == TokenType::Identifier && cur.text == "spectral") {
+      if (init.hasSpectralProblem)
+        syntaxError("duplicate spectral block in initial_data");
+      init.hasSpectralProblem = true;
+      init.spectralProblem = parseSpectralInitialData();
       continue;
     }
 
@@ -292,8 +302,18 @@ InitialDataDecl Parser::parseInitialData() {
 
   expect(TokenType::RBrace);
 
-  if (!init.hasMetric4 && !init.hasDecomposed && !init.hasConstraintProblem) {
-    syntaxError("initial_data requires analytic data or a constrained problem");
+  if (!init.hasMetric4 && !init.hasDecomposed && !init.hasConstraintProblem &&
+      !init.hasSpectralProblem) {
+    syntaxError(
+        "initial_data requires analytic data, a radial constraint problem, "
+        "or a spectral problem");
+  }
+  const int modeCount = static_cast<int>(init.hasMetric4 || init.hasDecomposed) +
+                        static_cast<int>(init.hasConstraintProblem) +
+                        static_cast<int>(init.hasSpectralProblem);
+  if (modeCount > 1) {
+    syntaxError("initial_data analytic, radial constraint, and spectral modes "
+                "cannot be mixed");
   }
   if (init.hasDecomposed &&
       (!init.decomposed.alpha || init.decomposed.beta.empty() ||
@@ -315,7 +335,181 @@ InitialDataDecl Parser::parseInitialData() {
       syntaxError("constrained initial_data requires a solve block");
   }
 
+  if (init.hasSpectralProblem) {
+    const auto &problem = init.spectralProblem;
+    if (problem.system.empty())
+      syntaxError("spectral initial_data requires a residual system");
+    if (problem.resolution.size() != 3)
+      syntaxError("spectral initial_data resolution requires 3 entries");
+    if (problem.basis.size() != 3)
+      syntaxError("spectral initial_data basis requires 3 entries");
+    if (!problem.hasSolve)
+      syntaxError("spectral initial_data requires a solve block");
+  }
+
   return init;
+}
+
+SpectralInitialDataDecl Parser::parseSpectralInitialData() {
+  if (cur.type != TokenType::Identifier || cur.text != "spectral")
+    syntaxError("expected spectral block");
+  advance();
+  expect(TokenType::LBrace);
+
+  SpectralInitialDataDecl out;
+  out.enabled = true;
+  bool hasSystem = false;
+  bool hasResolution = false;
+  bool hasBasis = false;
+  bool hasCoordinateMap = false;
+  bool hasCoordinateParameters = false;
+  bool hasUnknownMap = false;
+  bool hasUnknownMapParameters = false;
+  bool hasProjector = false;
+  bool hasReconstruction = false;
+
+  auto parseIdentifierValue = [&]() {
+    if (cur.type != TokenType::Identifier)
+      syntaxError("spectral initial_data property expects an identifier");
+    std::string value = cur.text;
+    advance();
+    return value;
+  };
+  auto parseSignedNumber = [&]() {
+    double sign = 1.0;
+    if (cur.type == TokenType::Minus) {
+      sign = -1.0;
+      advance();
+    } else if (cur.type == TokenType::Plus) {
+      advance();
+    }
+    if (cur.type != TokenType::Number)
+      syntaxError("spectral initial_data numeric property expects a number");
+    const double value = sign * std::stod(cur.text);
+    advance();
+    return value;
+  };
+  auto parseIdentifierList = [&]() {
+    std::vector<std::string> values;
+    expect(TokenType::LBracket);
+    while (cur.type != TokenType::RBracket) {
+      values.push_back(parseIdentifierValue());
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      if (cur.type != TokenType::RBracket)
+        syntaxError("expected ',' or ']' in identifier list");
+    }
+    expect(TokenType::RBracket);
+    return values;
+  };
+  auto parseNumberList = [&]() {
+    std::vector<double> values;
+    expect(TokenType::LBracket);
+    while (cur.type != TokenType::RBracket) {
+      values.push_back(parseSignedNumber());
+      if (cur.type == TokenType::Comma) {
+        advance();
+        continue;
+      }
+      if (cur.type != TokenType::RBracket)
+        syntaxError("expected ',' or ']' in numeric list");
+    }
+    expect(TokenType::RBracket);
+    return values;
+  };
+
+  while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
+    if (cur.type == TokenType::Semicolon) {
+      advance();
+      continue;
+    }
+    if (cur.type != TokenType::Identifier)
+      syntaxError("spectral initial_data expects a property name");
+
+    const std::string key = cur.text;
+    if (key == "solve") {
+      if (out.hasSolve)
+        syntaxError("duplicate solve block in spectral initial_data");
+      out.solve = parseConstraintSolve();
+      out.hasSolve = true;
+      continue;
+    }
+    if (key == "parameter") {
+      advance();
+      if (cur.type != TokenType::Identifier)
+        syntaxError("parameter binding expects a parameter name");
+      SpectralParameterBindingDecl binding;
+      binding.name = cur.text;
+      advance();
+      expect(TokenType::Equals);
+      binding.value = parseSignedNumber();
+      out.parameters.push_back(std::move(binding));
+      continue;
+    }
+
+    advance();
+    expect(TokenType::Equals);
+    if (key == "system") {
+      if (hasSystem)
+        syntaxError("duplicate system in spectral initial_data");
+      out.system = parseIdentifierValue();
+      hasSystem = true;
+    } else if (key == "coordinate_map") {
+      if (hasCoordinateMap)
+        syntaxError("duplicate coordinate_map in spectral initial_data");
+      out.coordinateMap = parseIdentifierValue();
+      hasCoordinateMap = true;
+    } else if (key == "resolution") {
+      if (hasResolution)
+        syntaxError("duplicate resolution in spectral initial_data");
+      const auto numbers = parseNumberList();
+      for (double number : numbers) {
+        if (number != static_cast<double>(static_cast<int>(number)))
+          syntaxError("spectral resolution expects integers");
+        out.resolution.push_back(static_cast<int>(number));
+      }
+      hasResolution = true;
+    } else if (key == "basis") {
+      if (hasBasis)
+        syntaxError("duplicate basis in spectral initial_data");
+      out.basis = parseIdentifierList();
+      hasBasis = true;
+    } else if (key == "coordinate_parameters") {
+      if (hasCoordinateParameters)
+        syntaxError(
+            "duplicate coordinate_parameters in spectral initial_data");
+      out.coordinateParameters = parseIdentifierList();
+      hasCoordinateParameters = true;
+    } else if (key == "unknown_map") {
+      if (hasUnknownMap)
+        syntaxError("duplicate unknown_map in spectral initial_data");
+      out.unknownMap = parseIdentifierValue();
+      hasUnknownMap = true;
+    } else if (key == "unknown_map_parameters") {
+      if (hasUnknownMapParameters)
+        syntaxError(
+            "duplicate unknown_map_parameters in spectral initial_data");
+      out.unknownMapParameters = parseNumberList();
+      hasUnknownMapParameters = true;
+    } else if (key == "field_projector") {
+      if (hasProjector)
+        syntaxError("duplicate field_projector in spectral initial_data");
+      out.fieldProjector = parseIdentifierValue();
+      hasProjector = true;
+    } else if (key == "reconstruction") {
+      if (hasReconstruction)
+        syntaxError("duplicate reconstruction in spectral initial_data");
+      out.reconstruction = parseIdentifierValue();
+      hasReconstruction = true;
+    } else {
+      syntaxError("unknown spectral initial_data property '" + key + "'");
+    }
+  }
+
+  expect(TokenType::RBrace);
+  return out;
 }
 
 SpectralDomainDecl Parser::parseSpectralDomain() {
@@ -652,10 +846,7 @@ ConstraintSolveConfig Parser::parseConstraintSolve() {
   expect(TokenType::LBrace);
 
   ConstraintSolveConfig solve;
-  bool hasNonlinear = false;
-  bool hasLinear = false;
-  bool hasTolerance = false;
-  bool hasMaxIterations = false;
+  std::set<std::string> seen;
   while (cur.type != TokenType::RBrace && cur.type != TokenType::End) {
     if (cur.type == TokenType::Semicolon) {
       advance();
@@ -667,47 +858,62 @@ ConstraintSolveConfig Parser::parseConstraintSolve() {
     advance();
     expect(TokenType::Equals);
 
-    if (key == "tolerance") {
-      if (hasTolerance)
-        syntaxError("duplicate tolerance in solve block");
+    if (!seen.insert(key).second)
+      syntaxError("duplicate " + key + " in solve block");
+
+    if (key == "tolerance" || key == "linear_tolerance" ||
+        key == "linear_relative_tolerance" ||
+        key == "jvp_relative_step" || key == "jvp_absolute_step") {
       if (cur.type != TokenType::Number)
-        syntaxError("tolerance expects a number");
-      solve.tolerance = std::stod(cur.text);
+        syntaxError(key + " expects a number");
+      const double value = std::stod(cur.text);
       advance();
-      hasTolerance = true;
+      if (key == "tolerance")
+        solve.tolerance = value;
+      else if (key == "linear_tolerance")
+        solve.linearTolerance = value;
+      else if (key == "linear_relative_tolerance")
+        solve.linearRelativeTolerance = value;
+      else if (key == "jvp_relative_step")
+        solve.jvpRelativeStep = value;
+      else
+        solve.jvpAbsoluteStep = value;
       continue;
     }
-    if (key == "max_iterations") {
-      if (hasMaxIterations)
-        syntaxError("duplicate max_iterations in solve block");
+    if (key == "max_iterations" || key == "max_linear_iterations" ||
+        key == "restart" || key == "preconditioner_sweeps") {
       if (cur.type != TokenType::Number)
-        syntaxError("max_iterations expects an integer");
+        syntaxError(key + " expects an integer");
       if (cur.text.find_first_of(".eE") != std::string::npos)
-        syntaxError("max_iterations expects an integer");
-      solve.maxIterations = std::stoi(cur.text);
+        syntaxError(key + " expects an integer");
+      const int value = std::stoi(cur.text);
       advance();
-      hasMaxIterations = true;
+      if (key == "max_iterations")
+        solve.maxIterations = value;
+      else if (key == "max_linear_iterations")
+        solve.maxLinearIterations = value;
+      else if (key == "restart")
+        solve.restart = value;
+      else
+        solve.preconditionerSweeps = value;
       continue;
     }
     if (cur.type != TokenType::Identifier)
       syntaxError("solve property '" + key + "' expects an identifier");
     if (key == "nonlinear") {
-      if (hasNonlinear)
-        syntaxError("duplicate nonlinear in solve block");
       solve.nonlinear = cur.text;
-      hasNonlinear = true;
     } else if (key == "linear") {
-      if (hasLinear)
-        syntaxError("duplicate linear in solve block");
       solve.linear = cur.text;
-      hasLinear = true;
+    } else if (key == "preconditioner") {
+      solve.preconditioner = cur.text;
     } else {
       syntaxError("unknown solve property '" + key + "'");
     }
     advance();
   }
   expect(TokenType::RBrace);
-  if (!hasNonlinear || !hasLinear || !hasTolerance || !hasMaxIterations)
+  if (!seen.count("nonlinear") || !seen.count("linear") ||
+      !seen.count("tolerance") || !seen.count("max_iterations"))
     syntaxError(
         "solve requires nonlinear, linear, tolerance and max_iterations");
   return solve;

@@ -3,6 +3,7 @@
 #include "tensorium/Backend/DomainIR.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -86,6 +87,22 @@ struct HostSpectralResidualSystemABI {
   std::vector<HostSpectralResidualSystemEquationABI> equations;
 };
 
+struct HostSpectralInitialDataABI {
+  std::string name;
+  std::string system;
+  std::string coordinateMap;
+  std::vector<std::int64_t> resolution;
+  std::vector<std::string> basis;
+  std::vector<std::string> coordinateParameters;
+  std::string unknownMap;
+  std::vector<double> unknownMapParameters;
+  std::string fieldProjector;
+  std::string reconstruction;
+  std::vector<std::string> parameterNames;
+  std::vector<double> parameterValues;
+  tensorium::backend::ConstraintSolveIR solve;
+};
+
 struct HostModuleABI {
   int dimension = 3;
   std::string coordSystem;
@@ -97,6 +114,7 @@ struct HostModuleABI {
   std::vector<HostFieldABI> fields;
   std::vector<HostKernelABI> kernels;
   std::vector<HostSpectralResidualSystemABI> spectralResidualSystems;
+  std::optional<HostSpectralInitialDataABI> spectralInitialData;
   std::vector<HostPrintABI> prints;
   std::vector<std::string> printFields;
 };

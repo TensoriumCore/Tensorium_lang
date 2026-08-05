@@ -91,6 +91,38 @@ typedef struct tensorium_spectral_residual_system_desc {
   std::int64_t equation_count;
 } tensorium_spectral_residual_system_desc;
 
+typedef struct tensorium_spectral_initial_data_desc {
+  std::int64_t abi_version;
+  const char *symbol_name;
+  const char *system_name;
+  const char *coordinate_map;
+  const std::int64_t *resolution;
+  const char *const *basis;
+  std::int64_t dimension;
+  const char *const *coordinate_parameter_names;
+  std::int64_t coordinate_parameter_count;
+  const char *unknown_map;
+  const double *unknown_map_parameters;
+  std::int64_t unknown_map_parameter_count;
+  const char *field_projector;
+  const char *reconstruction;
+  const char *const *parameter_names;
+  const double *parameter_values;
+  std::int64_t parameter_count;
+  const char *nonlinear_solver;
+  const char *linear_solver;
+  double residual_tolerance;
+  std::int64_t max_newton_steps;
+  double linear_tolerance;
+  double linear_relative_tolerance;
+  std::int64_t max_linear_iterations;
+  std::int64_t restart;
+  const char *preconditioner;
+  std::int64_t preconditioner_sweeps;
+  double jvp_relative_step;
+  double jvp_absolute_step;
+} tensorium_spectral_initial_data_desc;
+
 #endif /* TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H */
 
 namespace tensorium_mlir::runtime {

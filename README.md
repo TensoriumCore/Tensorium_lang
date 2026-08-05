@@ -111,6 +111,16 @@ configuration, and exports a Cartesian BSSN slice plus JSON metadata:
 ./run_two_puncture_qc0.sh /tmp/tensorium_qc0_bssn_slice.csv
 ```
 
+The wrapper contains no physical or numerical configuration. Those choices are
+declared in the `.tn` source and consumed through generated metadata by the
+generic command:
+
+```bash
+./run_initial_data.sh \
+  tests/fixtures/elliptic/spectral_two_puncture_hamiltonian_3d.tn \
+  /tmp/tensorium_qc0_bssn_slice.csv
+```
+
 See `docs/two_puncture_initial_data.md` for parameters, output fields,
 resolution controls, validation results, and current production limitations.
 

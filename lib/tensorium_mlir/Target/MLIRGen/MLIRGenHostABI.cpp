@@ -632,6 +632,27 @@ HostModuleABI buildHostModuleABI(const tensorium::backend::ModuleIR &module,
   moduleOp.walk([&](mlir::func::FuncOp fn) { appendHostKernelABI(abi, fn); });
   abi.spectralResidualSystems =
       hostSpectralResidualSystems(module, abi.kernels);
+  if (module.spectralInitialData) {
+    const auto &source = *module.spectralInitialData;
+    HostSpectralInitialDataABI initialData;
+    initialData.name = source.name;
+    initialData.system = source.system;
+    initialData.coordinateMap = source.coordinateMap;
+    initialData.resolution.assign(source.resolution.begin(),
+                                  source.resolution.end());
+    initialData.basis = source.basis;
+    initialData.coordinateParameters = source.coordinateParameters;
+    initialData.unknownMap = source.unknownMap;
+    initialData.unknownMapParameters = source.unknownMapParameters;
+    initialData.fieldProjector = source.fieldProjector;
+    initialData.reconstruction = source.reconstruction;
+    for (const auto &binding : source.parameters) {
+      initialData.parameterNames.push_back(binding.name);
+      initialData.parameterValues.push_back(binding.value);
+    }
+    initialData.solve = source.solve;
+    abi.spectralInitialData = std::move(initialData);
+  }
 
   for (const auto &print : module.prints) {
     HostPrintABI out;

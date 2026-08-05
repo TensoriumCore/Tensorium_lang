@@ -3333,6 +3333,98 @@ findHostBufferABI(const tensorium_mlir::HostKernelABI &kernel,
   return nullptr;
 }
 
+static bool testSpectralInitialDataDeclarativeMetadata() {
+  const std::string standaloneSource = R"(
+field scalar U
+field scalar H
+
+initial_data Standalone {
+  spectral {
+    system = IdentityResidual
+    coordinate_map = identity
+    resolution = [3, 3, 4]
+    basis = [chebyshev, chebyshev, fourier]
+    coordinate_parameters = []
+    unknown_map = identity
+    unknown_map_parameters = []
+    field_projector = none
+    reconstruction = none
+    solve {
+      nonlinear = newton
+      linear = direct
+      tolerance = 1e-10
+      max_iterations = 4
+    }
+  }
+}
+
+constraints IdentityResidual {
+  residual H = laplacian(U)
+}
+)";
+  const auto standalone =
+      buildModuleFromSource(standaloneSource, CompilationMode::Executable);
+  if (!standalone.spectralInitialData || !standalone.simulation ||
+      standalone.simulation->dimension != 3 ||
+      standalone.simulation->resolution != std::vector<int>({3, 3, 4}) ||
+      standalone.simulation->spatial.scheme !=
+          tensorium::backend::SpatialScheme::Spectral) {
+    std::cerr << "FAIL: standalone spectral initial_data did not synthesize "
+                 "compiler grid metadata\n";
+    return false;
+  }
+
+  auto mod = buildModuleFromFile(
+      "tests/fixtures/elliptic/spectral_two_puncture_hamiltonian_3d.tn",
+      CompilationMode::Executable);
+  if (!mod.spectralInitialData) {
+    std::cerr << "FAIL: QC0 fixture lost spectral initial_data metadata\n";
+    return false;
+  }
+  const auto &initialData = *mod.spectralInitialData;
+  if (initialData.name != "QC0" ||
+      initialData.system != "SpectralTwoPunctureHamiltonian3D" ||
+      initialData.coordinateMap != "two_puncture" ||
+      initialData.resolution != std::vector<int>({10, 10, 16}) ||
+      initialData.basis !=
+          std::vector<std::string>({"chebyshev", "chebyshev", "fourier"}) ||
+      initialData.coordinateParameters != std::vector<std::string>({"b"}) ||
+      initialData.unknownMap != "linear_boundary" ||
+      initialData.unknownMapParameters != std::vector<double>({0.0, 1.0, 1.0}) ||
+      initialData.fieldProjector != "two_puncture_inversion_even" ||
+      initialData.reconstruction != "two_puncture_bssn" ||
+      initialData.parameters.size() != 15 ||
+      initialData.solve.linear != "gmres" ||
+      initialData.solve.preconditioner != "mapped_fd_laplacian_shift" ||
+      initialData.solve.maxLinearIterations != 1024 ||
+      initialData.solve.restart != 64 ||
+      initialData.solve.preconditionerSweeps != 12) {
+    std::cerr << "FAIL: QC0 spectral initial_data metadata mismatch\n";
+    return false;
+  }
+
+  tensorium_mlir::MLIRGenOptions options = makeExecutablePipelineOpts();
+  options.enableRhsGridAffinePass = true;
+  options.enableStripSourceFuncsPass = true;
+  std::string header;
+  if (!tensorium_mlir::emitHostHeader(mod, options, &header)) {
+    std::cerr << "FAIL: QC0 spectral initial_data host header emission failed\n";
+    return false;
+  }
+  if (header.find("#define TENSORIUM_SPECTRAL_INITIAL_DATA_COUNT 1") ==
+          std::string::npos ||
+      header.find("tensorium_spectral_initial_data[1]") ==
+          std::string::npos ||
+      header.find("\"two_puncture_bssn\"") == std::string::npos ||
+      header.find("\"mapped_fd_laplacian_shift\"") ==
+          std::string::npos ||
+      header.find("0.33319174979999999") == std::string::npos) {
+    std::cerr << "FAIL: generated host header lacks declarative QC0 metadata\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testLoweredGridHostABIDescriptor() {
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableMetricLoweringPass = true;
@@ -7285,6 +7377,8 @@ int main() {
        &testLoweredGridHostHeaderEmission},
       {"testLoweredGridHostABIDescriptor",
        &testLoweredGridHostABIDescriptor},
+      {"testSpectralInitialDataDeclarativeMetadata",
+       &testSpectralInitialDataDeclarativeMetadata},
       {"testHostFieldStoragePlanDeduplicatesBuffers",
        &testHostFieldStoragePlanDeduplicatesBuffers},
       {"testGeneratedHostStorageConsumesDescriptorTables",

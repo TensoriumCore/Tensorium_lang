@@ -343,14 +343,16 @@ generated collocation residual remains below its `2e-8` nonlinear tolerance.
 
 The API deliberately accepts the generic `SpectralResidualProblem`, so the
 solver-field-to-physical-field transform is obtained from its configured
-unknown map rather than hard-coding `U=(A-1)v`. The caller still supplies the
-TwoPunctures masses, momenta, spins, and half-separation explicitly. Automatic
-parameter binding from generated module metadata remains future work.
+unknown map rather than hard-coding `U=(A-1)v`. Generated initial-data metadata
+now binds the TwoPunctures masses, momenta, spins, and half-separation directly
+from the DSL declaration.
 
 ### Executable QC0 data set
 
-`run_two_puncture_qc0.sh` is an end-to-end executable case, separate from the
-published-data regression above. It uses the standard QC0 parameters
+`run_two_puncture_qc0.sh` is a thin wrapper around the generic
+`run_initial_data.sh` command. The physical and numerical configuration is
+declared in `spectral_two_puncture_hamiltonian_3d.tn`; no case-specific C++
+runner contains these values. The source uses the standard QC0 parameters
 
 ```text
 b = 1.168642873
@@ -367,10 +369,10 @@ From the repository root, run
 ./plot_constraint_slice.py /tmp/tensorium_qc0_bssn_slice.csv chi
 ```
 
-The script compiles the physical DSL residual to LLVM, solves the nonlinear
-Hamiltonian constraint, performs the Cartesian BSSN handoff, and writes both
-the requested CSV and `<csv>.json` metadata. The default `10x10x16` spectral
-solve currently reports:
+The generic command compiles the physical DSL residual to LLVM, reads its
+generated initial-data descriptor, solves the nonlinear Hamiltonian constraint,
+performs the Cartesian BSSN handoff, and writes both the requested CSV and
+`<csv>.json` metadata. The default `10x10x16` spectral solve currently reports:
 
 ```text
 Newton steps:                  5
@@ -381,7 +383,7 @@ ADM energy:                    1.00792622
 ADM angular momentum Jz:       0.77876433
 puncture ADM masses:           0.51685532, 0.51685532
 axis regularity error:         6.66e-6
-BSSN trace error:              8.33e-17
+BSSN trace error:              2.78e-17
 ```
 
 An `8x8x12 -> 10x10x16` check changes the ADM energy by `1.98e-4`, each
@@ -396,15 +398,18 @@ residuals, gauge choice, fields, spacing, and layout. The Cartesian sampling
 resolution and slice extent can be changed without editing source:
 
 ```bash
-TP_SLICE_N=257 TP_HALF_WIDTH=12 \
-  ./run_two_puncture_qc0.sh /tmp/qc0_high.csv
+TENSORIUM_SLICE_N=257 TENSORIUM_HALF_WIDTH=12 \
+  ./run_initial_data.sh \
+    tests/fixtures/elliptic/spectral_two_puncture_hamiltonian_3d.tn \
+    /tmp/qc0_high.csv
 ```
 
 This is a real solved data set and a reproducible handoff example. The CSV is
 intentionally a diagnostic slice, not a production 3D evolution checkpoint;
 an external solver should call the SoA handoff API on its own full Cartesian
-grid. `TP_NA`, `TP_NB`, and `TP_NPHI` also expose the spectral resolution for
-development studies. The `10x10x16` configuration is the validated default;
+grid. The spectral resolution and solver policy are part of the DSL `spectral`
+block, so changing a physical case never requires editing or rebuilding a C++
+runner. The `10x10x16` configuration is the validated default;
 the current relaxation preconditioner does not yet converge reliably for QC0
 at `12x12x20`, which is why production-resolution scaling remains an explicit
 open item rather than an implied capability.
@@ -423,7 +428,8 @@ but it is still a small collocation regression. It does not yet provide:
   preconditioning;
 - a versioned C ABI or a concrete external-evolution-code adapter for the
   nonradial spectral solution;
-- automatic selection of coordinate and unknown maps from DSL/module metadata.
+- additional coordinate-map, projector, and reconstruction registry entries
+  beyond the currently implemented identity and TwoPunctures policies.
 
 The compiled spectral residual path currently differentiates one scalar
 unknown per equation. General coupled scalar systems are supported through

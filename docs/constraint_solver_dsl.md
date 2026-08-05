@@ -777,19 +777,74 @@ connection terms described above.
 
 ## Generated multidimensional spectral constraints
 
-The `constraints` kernel path is the current compiled multidimensional
-counterpart to the host-side radial `initial_data` solver. A spectral
-constraint remains an ordinary DSL equation: coordinates, parameters, local
-scalar expressions, unknown derivatives, and nonlinear source terms are
-lowered to generated point and grid residual kernels. Domain geometry, unknown
-representation, Newton strategy, and final evolution-grid handoff remain
-runtime policies.
+The `constraints` kernel path is the compiled multidimensional counterpart to
+the host-side radial `initial_data` solver. A spectral constraint remains an
+ordinary DSL equation: coordinates, parameters, local scalar expressions,
+unknown derivatives, and nonlinear source terms are lowered to generated point
+and grid residual kernels. A companion `initial_data spectral` block can now
+declare the runtime policy instead of requiring a case-specific C++ runner:
+
+```tensorium
+initial_data QC0 {
+  spectral {
+    system = SpectralTwoPunctureHamiltonian3D
+    coordinate_map = two_puncture
+    resolution = [10, 10, 16]
+    basis = [chebyshev, chebyshev, fourier]
+    coordinate_parameters = [b]
+    unknown_map = linear_boundary
+    unknown_map_parameters = [0, 1, 1]
+    field_projector = two_puncture_inversion_even
+    reconstruction = two_puncture_bssn
+
+    parameter b = 1.168642873
+    # Remaining declared physical parameters are bound in the same way.
+
+    solve {
+      nonlinear = newton
+      linear = gmres
+      tolerance = 2e-8
+      max_iterations = 16
+      linear_tolerance = 1e-9
+      linear_relative_tolerance = 2e-2
+      max_linear_iterations = 1024
+      restart = 64
+      preconditioner = mapped_fd_laplacian_shift
+      preconditioner_sweeps = 12
+      jvp_relative_step = 2e-6
+      jvp_absolute_step = 1e-8
+    }
+  }
+}
+```
+
+The frontend validates this declaration and preserves it in
+`SpectralInitialDataIR`. Host-header generation emits an ABI-versioned C
+descriptor containing the selected residual system, basis, resolution,
+parameter bindings, map names, reconstruction, and nonlinear/linear solver
+settings.
+`GeneratedInitialData.h` consumes that descriptor through registries for
+coordinate maps, unknown maps, field projectors, and preconditioners.
+The spectral block owns its grid metadata, so a constraint-only source does
+not need a separate `simulation` block; the compiler synthesizes the internal
+three-dimensional spectral compilation metadata when it is absent.
+
+From the repository root, the generic executable workflow is:
+
+```bash
+./run_initial_data.sh problem.tn /tmp/initial_data.csv
+```
+
+`reconstruction = none` exports the solved physical unknowns at the spectral
+collocation points, including logical and mapped physical coordinates.
+`reconstruction = two_puncture_bssn` instead exports the Cartesian BSSN slice
+and physical diagnostics described in `two_puncture_initial_data.md`.
 
 `tests/fixtures/elliptic/spectral_two_puncture_hamiltonian_3d.tn` is the first
 physical binary-black-hole example on this path. The DSL itself computes the
 two puncture radii, arbitrary Bowen-York momentum and spin tensors, their
-contraction, and the Lichnerowicz Hamiltonian residual. The runtime composes
-that generated equation with the compact two-centre coordinate map and the
+contraction, and the Lichnerowicz Hamiltonian residual. Its generated descriptor
+composes that equation with the compact two-centre coordinate map and the
 generic boundary-factor unknown map `U=(A-1)v`.
 
 Generic tensor-product interpolation evaluates the solved collocation field at

@@ -120,7 +120,9 @@ SemanticAnalyzer::SemanticAnalyzer(const Program &p, CompilationMode m)
   }
 
   const bool constraintOnly =
-      prog.initialData && prog.initialData->hasConstraintProblem &&
+      prog.initialData &&
+      (prog.initialData->hasConstraintProblem ||
+       prog.initialData->hasSpectralProblem) &&
       !prog.initialData->hasMetric4 && !prog.initialData->hasDecomposed &&
       prog.evolutions.empty();
   if (!prog.simulation) {

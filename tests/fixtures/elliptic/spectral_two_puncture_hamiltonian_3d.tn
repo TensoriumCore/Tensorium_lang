@@ -20,6 +20,51 @@ params {
   p2x, p2y, p2z, s2x, s2y, s2z
 }
 
+initial_data QC0 {
+  spectral {
+    system = SpectralTwoPunctureHamiltonian3D
+    coordinate_map = two_puncture
+    resolution = [10, 10, 16]
+    basis = [chebyshev, chebyshev, fourier]
+    coordinate_parameters = [b]
+    unknown_map = linear_boundary
+    unknown_map_parameters = [0, 1, 1]
+    field_projector = two_puncture_inversion_even
+    reconstruction = two_puncture_bssn
+
+    parameter b = 1.168642873
+    parameter m1 = 0.453
+    parameter m2 = 0.453
+    parameter p1x = 0
+    parameter p1y = 0.3331917498
+    parameter p1z = 0
+    parameter s1x = 0
+    parameter s1y = 0
+    parameter s1z = 0
+    parameter p2x = 0
+    parameter p2y = -0.3331917498
+    parameter p2z = 0
+    parameter s2x = 0
+    parameter s2y = 0
+    parameter s2z = 0
+
+    solve {
+      nonlinear = newton
+      linear = gmres
+      tolerance = 2e-8
+      max_iterations = 16
+      linear_tolerance = 1e-9
+      linear_relative_tolerance = 2e-2
+      max_linear_iterations = 1024
+      restart = 64
+      preconditioner = mapped_fd_laplacian_shift
+      preconditioner_sweeps = 12
+      jvp_relative_step = 2e-6
+      jvp_absolute_step = 1e-8
+    }
+  }
+}
+
 simulation {
   coordinates = cartesian
   dimension = 3

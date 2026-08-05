@@ -254,6 +254,34 @@ struct ConstraintSolveIR {
   std::string linear;
   double tolerance = 1.0e-10;
   int maxIterations = 30;
+  double linearTolerance = 1.0e-10;
+  double linearRelativeTolerance = 1.0e-10;
+  int maxLinearIterations = 64;
+  int restart = 0;
+  std::string preconditioner = "none";
+  int preconditionerSweeps = 4;
+  double jvpRelativeStep = 1.4901161193847656e-8;
+  double jvpAbsoluteStep = 0.0;
+};
+
+struct SpectralParameterBindingIR {
+  std::string name;
+  double value = 0.0;
+};
+
+struct SpectralInitialDataIR {
+  std::string name;
+  std::string system;
+  std::string coordinateMap;
+  std::vector<int> resolution;
+  std::vector<std::string> basis;
+  std::vector<std::string> coordinateParameters;
+  std::string unknownMap;
+  std::vector<double> unknownMapParameters;
+  std::string fieldProjector;
+  std::string reconstruction;
+  std::vector<SpectralParameterBindingIR> parameters;
+  ConstraintSolveIR solve;
 };
 
 struct ConstraintCttReconstructionIR {
@@ -290,6 +318,7 @@ struct ModuleIR {
   std::optional<SimulationIR> simulation;
   std::optional<InitialDataIR> initialData;
   std::optional<ConstraintProblemIR> constraintProblem;
+  std::optional<SpectralInitialDataIR> spectralInitialData;
   bool hasResidualConstraints = false;
   std::vector<FieldIR> fields;
   std::vector<EvolutionIR> evolutions;

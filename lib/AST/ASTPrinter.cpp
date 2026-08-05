@@ -261,6 +261,33 @@ void printProgram(const Program &prog) {
         std::cout << "\n";
       }
     }
+    if (prog.initialData->hasSpectralProblem) {
+      const auto &spectral = prog.initialData->spectralProblem;
+      std::cout << "  spectral system=" << spectral.system
+                << " coordinate_map=" << spectral.coordinateMap
+                << " unknown_map=" << spectral.unknownMap
+                << " field_projector=" << spectral.fieldProjector
+                << " reconstruction=" << spectral.reconstruction << "\n";
+      std::cout << "    resolution=[";
+      for (size_t i = 0; i < spectral.resolution.size(); ++i) {
+        std::cout << spectral.resolution[i];
+        if (i + 1 < spectral.resolution.size())
+          std::cout << ",";
+      }
+      std::cout << "] basis=[";
+      for (size_t i = 0; i < spectral.basis.size(); ++i) {
+        std::cout << spectral.basis[i];
+        if (i + 1 < spectral.basis.size())
+          std::cout << ",";
+      }
+      std::cout << "] parameters=" << spectral.parameters.size() << "\n";
+      std::cout << "    solve nonlinear=" << spectral.solve.nonlinear
+                << " linear=" << spectral.solve.linear
+                << " tolerance=" << spectral.solve.tolerance
+                << " max_iterations=" << spectral.solve.maxIterations
+                << " preconditioner=" << spectral.solve.preconditioner
+                << "\n";
+    }
     if (prog.initialData->hasConstraintProblem) {
       const auto &problem = prog.initialData->constraintProblem;
       std::cout << "  constraint_problem " << problem.name << ":\n";
