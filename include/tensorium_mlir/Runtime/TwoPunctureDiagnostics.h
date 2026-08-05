@@ -12,6 +12,11 @@ struct TwoPunctureAdmDiagnostics {
   std::array<double, 3> angularMomentum{};
 };
 
+struct TwoPunctureLocalMassDiagnostics {
+  std::array<double, 2> regularFieldAtPunctures{};
+  std::array<double, 2> admMasses{};
+};
+
 inline std::array<double, 3>
 twoPunctureCrossProduct(const std::array<double, 3> &lhs,
                         const std::array<double, 3> &rhs) {
@@ -55,6 +60,31 @@ inline TwoPunctureAdmDiagnostics makeTwoPunctureAdmDiagnostics(
         !std::isfinite(out.angularMomentum[i])) {
       throw std::runtime_error("two-puncture ADM vector overflowed");
     }
+  }
+  return out;
+}
+
+inline TwoPunctureLocalMassDiagnostics makeTwoPunctureLocalMassDiagnostics(
+    double halfSeparation, double bareMassPlus, double bareMassMinus,
+    double regularFieldPlus, double regularFieldMinus) {
+  if (!std::isfinite(halfSeparation) || halfSeparation <= 0.0 ||
+      !std::isfinite(bareMassPlus) || bareMassPlus <= 0.0 ||
+      !std::isfinite(bareMassMinus) || bareMassMinus <= 0.0 ||
+      !std::isfinite(regularFieldPlus) ||
+      !std::isfinite(regularFieldMinus)) {
+    throw std::runtime_error("invalid two-puncture local-mass input");
+  }
+
+  const double interaction =
+      bareMassPlus * bareMassMinus / (4.0 * halfSeparation);
+  TwoPunctureLocalMassDiagnostics out;
+  out.regularFieldAtPunctures = {regularFieldPlus, regularFieldMinus};
+  out.admMasses = {
+      (1.0 + regularFieldPlus) * bareMassPlus + interaction,
+      (1.0 + regularFieldMinus) * bareMassMinus + interaction};
+  if (!std::isfinite(out.admMasses[0]) ||
+      !std::isfinite(out.admMasses[1])) {
+    throw std::runtime_error("two-puncture local ADM mass overflowed");
   }
   return out;
 }

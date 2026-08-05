@@ -184,15 +184,56 @@ fine final linear residual L2: 4.1e-11
 fine inversion-parity error: exactly zero after projection
 ```
 
+## TP-5: Local puncture masses and bare-mass calibration
+
+TP-5 implements the local ADM mass definition from Eq. (83) of the original
+single-domain puncture paper. With puncture coordinate distance `D=2*b`, it is
+
+```text
+M_plus  = (1 + u_plus)  m_plus  + m_plus*m_minus/(4*b)
+M_minus = (1 + u_minus) m_minus + m_plus*m_minus/(4*b).
+```
+
+Here `u_plus` and `u_minus` are the regular physical correction at the two
+puncture ends, not the solver variable `v`. For the current unknown map
+`u=(A-1)*v`, the runtime extrapolates `-2*v` to `A=-1`, `B=-1` and `B=+1`.
+It averages the endpoint trace over `phi` to extract the regular scalar value
+and separately reports the maximum angular variation. The latter is a direct
+diagnostic of unresolved puncture regularity.
+
+`calibrateTwoPunctureBareMasses` is independent of the elliptic implementation.
+It receives a callback which, for a proposed pair of bare masses, solves the
+problem and returns `u_plus,u_minus`. The calibrator analytically inverts the
+two local-mass equations while holding the latest correction fixed, then asks
+the callback to re-solve until the requested masses are reached. The callback
+can therefore be backed by Tensorium's current generated residual solver or by
+an external elliptic backend later.
+
+The physical regression targets the puncture masses obtained from a reference
+solve with `m_plus=m_minus=0.55`, then restarts the calibration from
+`m_plus=m_minus=0.50`:
+
+```text
+target local masses:       0.6053070980728634, 0.6053070980728634
+fine-grid local masses:    0.6052960934027002, 0.6052960934027002
+recovered bare masses:     0.5499999644991266, 0.5499999644991266
+backend solves:            4
+final local-mass error:    2.2e-16
+puncture phi variation:    3.1e-6
+mass refinement change:    8.36e-4 -> 1.10e-5
+```
+
+This is a same-grid fixed-point regression, not yet a comparison with apparent-
+horizon masses or a published production-resolution parameter set.
+
 ## What remains before production TwoPunctures
 
-The TP-2 through TP-4 path is a genuine physical residual and nonlinear solve,
+The TP-2 through TP-5 path is a genuine physical residual and nonlinear solve,
 but it is still a small collocation regression. It does not yet provide:
 
 - puncture and axis regularity enforced through basis/parity rules;
 - higher-resolution convergence studies against published TwoPunctures data;
-- puncture-local ADM masses or independent surface-integral charge checks;
-- the nonlinear bare-mass search needed to match requested physical masses;
+- apparent-horizon masses or independent surface-integral charge checks;
 - a sparse, multilevel, or multidomain mapped preconditioner suitable for
   production resolutions;
 - interpolation and metadata export to an external evolution solver;
@@ -207,7 +248,7 @@ The inversion projector is not a substitute for regular spectral bases at the
 coordinate degeneracies. In particular, the correct Fourier-mode behavior as
 `rho -> 0` and puncture-corner regularity are still not encoded as basis rules.
 
-## Next milestone: TP-5 mass calibration and production scaling
+## Next milestone: TP-6 regularity and production scaling
 
 The production path is now:
 
@@ -215,10 +256,9 @@ The production path is now:
    corners;
 2. replace the diagonal JVP setup with a scalable mapped-operator
    preconditioner and restarted GMRES;
-3. add puncture-mass diagnostics and the physical-parameter root search;
-4. validate higher-resolution unequal-mass, boosted, and spinning cases against
+3. validate higher-resolution unequal-mass, boosted, and spinning cases against
    TwoPunctures cases;
-5. interpolate the solved fields onto the external evolution grid and verify
+4. interpolate the solved fields onto the external evolution grid and verify
    the Hamiltonian and momentum constraints after handoff.
 
 ## References

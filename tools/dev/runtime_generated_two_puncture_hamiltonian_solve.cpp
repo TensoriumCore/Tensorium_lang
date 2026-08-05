@@ -1,6 +1,7 @@
 #include "tensorium_mlir/Runtime/SpectralResidualKernel.h"
 #include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
 #include "tensorium_mlir/Runtime/TwoPunctureDiagnostics.h"
+#include "tensorium_mlir/Runtime/TwoPunctureMassCalibration.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMap.h"
 #include "tensorium_mlir/Runtime/TwoPunctureSymmetry.h"
 
@@ -23,14 +24,17 @@
 namespace {
 
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
+using tensorium_mlir::runtime::calibrateTwoPunctureBareMasses;
 using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
 using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
 using tensorium_mlir::runtime::makeTwoPunctureAdmDiagnostics;
 using tensorium_mlir::runtime::makeTwoPunctureCoordinateMap;
 using tensorium_mlir::runtime::makeTwoPunctureDerivativeMap;
 using tensorium_mlir::runtime::makeTwoPunctureInversionEvenFieldProjector;
+using tensorium_mlir::runtime::makeTwoPunctureLocalMassDiagnostics;
 using tensorium_mlir::runtime::mapTwoPunctureCoordinates;
 using tensorium_mlir::runtime::measureTwoPunctureInversionParityError;
+using tensorium_mlir::runtime::sampleTwoPunctureRegularField;
 using tensorium_mlir::runtime::solveSpectralNewton;
 using tensorium_mlir::runtime::SpectralAxis;
 using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
@@ -38,6 +42,8 @@ using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
 using tensorium_mlir::runtime::SpectralPreconditionerKind;
+using tensorium_mlir::runtime::TwoPunctureMassCalibrationOptions;
+using tensorium_mlir::runtime::updateTwoPunctureBareMasses;
 
 } // namespace
 
@@ -260,6 +266,11 @@ int main() {
     const auto coarseAdm = makeTwoPunctureAdmDiagnostics(
         halfSeparation, mass1, mass2, coarseVInfinity, momentum1, momentum2,
         zeroSpin, zeroSpin);
+    const auto coarsePunctureSample =
+        sampleTwoPunctureRegularField(grid, solverFields[0]);
+    const auto coarseLocalMasses = makeTwoPunctureLocalMassDiagnostics(
+        halfSeparation, mass1, mass2, coarsePunctureSample.values[0],
+        coarsePunctureSample.values[1]);
 
     SpectralGrid3D fineGrid(SpectralAxis::chebyshevZeros(5),
                             SpectralAxis::chebyshevZeros(5),
@@ -296,8 +307,18 @@ int main() {
     const auto fineAdm = makeTwoPunctureAdmDiagnostics(
         halfSeparation, mass1, mass2, fineVInfinity, momentum1, momentum2,
         zeroSpin, zeroSpin);
+    const auto finePunctureSample =
+        sampleTwoPunctureRegularField(fineGrid, fineSolverFields[0]);
+    const auto fineLocalMasses = makeTwoPunctureLocalMassDiagnostics(
+        halfSeparation, mass1, mass2, finePunctureSample.values[0],
+        finePunctureSample.values[1]);
     const double probeDelta = std::abs(fineProbe - coarseProbe);
     const double admDelta = std::abs(fineAdm.energy - coarseAdm.energy);
+    const double punctureMassDelta =
+        std::max(std::abs(fineLocalMasses.admMasses[0] -
+                          coarseLocalMasses.admMasses[0]),
+                 std::abs(fineLocalMasses.admMasses[1] -
+                          coarseLocalMasses.admMasses[1]));
 
     SpectralGrid3D veryCoarseGrid(SpectralAxis::chebyshevZeros(3),
                                   SpectralAxis::chebyshevZeros(3),
@@ -332,12 +353,71 @@ int main() {
     const auto veryCoarseAdm = makeTwoPunctureAdmDiagnostics(
         halfSeparation, mass1, mass2, veryCoarseVInfinity, momentum1, momentum2,
         zeroSpin, zeroSpin);
+    const auto veryCoarsePunctureSample = sampleTwoPunctureRegularField(
+        veryCoarseGrid, veryCoarseSolverFields[0]);
+    const auto veryCoarseLocalMasses = makeTwoPunctureLocalMassDiagnostics(
+        halfSeparation, mass1, mass2, veryCoarsePunctureSample.values[0],
+        veryCoarsePunctureSample.values[1]);
     const double veryCoarseProbeDelta = std::abs(coarseProbe - veryCoarseProbe);
     const double veryCoarseAdmDelta =
         std::abs(coarseAdm.energy - veryCoarseAdm.energy);
+    const double veryCoarsePunctureMassDelta =
+        std::max(std::abs(coarseLocalMasses.admMasses[0] -
+                          veryCoarseLocalMasses.admMasses[0]),
+                 std::abs(coarseLocalMasses.admMasses[1] -
+                          veryCoarseLocalMasses.admMasses[1]));
 
     const double fineSymmetryError = measureTwoPunctureInversionParityError(
         fineGrid, fineSolverFields[0]);
+
+    const std::array<double, 2> algebraicTargets = {0.63, 0.41};
+    const std::array<double, 2> algebraicRegularField = {0.03, 0.07};
+    const auto algebraicBareMasses = updateTwoPunctureBareMasses(
+        halfSeparation, algebraicTargets, algebraicRegularField);
+    const auto algebraicLocalMasses = makeTwoPunctureLocalMassDiagnostics(
+        halfSeparation, algebraicBareMasses[0], algebraicBareMasses[1],
+        algebraicRegularField[0], algebraicRegularField[1]);
+    const double algebraicMassError = std::max(
+        std::abs(algebraicLocalMasses.admMasses[0] - algebraicTargets[0]),
+        std::abs(algebraicLocalMasses.admMasses[1] - algebraicTargets[1]));
+
+    std::array<std::vector<double>, 1> calibrationFields{
+        std::vector<double>(grid.size(), 0.0)};
+    double calibrationMaxPhiVariation = 0.0;
+    bool calibrationUsedMatrixFree = false;
+    TwoPunctureMassCalibrationOptions calibrationOptions;
+    calibrationOptions.maxIterations = 8;
+    calibrationOptions.absoluteTolerance = 5.0e-9;
+    calibrationOptions.relativeTolerance = 5.0e-9;
+    const auto calibrationResult = calibrateTwoPunctureBareMasses(
+        halfSeparation, coarseLocalMasses.admMasses,
+        std::array<double, 2>{0.50, 0.50},
+        [&](const std::array<double, 2> &bareMasses,
+            std::array<double, 2> &regularField) {
+          setParam("m1", bareMasses[0]);
+          setParam("m2", bareMasses[1]);
+          const auto calibrationSolve = solveSpectralNewton(
+              system,
+              std::span<std::vector<double>>(calibrationFields.data(),
+                                             calibrationFields.size()),
+              options);
+          calibrationUsedMatrixFree =
+              calibrationUsedMatrixFree ||
+              calibrationSolve.usedMatrixFreeGMRES;
+          if (!calibrationSolve.converged())
+            return false;
+          const auto sample =
+              sampleTwoPunctureRegularField(grid, calibrationFields[0]);
+          regularField = sample.values;
+          calibrationMaxPhiVariation =
+              std::max({calibrationMaxPhiVariation,
+                        sample.maxPhiVariation[0],
+                        sample.maxPhiVariation[1]});
+          return true;
+        },
+        calibrationOptions);
+    setParam("m1", mass1);
+    setParam("m2", mass2);
 
     std::printf("[two-puncture-hamiltonian] Brill-Lindquist residual max = "
                 "%.17g\n",
@@ -398,11 +478,36 @@ int main() {
     std::printf("[two-puncture-hamiltonian] fine orbital symmetry error = "
                 "%.17g\n",
                 fineSymmetryError);
+    std::printf("[two-puncture-hamiltonian] coarse puncture ADM masses = "
+                "%.17g %.17g\n",
+                coarseLocalMasses.admMasses[0],
+                coarseLocalMasses.admMasses[1]);
+    std::printf("[two-puncture-hamiltonian] fine puncture ADM masses = "
+                "%.17g %.17g\n",
+                fineLocalMasses.admMasses[0], fineLocalMasses.admMasses[1]);
+    std::printf("[two-puncture-hamiltonian] puncture-mass refinement delta = "
+                "%.17g -> %.17g\n",
+                veryCoarsePunctureMassDelta, punctureMassDelta);
+    std::printf("[two-puncture-hamiltonian] puncture phi variation = "
+                "%.17g %.17g\n",
+                coarsePunctureSample.maxPhiVariation[0],
+                coarsePunctureSample.maxPhiVariation[1]);
+    std::printf("[two-puncture-hamiltonian] bare-mass calibration = "
+                "%.17g %.17g in %d solves, max error %.17g\n",
+                calibrationResult.bareMasses[0],
+                calibrationResult.bareMasses[1], calibrationResult.iterations,
+                calibrationResult.maxMassError);
 
     if (momentumContractionError > 2.0e-12 || spinContractionError > 2.0e-12 ||
         projectorErrorBefore < 1.0 || projectorErrorAfter != 0.0 ||
         projectorProbe[probeIndex] != -1.0 ||
         projectorProbe[probeImage] != -1.0 ||
+        algebraicMassError > 2.0e-14 || !calibrationResult.converged() ||
+        !calibrationUsedMatrixFree ||
+        std::abs(calibrationResult.bareMasses[0] - mass1) > 2.0e-6 ||
+        std::abs(calibrationResult.bareMasses[1] - mass2) > 2.0e-6 ||
+        calibrationMaxPhiVariation > 2.0e-3 ||
+        !(punctureMassDelta < veryCoarsePunctureMassDelta) ||
         !initialResidual.finite || initialResidual.l2Norm < 1.0e-5 ||
         !solveResult.converged() || !solveResult.usedGeneratedGridKernel ||
         !solveResult.usedMatrixFreeGMRES || !solveResult.usedPreconditioner ||
