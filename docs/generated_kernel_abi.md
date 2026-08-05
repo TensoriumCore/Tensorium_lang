@@ -213,6 +213,11 @@ consume directly:
   modal transforms. For the current Chebyshev/Chebyshev/Fourier layout it
   solves dense Chebyshev 2D modal blocks per Fourier mode and per field; current
   nonlinear and system runtime solve tests use this path.
+  `SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift` instead
+  builds at most seven mapped finite-difference coefficients per collocation
+  row and approximately inverts them with symmetric relaxation. The physical
+  TwoPunctures regression combines this `O(N)` preconditioner with bounded-
+  memory restarted GMRES.
 - `tests/fixtures/elliptic/spectral_hamiltonian_toy_nonlinear_3d.tn` is a
   manufactured nonlinear spectral constraint. Its runtime test solves
   `laplacian(psi) + mass * psi + alpha * psi^5 + source = 0` from a non-exact
@@ -240,6 +245,11 @@ consume directly:
   barycentric/Fourier tensor-product interpolation. The two-puncture regression
   uses the compactified endpoint value `v(A=1,B=0,phi=0)` for the ADM energy
   `m1+m2-4*b*v_infinity` and compares fixed probes across three resolutions.
+- `TwoPunctureHandoff.h` analytically inverts the compact map at arbitrary
+  Cartesian target points, applies the configured spectral unknown transform,
+  and writes conformally flat BSSN fields into caller-owned SoA buffers. The
+  physical regression exercises finite puncture limits and rechecks the
+  Hamiltonian and momentum constraints after interpolation.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

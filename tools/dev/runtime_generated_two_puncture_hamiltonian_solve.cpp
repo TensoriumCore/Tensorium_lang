@@ -1,6 +1,7 @@
 #include "tensorium_mlir/Runtime/SpectralResidualKernel.h"
 #include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
 #include "tensorium_mlir/Runtime/TwoPunctureDiagnostics.h"
+#include "tensorium_mlir/Runtime/TwoPunctureHandoff.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMap.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMassCalibration.h"
 #include "tensorium_mlir/Runtime/TwoPunctureRegularity.h"
@@ -28,6 +29,10 @@ using tensorium_mlir::runtime::assembleSpectralResidualSystem;
 using tensorium_mlir::runtime::
     buildSpectralMappedFiniteDifferenceLaplacianShift;
 using tensorium_mlir::runtime::calibrateTwoPunctureBareMasses;
+using tensorium_mlir::runtime::evaluateTwoPunctureBowenYorkTensor;
+using tensorium_mlir::runtime::evaluateTwoPunctureBssnPoint;
+using tensorium_mlir::runtime::interpolateTwoPunctureBssnToCartesianGrid;
+using tensorium_mlir::runtime::invertTwoPunctureCoordinates;
 using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
 using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
 using tensorium_mlir::runtime::makeTwoPunctureAdmDiagnostics;
@@ -47,7 +52,11 @@ using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
 using tensorium_mlir::runtime::SpectralGrid3D;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
 using tensorium_mlir::runtime::SpectralPreconditionerKind;
+using tensorium_mlir::runtime::TwoPunctureBssnGridBuffers;
+using tensorium_mlir::runtime::TwoPunctureCartesianGridView;
+using tensorium_mlir::runtime::TwoPunctureGaugeSeed;
 using tensorium_mlir::runtime::TwoPunctureMassCalibrationOptions;
+using tensorium_mlir::runtime::TwoPuncturePhysicalParameters;
 using tensorium_mlir::runtime::updateTwoPunctureBareMasses;
 
 } // namespace
@@ -116,8 +125,7 @@ int main() {
 
     std::vector<double> projectorProbe(grid.size(), 0.0);
     const std::size_t probeIndex = grid.index(0, 0, 0);
-    const std::size_t probeImage =
-        grid.index(0, grid.n2() - 1, grid.n3() / 2);
+    const std::size_t probeImage = grid.index(0, grid.n2() - 1, grid.n3() / 2);
     projectorProbe[probeIndex] = 1.0;
     projectorProbe[probeImage] = -3.0;
     const double projectorErrorBefore =
@@ -371,11 +379,10 @@ int main() {
         finePunctureSample.values[1]);
     const double probeDelta = std::abs(fineProbe - coarseProbe);
     const double admDelta = std::abs(fineAdm.energy - coarseAdm.energy);
-    const double punctureMassDelta =
-        std::max(std::abs(fineLocalMasses.admMasses[0] -
-                          coarseLocalMasses.admMasses[0]),
-                 std::abs(fineLocalMasses.admMasses[1] -
-                          coarseLocalMasses.admMasses[1]));
+    const double punctureMassDelta = std::max(
+        std::abs(fineLocalMasses.admMasses[0] - coarseLocalMasses.admMasses[0]),
+        std::abs(fineLocalMasses.admMasses[1] -
+                 coarseLocalMasses.admMasses[1]));
 
     SpectralGrid3D veryCoarseGrid(SpectralAxis::chebyshevZeros(3),
                                   SpectralAxis::chebyshevZeros(3),
@@ -426,8 +433,8 @@ int main() {
                  std::abs(coarseLocalMasses.admMasses[1] -
                           veryCoarseLocalMasses.admMasses[1]));
 
-    const double fineSymmetryError = measureTwoPunctureInversionParityError(
-        fineGrid, fineSolverFields[0]);
+    const double fineSymmetryError =
+        measureTwoPunctureInversionParityError(fineGrid, fineSolverFields[0]);
     const auto fineRegularity =
         measureTwoPunctureScalarRegularity(fineGrid, fineSolverFields[0]);
 
@@ -463,22 +470,280 @@ int main() {
                                              calibrationFields.size()),
               options);
           calibrationUsedMatrixFree =
-              calibrationUsedMatrixFree ||
-              calibrationSolve.usedMatrixFreeGMRES;
+              calibrationUsedMatrixFree || calibrationSolve.usedMatrixFreeGMRES;
           if (!calibrationSolve.converged())
             return false;
           const auto sample =
               sampleTwoPunctureRegularField(grid, calibrationFields[0]);
           regularField = sample.values;
           calibrationMaxPhiVariation =
-              std::max({calibrationMaxPhiVariation,
-                        sample.maxPhiVariation[0],
+              std::max({calibrationMaxPhiVariation, sample.maxPhiVariation[0],
                         sample.maxPhiVariation[1]});
           return true;
         },
         calibrationOptions);
     setParam("m1", mass1);
     setParam("m2", mass2);
+
+    // Table 1 of Ansorg, Bruegmann, and Tichy, Phys. Rev. D 70,
+    // 064011 (2004): the q=0.1 non-spinning test-mass sequence member.
+    const double publishedHeavyMass = 1.0;
+    const double publishedLightMass = 0.1 * publishedHeavyMass;
+    const double publishedDistance =
+        publishedHeavyMass * (2.5 + std::sqrt(6.0));
+    const double publishedHalfSeparation = 0.5 * publishedDistance;
+    const double publishedLightVelocity =
+        4.0 * std::sqrt(3.0) / (5.0 + 2.0 * std::sqrt(6.0));
+    const double publishedMomentum =
+        publishedLightMass * publishedLightVelocity;
+    const std::array<double, 1> publishedCoordinateParams = {
+        publishedHalfSeparation};
+    physicalParams.fill(0.0);
+    setParam("b", publishedHalfSeparation);
+    setParam("m1", publishedLightMass);
+    setParam("m2", publishedHeavyMass);
+    setParam("p1y", -publishedMomentum);
+    setParam("p2y", publishedMomentum);
+    SpectralGrid3D publishedGrid(SpectralAxis::chebyshevZeros(10),
+                                 SpectralAxis::chebyshevZeros(10),
+                                 SpectralAxis::fourierPeriodic(16));
+    auto publishedGeneratedSystem = makeSpectralResidualSystemFromDesc(
+        systemDesc, publishedGrid, tensorium_spectral_residual_kernels,
+        TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
+        tensorium_spectral_residual_grid_kernels,
+        TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT, systemInputs);
+    auto &publishedProblem = publishedGeneratedSystem.equations[0].problem;
+    publishedProblem.coordinateMap = makeTwoPunctureCoordinateMap();
+    publishedProblem.coordinateParams = publishedCoordinateParams;
+    publishedProblem.derivativeMap = makeTwoPunctureDerivativeMap();
+    publishedProblem.unknownMap = makeLinearBoundaryFactorUnknownMap();
+    publishedProblem.unknownMapParams = unknownMapParams;
+    const auto publishedSystem = publishedGeneratedSystem.view();
+    std::array<std::vector<double>, 1> publishedFields{
+        std::vector<double>(publishedGrid.size(), 0.0)};
+    const auto publishedSolve =
+        solveSpectralNewton(publishedSystem,
+                            std::span<std::vector<double>>(
+                                publishedFields.data(), publishedFields.size()),
+                            fineOptions);
+    const auto publishedResidual = assembleSpectralResidualSystem(
+        publishedSystem, std::span<const std::vector<double>>(
+                             publishedFields.data(), publishedFields.size()));
+    const auto publishedPunctureSample =
+        sampleTwoPunctureRegularField(publishedGrid, publishedFields[0]);
+    const double publishedVInfinity =
+        publishedGrid.interpolate(publishedFields[0], 1.0, 0.0, 0.0);
+    const double publishedScaledHeavy = 2.0 * publishedDistance *
+                                        publishedPunctureSample.values[1] /
+                                        publishedLightMass;
+    const double publishedScaledInfinity = -4.0 * publishedHalfSeparation *
+                                           publishedVInfinity /
+                                           publishedLightMass;
+    const double publishedMaxRelativeError = std::max(
+        {std::abs(publishedPunctureSample.values[0] - 0.03417) / 0.03417,
+         std::abs(publishedScaledHeavy - 0.2011) / 0.2011,
+         std::abs(publishedScaledInfinity - 0.1688) / 0.1688});
+
+    TwoPuncturePhysicalParameters handoffParameters;
+    handoffParameters.halfSeparation = publishedHalfSeparation;
+    handoffParameters.bareMasses = {publishedLightMass, publishedHeavyMass};
+    handoffParameters.momenta = {
+        {{0.0, -publishedMomentum, 0.0}, {0.0, publishedMomentum, 0.0}}};
+    constexpr std::size_t handoffPointCount = 5;
+    const std::array<double, 3> handoffA = {-0.3, 0.1, 0.6};
+    const std::array<double, 3> handoffB = {-0.2, 0.35, -0.4};
+    const std::array<double, 3> handoffPhi = {0.4, 1.7, 5.5};
+    std::array<double, handoffPointCount> handoffX{};
+    std::array<double, handoffPointCount> handoffY{};
+    std::array<double, handoffPointCount> handoffZ{};
+    for (std::size_t point = 0; point < handoffA.size(); ++point) {
+      const auto physical =
+          mapTwoPunctureCoordinates(handoffA[point], handoffB[point],
+                                    handoffPhi[point], publishedHalfSeparation);
+      handoffX[point] = physical.x;
+      handoffY[point] = physical.y;
+      handoffZ[point] = physical.z;
+    }
+    handoffX[3] = publishedHalfSeparation;
+    handoffX[4] = -publishedHalfSeparation;
+
+    std::array<double, handoffPointCount> handoffChi{};
+    std::array<double, handoffPointCount> handoffMeanCurvature{};
+    std::array<double, handoffPointCount> handoffCorrection{};
+    std::array<double, handoffPointCount> handoffPsi{};
+    std::array<double, handoffPointCount> handoffLapse{};
+    std::array<std::array<double, handoffPointCount>, 9> handoffMetric{};
+    std::array<std::array<double, handoffPointCount>, 9> handoffInverse{};
+    std::array<std::array<double, handoffPointCount>, 9> handoffExtrinsic{};
+    std::array<std::array<double, handoffPointCount>, 3> handoffConnection{};
+    std::array<std::array<double, handoffPointCount>, 3> handoffShift{};
+    TwoPunctureBssnGridBuffers handoffBuffers;
+    handoffBuffers.chi = handoffChi.data();
+    handoffBuffers.meanCurvature = handoffMeanCurvature.data();
+    handoffBuffers.regularCorrection = handoffCorrection.data();
+    handoffBuffers.conformalFactor = handoffPsi.data();
+    handoffBuffers.lapse = handoffLapse.data();
+    for (std::size_t component = 0; component < 9; ++component) {
+      handoffBuffers.conformalMetric[component] =
+          handoffMetric[component].data();
+      handoffBuffers.inverseConformalMetric[component] =
+          handoffInverse[component].data();
+      handoffBuffers.traceFreeExtrinsicCurvature[component] =
+          handoffExtrinsic[component].data();
+    }
+    for (std::size_t component = 0; component < 3; ++component) {
+      handoffBuffers.conformalConnection[component] =
+          handoffConnection[component].data();
+      handoffBuffers.shift[component] = handoffShift[component].data();
+    }
+    TwoPunctureGaugeSeed handoffGauge;
+    handoffGauge.lapse = 0.75;
+    handoffGauge.shift = {0.1, -0.2, 0.3};
+    interpolateTwoPunctureBssnToCartesianGrid(
+        publishedProblem, publishedFields[0], handoffParameters,
+        TwoPunctureCartesianGridView{
+            handoffPointCount,
+            {handoffX.data(), handoffY.data(), handoffZ.data()}},
+        handoffBuffers, handoffGauge);
+
+    double handoffLogicalError = 0.0;
+    double handoffCorrectionError = 0.0;
+    double handoffAlgebraicError = 0.0;
+    const double twoPi = 2.0 * std::acos(-1.0);
+    for (std::size_t point = 0; point < handoffA.size(); ++point) {
+      const auto logical = invertTwoPunctureCoordinates(
+          handoffX[point], handoffY[point], handoffZ[point],
+          publishedHalfSeparation);
+      const double phiDifference = std::abs(logical.phi - handoffPhi[point]);
+      const double periodicPhiDifference =
+          std::min(phiDifference, std::abs(phiDifference - twoPi));
+      handoffLogicalError = std::max(
+          {handoffLogicalError, std::abs(logical.A - handoffA[point]),
+           std::abs(logical.B - handoffB[point]), periodicPhiDifference});
+      const double expectedCorrection =
+          (handoffA[point] - 1.0) *
+          publishedGrid.interpolate(publishedFields[0], handoffA[point],
+                                    handoffB[point], handoffPhi[point]);
+      handoffCorrectionError =
+          std::max(handoffCorrectionError,
+                   std::abs(handoffCorrection[point] - expectedCorrection));
+      const double expectedChi = std::pow(handoffPsi[point], -4.0);
+      handoffAlgebraicError = std::max(
+          handoffAlgebraicError, std::abs(handoffChi[point] - expectedChi));
+      double trace = 0.0;
+      for (std::size_t i = 0; i < 3; ++i) {
+        trace += handoffExtrinsic[3 * i + i][point];
+        for (std::size_t j = 0; j < 3; ++j) {
+          const std::size_t component = 3 * i + j;
+          const double delta = i == j ? 1.0 : 0.0;
+          handoffAlgebraicError =
+              std::max({handoffAlgebraicError,
+                        std::abs(handoffMetric[component][point] - delta),
+                        std::abs(handoffInverse[component][point] - delta),
+                        std::abs(handoffExtrinsic[component][point] -
+                                 handoffExtrinsic[3 * j + i][point])});
+        }
+        handoffAlgebraicError = std::max(handoffAlgebraicError,
+                                         std::abs(handoffConnection[i][point]));
+        handoffAlgebraicError =
+            std::max(handoffAlgebraicError,
+                     std::abs(handoffShift[i][point] - handoffGauge.shift[i]));
+      }
+      handoffAlgebraicError =
+          std::max({handoffAlgebraicError, std::abs(trace),
+                    std::abs(handoffMeanCurvature[point]),
+                    std::abs(handoffLapse[point] - handoffGauge.lapse)});
+    }
+    for (std::size_t point = 3; point < handoffPointCount; ++point) {
+      handoffAlgebraicError =
+          std::max(handoffAlgebraicError, std::abs(handoffChi[point]));
+      for (std::size_t component = 0; component < 9; ++component)
+        handoffAlgebraicError =
+            std::max(handoffAlgebraicError,
+                     std::abs(handoffExtrinsic[component][point]));
+    }
+    const bool handoffPuncturesValid = std::isinf(handoffPsi[3]) &&
+                                       std::isinf(handoffPsi[4]) &&
+                                       std::isfinite(handoffCorrection[3]) &&
+                                       std::isfinite(handoffCorrection[4]);
+
+    const std::array<double, 3> constraintPoint = {0.2, 1.1, 0.7};
+    const double differenceStep = 2.0e-3;
+    const auto evaluateHandoff = [&](const std::array<double, 3> &point) {
+      return evaluateTwoPunctureBssnPoint(publishedProblem, publishedFields[0],
+                                          handoffParameters, point[0], point[1],
+                                          point[2]);
+    };
+    const auto constraintCenter = evaluateHandoff(constraintPoint);
+    double laplacianPsi = 0.0;
+    for (std::size_t dim = 0; dim < 3; ++dim) {
+      auto plus = constraintPoint;
+      auto minus = constraintPoint;
+      plus[dim] += differenceStep;
+      minus[dim] -= differenceStep;
+      laplacianPsi += (evaluateHandoff(plus).conformalFactor -
+                       2.0 * constraintCenter.conformalFactor +
+                       evaluateHandoff(minus).conformalFactor) /
+                      (differenceStep * differenceStep);
+    }
+    const auto conformalExtrinsic = evaluateTwoPunctureBowenYorkTensor(
+        constraintPoint[0], constraintPoint[1], constraintPoint[2],
+        handoffParameters);
+    double conformalExtrinsicSquared = 0.0;
+    for (double component : conformalExtrinsic)
+      conformalExtrinsicSquared += component * component;
+    const double handoffHamiltonianResidual =
+        laplacianPsi + 0.125 * conformalExtrinsicSquared /
+                           std::pow(constraintCenter.conformalFactor, 7.0);
+
+    double handoffMomentumResidual = 0.0;
+    for (std::size_t i = 0; i < 3; ++i) {
+      double divergence = 0.0;
+      for (std::size_t j = 0; j < 3; ++j) {
+        auto plus = constraintPoint;
+        auto minus = constraintPoint;
+        plus[j] += differenceStep;
+        minus[j] -= differenceStep;
+        const auto plusTensor = evaluateTwoPunctureBowenYorkTensor(
+            plus[0], plus[1], plus[2], handoffParameters);
+        const auto minusTensor = evaluateTwoPunctureBowenYorkTensor(
+            minus[0], minus[1], minus[2], handoffParameters);
+        divergence += (plusTensor[3 * i + j] - minusTensor[3 * i + j]) /
+                      (2.0 * differenceStep);
+      }
+      handoffMomentumResidual =
+          std::max(handoffMomentumResidual, std::abs(divergence));
+    }
+
+    auto spinningHandoffParameters = handoffParameters;
+    spinningHandoffParameters.momenta = {};
+    spinningHandoffParameters.spins = {{{0.03, -0.02, 0.05}, {0.0, 0.0, 0.0}}};
+    const std::array<double, 3> spinProbe = {publishedHalfSeparation + 0.7,
+                                             -0.4, 0.6};
+    const auto spinTensor = evaluateTwoPunctureBowenYorkTensor(
+        spinProbe[0], spinProbe[1], spinProbe[2], spinningHandoffParameters);
+    const std::array<double, 3> spinDisplacement = {
+        spinProbe[0] - publishedHalfSeparation, spinProbe[1], spinProbe[2]};
+    const double spinRadius = std::hypot(
+        spinDisplacement[0], spinDisplacement[1], spinDisplacement[2]);
+    std::array<double, 3> spinNormal{};
+    double spinSquared = 0.0;
+    double spinNormalProduct = 0.0;
+    for (std::size_t component = 0; component < 3; ++component) {
+      spinNormal[component] = spinDisplacement[component] / spinRadius;
+      const double spin = spinningHandoffParameters.spins[0][component];
+      spinSquared += spin * spin;
+      spinNormalProduct += spin * spinNormal[component];
+    }
+    double spinTensorSquared = 0.0;
+    for (double component : spinTensor)
+      spinTensorSquared += component * component;
+    const double expectedSpinTensorSquared =
+        18.0 * (spinSquared - spinNormalProduct * spinNormalProduct) /
+        std::pow(spinRadius, 6.0);
+    const double handoffSpinRelativeError =
+        std::abs(spinTensorSquared - expectedSpinTensorSquared) /
+        expectedSpinTensorSquared;
 
     std::printf("[two-puncture-hamiltonian] Brill-Lindquist residual max = "
                 "%.17g\n",
@@ -508,11 +773,11 @@ int main() {
     std::printf("[two-puncture-hamiltonian] boosted final residual max = "
                 "%.17g\n",
                 finalResidual.maxAbs);
-    std::printf("[two-puncture-hamiltonian] coarse Newton status/steps/linear = "
-                "%d/%d/%d, linear residual = %.17g\n",
-                static_cast<int>(solveResult.status), solveResult.steps,
-                solveResult.linearIterations,
-                solveResult.finalLinearResidualL2);
+    std::printf(
+        "[two-puncture-hamiltonian] coarse Newton status/steps/linear = "
+        "%d/%d/%d, linear residual = %.17g\n",
+        static_cast<int>(solveResult.status), solveResult.steps,
+        solveResult.linearIterations, solveResult.finalLinearResidualL2);
     std::printf("[two-puncture-hamiltonian] fine Newton status/steps/linear = "
                 "%d/%d/%d, linear residual = %.17g\n",
                 static_cast<int>(fineSolveResult.status), fineSolveResult.steps,
@@ -556,8 +821,7 @@ int main() {
                 fineRegularity.maxPhiVariation());
     std::printf("[two-puncture-hamiltonian] coarse puncture ADM masses = "
                 "%.17g %.17g\n",
-                coarseLocalMasses.admMasses[0],
-                coarseLocalMasses.admMasses[1]);
+                coarseLocalMasses.admMasses[0], coarseLocalMasses.admMasses[1]);
     std::printf("[two-puncture-hamiltonian] fine puncture ADM masses = "
                 "%.17g %.17g\n",
                 fineLocalMasses.admMasses[0], fineLocalMasses.admMasses[1]);
@@ -573,10 +837,43 @@ int main() {
                 calibrationResult.bareMasses[0],
                 calibrationResult.bareMasses[1], calibrationResult.iterations,
                 calibrationResult.maxMassError);
+    std::printf("[two-puncture-hamiltonian] published q=0.1 solve "
+                "status/steps/linear = %d/%d/%d, residual %.17g\n",
+                static_cast<int>(publishedSolve.status), publishedSolve.steps,
+                publishedSolve.linearIterations, publishedResidual.l2Norm);
+    std::printf("[two-puncture-hamiltonian] published q=0.1 observables = "
+                "%.17g %.17g %.17g\n",
+                publishedPunctureSample.values[0], publishedScaledHeavy,
+                publishedScaledInfinity);
+    std::printf("[two-puncture-hamiltonian] published q=0.1 max relative "
+                "error = %.17g\n",
+                publishedMaxRelativeError);
+    std::printf("[two-puncture-hamiltonian] BSSN handoff logical/correction/"
+                "algebraic error = %.17g %.17g %.17g\n",
+                handoffLogicalError, handoffCorrectionError,
+                handoffAlgebraicError);
+    std::printf("[two-puncture-hamiltonian] BSSN handoff H/M residual = "
+                "%.17g %.17g\n",
+                handoffHamiltonianResidual, handoffMomentumResidual);
+    std::printf("[two-puncture-hamiltonian] BSSN handoff Bowen-York spin "
+                "relative error = %.17g\n",
+                handoffSpinRelativeError);
 
     if (momentumContractionError > 2.0e-12 || spinContractionError > 2.0e-12 ||
-        projectorErrorBefore < 1.0 || projectorErrorAfter != 0.0 ||
-        projectorProbe[probeIndex] != -1.0 ||
+        !publishedSolve.converged() ||
+        !publishedSolve.usedGeneratedGridKernel ||
+        !publishedSolve.usedMatrixFreeGMRES ||
+        !publishedSolve.usedPreconditioner ||
+        publishedSolve.usedFieldProjector || !publishedResidual.finite ||
+        publishedResidual.l2Norm > 2.0e-8 ||
+        publishedResidual.maxAbs > 2.0e-7 ||
+        publishedMaxRelativeError > 5.0e-2 || !handoffPuncturesValid ||
+        handoffLogicalError > 2.0e-12 || handoffCorrectionError > 2.0e-12 ||
+        handoffAlgebraicError > 2.0e-12 ||
+        std::abs(handoffHamiltonianResidual) > 1.0e-4 ||
+        handoffMomentumResidual > 1.0e-6 ||
+        handoffSpinRelativeError > 2.0e-12 || projectorErrorBefore < 1.0 ||
+        projectorErrorAfter != 0.0 || projectorProbe[probeIndex] != -1.0 ||
         projectorProbe[probeImage] != -1.0 || regularityErrorBefore < 0.5 ||
         regularityErrorAfter > 2.0e-12 ||
         regularityIdempotenceError > 2.0e-12 ||

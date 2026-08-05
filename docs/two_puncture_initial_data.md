@@ -277,18 +277,90 @@ This removes dense Jacobian storage and the `N` residual-JVP setup calls of the
 previous diagonal preconditioner. Production-scale parallelism and algebraic
 multigrid remain external-backend concerns.
 
+## TP-7: Published unequal-mass case and Cartesian BSSN handoff
+
+The physical regression now includes the `m_-/m_+=0.1` member of the test-mass
+sequence in Table 1 of Ansorg, Bruegmann, and Tichy. With `m_+=1`, the published
+parameters are
+
+```text
+D = 2*b = 5/2 + sqrt(6)
+v_- = 4*sqrt(3)/(5 + 2*sqrt(6))
+P_- = -P_+ = -m_-*v_-
+S_- = S_+ = 0.
+```
+
+The paper places the holes and orbital momentum on different Cartesian axes;
+the regression applies a rigid rotation and translation to use Tensorium's
+punctures at `x=+b` and `x=-b` and tangential momentum along `y`. The scalar
+observables are unchanged.
+
+The paper reports the regular correction at the light puncture, a scaled value
+at the heavy puncture, and the scaled asymptotic coefficient. Tensorium's
+`10x10x16` regression compares all three:
+
+```text
+observable                         paper       Tensorium
+u at the light puncture            0.03417     0.03283750
+2*D*u at the heavy puncture/m_-    0.2011      0.20933912
+lim(2*r*u)/m_-                     0.1688      0.16714861
+maximum relative difference                    4.10%
+```
+
+The paper used `100x100x50` points for the nonzero mass-ratio rows. This is
+therefore a low-resolution published-data guard, not a reproduction of the
+paper's reported four-digit accuracy. Unlike the equal-mass regression, this
+solve installs no inversion-symmetry projector.
+
+`TwoPunctureHandoff.h` provides the first nonradial handoff path. It analytically
+inverts the prolate TwoPunctures map for each Cartesian target point, evaluates
+the solved regular correction with tensor-product spectral interpolation, and
+writes caller-owned structure-of-arrays BSSN buffers:
+
+```text
+chi             = psi^(-4)
+gamma_tilde_ij  = delta_ij
+gamma_tilde^ij  = delta^ij
+A_tilde_ij      = psi^(-6) Abar_ij
+K               = 0
+Gamma_tilde^i   = 0.
+```
+
+Here `Abar_ij` is reconstructed from both punctures' Bowen--York momenta and
+spins. Exact puncture points are supported without evaluating the singular
+tensor: the finite BSSN limits `chi=0` and `A_tilde_ij=0` are written, while the
+optional diagnostic `psi` output is infinite. Lapse and shift outputs receive
+explicit caller-supplied gauge seeds; they are not presented as constraint
+solutions.
+
+The regression checks inverse-map round trips, interpolation, unit determinant,
+inverse metrics, symmetry and trace freedom, finite puncture limits, and the
+SoA gauge output. It also re-evaluates the Hamiltonian and momentum constraints
+after Cartesian interpolation with an independent centered finite-difference
+probe. At the current low resolution this gives approximately
+`|H|=5.0e-5` and `max|M_i|=1.2e-8`. These are handoff-grid diagnostics; the
+generated collocation residual remains below its `2e-8` nonlinear tolerance.
+
+The API deliberately accepts the generic `SpectralResidualProblem`, so the
+solver-field-to-physical-field transform is obtained from its configured
+unknown map rather than hard-coding `U=(A-1)v`. The caller still supplies the
+TwoPunctures masses, momenta, spins, and half-separation explicitly. Automatic
+parameter binding from generated module metadata remains future work.
+
 ## What remains before production TwoPunctures
 
-The TP-2 through TP-6 path is a genuine physical residual and nonlinear solve,
+The TP-2 through TP-7 path is a genuine physical residual and nonlinear solve,
 but it is still a small collocation regression. It does not yet provide:
 
 - production-resolution convergence of every Fourier regularity mode at the
   axes and puncture corners;
-- higher-resolution convergence studies against published TwoPunctures data;
+- production-resolution convergence of the published unequal-mass case and
+  published full-solve spinning comparisons;
 - apparent-horizon masses or independent surface-integral charge checks;
 - algebraic multigrid, distributed sparse solves, or multidomain
   preconditioning;
-- interpolation and metadata export to an external evolution solver;
+- a versioned C ABI or a concrete external-evolution-code adapter for the
+  nonradial spectral solution;
 - automatic selection of coordinate and unknown maps from DSL/module metadata.
 
 The compiled spectral residual path currently differentiates one scalar
@@ -300,15 +372,15 @@ The scalar endpoint projector is not a complete tensor regularity system. In
 particular, the expected `rho^|m|` behavior of each Fourier mode and the parity
 of vector/tensor components still need production-resolution validation.
 
-## Next milestone: TP-7 physical validation and handoff
+## Next milestone: TP-8 external adapter and production validation
 
 The production path is now:
 
-1. validate higher-resolution unequal-mass, boosted, and spinning cases against
-   TwoPunctures cases;
+1. validate the published unequal-mass case at production resolution and add a
+   published spinning full-solve comparison;
 2. add apparent-horizon or independent surface-integral diagnostics;
-3. interpolate the solved fields onto the external evolution grid and verify
-   the Hamiltonian and momentum constraints after handoff.
+3. expose the nonradial solution through a versioned C ABI and validate one
+   concrete external evolution-code grid adapter.
 
 ## References
 
