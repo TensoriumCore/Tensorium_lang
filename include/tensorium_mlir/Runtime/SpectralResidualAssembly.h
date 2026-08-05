@@ -177,6 +177,16 @@ inline SpectralDerivatives3D applySpectralDerivativeMap(
   return physicalDerivatives;
 }
 
+inline SpectralDerivatives3D applySpectralUnknownMap(
+    const SpectralGrid3D &grid, const SpectralDerivatives3D &solverDerivatives,
+    const SpectralUnknownMap &unknownMap,
+    std::span<const double> unknownMapParams = {}) {
+  const SpectralDerivativeMap derivativeTransform{
+      unknownMap.symbolName, unknownMap.transform, unknownMap.userData};
+  return applySpectralDerivativeMap(grid, solverDerivatives,
+                                    derivativeTransform, unknownMapParams);
+}
+
 inline double spectralVectorMaxAbs(std::span<const double> values) {
   double out = 0.0;
   for (double value : values) {
@@ -419,11 +429,19 @@ inline SpectralResidualAssemblyResult assembleSpectralResidual(
     const SpectralResidualProblem &problem,
     const SpectralDerivatives3D &derivs) {
   const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  SpectralDerivatives3D physicalUnknownDerivatives;
+  const SpectralDerivatives3D *unknownDerivatives = &derivs;
+  if (problem.unknownMap.transform) {
+    physicalUnknownDerivatives = applySpectralUnknownMap(
+        grid, derivs, problem.unknownMap, problem.unknownMapParams);
+    unknownDerivatives = &physicalUnknownDerivatives;
+  }
   SpectralDerivatives3D mappedDerivatives;
-  const SpectralDerivatives3D *assembledDerivatives = &derivs;
+  const SpectralDerivatives3D *assembledDerivatives = unknownDerivatives;
   if (problem.derivativeMap.transform) {
     mappedDerivatives = applySpectralDerivativeMap(
-        grid, derivs, problem.derivativeMap, problem.coordinateParams);
+        grid, *unknownDerivatives, problem.derivativeMap,
+        problem.coordinateParams);
     assembledDerivatives = &mappedDerivatives;
   }
   if (problem.gridKernel.evaluate) {
@@ -477,6 +495,68 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
       throw std::runtime_error("spectral residual system unknown size mismatch");
   }
 
+  struct UnknownMapBinding {
+    SpectralUnknownMap map;
+    std::span<const double> params{};
+    bool bound = false;
+  };
+  std::vector<UnknownMapBinding> unknownMapBindings(unknownFields.size());
+  for (const auto &equation : system.equations) {
+    if (equation.unknownIndex >= unknownFields.size())
+      throw std::runtime_error(
+          "spectral residual system equation unknown index out of range");
+    if (!equation.problem.unknownMap.transform)
+      continue;
+    auto &binding = unknownMapBindings[equation.unknownIndex];
+    if (binding.bound) {
+      const bool sameMap =
+          binding.map.transform == equation.problem.unknownMap.transform &&
+          binding.map.userData == equation.problem.unknownMap.userData;
+      const bool sameParams =
+          binding.params.size() == equation.problem.unknownMapParams.size() &&
+          std::equal(binding.params.begin(), binding.params.end(),
+                     equation.problem.unknownMapParams.begin());
+      if (!sameMap || !sameParams) {
+        throw std::runtime_error(
+            "spectral residual system has conflicting unknown maps");
+      }
+      continue;
+    }
+    binding.map = equation.problem.unknownMap;
+    binding.params = equation.problem.unknownMapParams;
+    binding.bound = true;
+  }
+  for (const auto &equation : system.equations) {
+    if (unknownMapBindings[equation.unknownIndex].bound &&
+        !equation.problem.unknownMap.transform) {
+      throw std::runtime_error(
+          "spectral residual system equation is missing its unknown map");
+    }
+  }
+
+  std::vector<bool> physicalUnknownValueNeeded(unknownFields.size(), false);
+  for (const auto &equation : system.equations) {
+    for (SpectralAuxiliaryUnknownIndex mappedUnknown :
+         equation.auxiliaryUnknownIndices) {
+      if (mappedUnknown >= 0 &&
+          static_cast<std::size_t>(mappedUnknown) < unknownFields.size()) {
+        physicalUnknownValueNeeded[static_cast<std::size_t>(mappedUnknown)] =
+            true;
+      }
+    }
+  }
+
+  std::vector<std::vector<double>> physicalUnknownValues(unknownFields.size());
+  for (std::size_t unknown = 0; unknown < unknownFields.size(); ++unknown) {
+    const auto &binding = unknownMapBindings[unknown];
+    if (!binding.bound || !physicalUnknownValueNeeded[unknown])
+      continue;
+    auto mapped = applySpectralUnknownMap(
+        grid, grid.derivatives(unknownFields[unknown]), binding.map,
+        binding.params);
+    physicalUnknownValues[unknown] = std::move(mapped.value);
+  }
+
   SpectralResidualSystemAssemblyResult result;
   result.equationCount = system.equations.size();
   result.pointsPerEquation = grid.size();
@@ -513,8 +593,10 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
           throw std::runtime_error(
               "spectral residual system auxiliary unknown index out of range");
         }
+        const std::size_t unknown = static_cast<std::size_t>(mappedUnknown);
         resolvedAuxiliaryFields.push_back(
-            unknownFields[static_cast<std::size_t>(mappedUnknown)]);
+            unknownMapBindings[unknown].bound ? physicalUnknownValues[unknown]
+                                              : unknownFields[unknown]);
       }
       problem.auxiliaryFields = std::span<const std::vector<double>>(
           resolvedAuxiliaryFields.data(), resolvedAuxiliaryFields.size());

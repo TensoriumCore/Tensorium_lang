@@ -866,6 +866,7 @@ bash tools/dev/test_generated_spectral_global_residual_ll.sh
 bash tools/dev/test_generated_spectral_system_residual_ll.sh
 bash tools/dev/test_generated_spectral_newton_solve_ll.sh
 bash tools/dev/test_generated_two_puncture_solve_ll.sh
+bash tools/dev/test_generated_two_puncture_hamiltonian_solve_ll.sh
 bash tools/dev/test_parallel_residual_grid_ll.sh
 
 echo

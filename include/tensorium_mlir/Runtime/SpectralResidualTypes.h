@@ -128,6 +128,14 @@ struct SpectralDerivativeMap {
   void *userData = nullptr;
 };
 
+using SpectralUnknownMapFn = SpectralDerivativeMapFn;
+
+struct SpectralUnknownMap {
+  std::string symbolName = "tensorium_spectral_identity_unknown_map";
+  SpectralUnknownMapFn transform = nullptr;
+  void *userData = nullptr;
+};
+
 struct SpectralResidualProblem {
   const SpectralGrid3D *grid = nullptr;
   SpectralResidualKernel kernel;
@@ -137,6 +145,8 @@ struct SpectralResidualProblem {
   std::span<const double> coordinateParams{};
   SpectralResidualGridKernel gridKernel{};
   SpectralDerivativeMap derivativeMap{};
+  SpectralUnknownMap unknownMap{};
+  std::span<const double> unknownMapParams{};
 };
 
 struct SpectralResidualAssemblyResult {

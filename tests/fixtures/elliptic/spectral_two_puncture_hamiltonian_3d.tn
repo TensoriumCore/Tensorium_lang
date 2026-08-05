@@ -1,0 +1,128 @@
+# Physical two-puncture vacuum Hamiltonian residual.
+#
+# The runtime supplies Cartesian derivatives of the physical correction U.
+# The solver may independently represent U through a boundary-factored unknown
+# such as U=(A-1)*v. Geometry and unknown representation are intentionally not
+# hard-coded in this generated equation.
+#
+# Each puncture contributes the standard Bowen-York linear-momentum and spin
+# tensors. Their sum is contracted before entering the Lichnerowicz equation:
+#   psi = 1 + m1/(2*r1) + m2/(2*r2) + U
+#   H = laplacian(U) + (1/8) * Atilde_ij*Atilde^ij * psi^(-7)
+extern scalar sqrt(scalar)
+
+field scalar U
+field scalar H
+
+params {
+  b, m1, m2,
+  p1x, p1y, p1z, s1x, s1y, s1z,
+  p2x, p2y, p2z, s2x, s2y, s2z
+}
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [32,32,32]
+
+  time {
+    dt = 1.0
+    integrator = euler
+  }
+
+  spatial {
+    scheme = spectral
+    derivative = centered
+    order = 0
+  }
+}
+
+constraints SpectralTwoPunctureHamiltonian3D {
+  dx1 = x - b
+  dy1 = y
+  dz1 = z
+  r1 = sqrt(dx1*dx1 + dy1*dy1 + dz1*dz1)
+  ir1 = 1.0 / r1
+  ir12 = ir1 * ir1
+  ir13 = ir12 * ir1
+  n1x = dx1 * ir1
+  n1y = dy1 * ir1
+  n1z = dz1 * ir1
+  p1n = p1x*n1x + p1y*n1y + p1z*n1z
+  s1cnx = s1y*n1z - s1z*n1y
+  s1cny = s1z*n1x - s1x*n1z
+  s1cnz = s1x*n1y - s1y*n1x
+  p1fac = 1.5 * ir12
+  s1fac = 3.0 * ir13
+  a1xx =
+      p1fac*(2.0*p1x*n1x - (1.0-n1x*n1x)*p1n)
+      + s1fac*(2.0*s1cnx*n1x)
+  a1xy =
+      p1fac*(p1x*n1y + p1y*n1x + n1x*n1y*p1n)
+      + s1fac*(s1cnx*n1y + s1cny*n1x)
+  a1xz =
+      p1fac*(p1x*n1z + p1z*n1x + n1x*n1z*p1n)
+      + s1fac*(s1cnx*n1z + s1cnz*n1x)
+  a1yy =
+      p1fac*(2.0*p1y*n1y - (1.0-n1y*n1y)*p1n)
+      + s1fac*(2.0*s1cny*n1y)
+  a1yz =
+      p1fac*(p1y*n1z + p1z*n1y + n1y*n1z*p1n)
+      + s1fac*(s1cny*n1z + s1cnz*n1y)
+  a1zz =
+      p1fac*(2.0*p1z*n1z - (1.0-n1z*n1z)*p1n)
+      + s1fac*(2.0*s1cnz*n1z)
+
+  dx2 = x + b
+  dy2 = y
+  dz2 = z
+  r2 = sqrt(dx2*dx2 + dy2*dy2 + dz2*dz2)
+  ir2 = 1.0 / r2
+  ir22 = ir2 * ir2
+  ir23 = ir22 * ir2
+  n2x = dx2 * ir2
+  n2y = dy2 * ir2
+  n2z = dz2 * ir2
+  p2n = p2x*n2x + p2y*n2y + p2z*n2z
+  s2cnx = s2y*n2z - s2z*n2y
+  s2cny = s2z*n2x - s2x*n2z
+  s2cnz = s2x*n2y - s2y*n2x
+  p2fac = 1.5 * ir22
+  s2fac = 3.0 * ir23
+  a2xx =
+      p2fac*(2.0*p2x*n2x - (1.0-n2x*n2x)*p2n)
+      + s2fac*(2.0*s2cnx*n2x)
+  a2xy =
+      p2fac*(p2x*n2y + p2y*n2x + n2x*n2y*p2n)
+      + s2fac*(s2cnx*n2y + s2cny*n2x)
+  a2xz =
+      p2fac*(p2x*n2z + p2z*n2x + n2x*n2z*p2n)
+      + s2fac*(s2cnx*n2z + s2cnz*n2x)
+  a2yy =
+      p2fac*(2.0*p2y*n2y - (1.0-n2y*n2y)*p2n)
+      + s2fac*(2.0*s2cny*n2y)
+  a2yz =
+      p2fac*(p2y*n2z + p2z*n2y + n2y*n2z*p2n)
+      + s2fac*(s2cny*n2z + s2cnz*n2y)
+  a2zz =
+      p2fac*(2.0*p2z*n2z - (1.0-n2z*n2z)*p2n)
+      + s2fac*(2.0*s2cnz*n2z)
+
+  axx = a1xx + a2xx
+  axy = a1xy + a2xy
+  axz = a1xz + a2xz
+  ayy = a1yy + a2yy
+  ayz = a1yz + a2yz
+  azz = a1zz + a2zz
+  A2 =
+      axx*axx + ayy*ayy + azz*azz
+      + 2.0*(axy*axy + axz*axz + ayz*ayz)
+
+  psi = 1.0 + 0.5*m1*ir1 + 0.5*m2*ir2 + U
+  psi2 = psi * psi
+  psi4 = psi2 * psi2
+  psi7 = psi4 * psi2 * psi
+  Hlocal = laplacian(U) + 0.125 * A2 / psi7
+
+  residual H = Hlocal
+}

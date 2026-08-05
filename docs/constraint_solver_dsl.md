@@ -775,6 +775,28 @@ legacy component-wise scalar radial behavior. With spherical-orthonormal
 geometry, scalar, vector, and rank-two Laplacians include the frame and
 connection terms described above.
 
+## Generated multidimensional spectral constraints
+
+The `constraints` kernel path is the current compiled multidimensional
+counterpart to the host-side radial `initial_data` solver. A spectral
+constraint remains an ordinary DSL equation: coordinates, parameters, local
+scalar expressions, unknown derivatives, and nonlinear source terms are
+lowered to generated point and grid residual kernels. Domain geometry, unknown
+representation, Newton strategy, and final evolution-grid handoff remain
+runtime policies.
+
+`tests/fixtures/elliptic/spectral_two_puncture_hamiltonian_3d.tn` is the first
+physical binary-black-hole example on this path. The DSL itself computes the
+two puncture radii, arbitrary Bowen-York momentum and spin tensors, their
+contraction, and the Lichnerowicz Hamiltonian residual. The runtime composes
+that generated equation with the compact two-centre coordinate map and the
+generic boundary-factor unknown map `U=(A-1)v`.
+
+This separation is intentional. TwoPunctures is a validation target, not a
+compiler mode: another DSL residual can reuse the same maps and solver, while
+the same generated residual can be paired with a different domain or external
+solver adapter.
+
 ## Pipeline status
 
 ```text

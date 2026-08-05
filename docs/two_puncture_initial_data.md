@@ -62,50 +62,85 @@ Run the vertical test directly with:
 bash tools/dev/test_generated_two_puncture_solve_ll.sh
 ```
 
-## What TP-1 does not solve
+## TP-2: Generated physical Hamiltonian residual
 
-TP-1 validates geometry and mapped elliptic machinery. It is not yet a physical
-binary-black-hole initial-data solver. In particular, it does not yet provide:
+TP-2 adds a physical equation without adding a TwoPunctures compiler mode.
+`spectral_two_puncture_hamiltonian_3d.tn` expresses in the DSL:
 
-- the two-centre Bowen-York conformal extrinsic curvature for arbitrary linear
-  momenta and spins;
-- the nonlinear puncture Hamiltonian equation;
-- puncture and axis regularity conditions enforced by basis/parity rules;
-- an outer-boundary equation or an automatic `U=(A-1)v` unknown
-  reparameterization in the DSL;
-- ADM mass and momentum diagnostics or the nonlinear parameter search used to
-  match requested physical masses;
-- a mapped-domain preconditioner suitable for production resolutions;
-- interpolation and metadata export to an external evolution solver.
-
-The current manufactured Newton test uses a small dense Jacobian. It proves
-that the transformed generated residual is solvable, not that the runtime is
-already scalable or physically complete.
-
-## Next milestone: TP-2 physical Hamiltonian residual
-
-The next implementation should construct the two-puncture Bowen-York tensor
-and solve the vacuum conformal Hamiltonian equation
+- both Cartesian distances `r1` and `r2`;
+- arbitrary linear-momentum and spin Bowen-York tensors for both punctures;
+- the full symmetric contraction `Atilde_ij Atilde^ij`;
+- the singular conformal background and nonlinear vacuum Hamiltonian equation.
 
 ```text
 psi = 1 + m1/(2 r1) + m2/(2 r2) + U
-Delta U + (1/8) Atilde_ij Atilde^ij psi^(-7) = 0
+Delta U + (1/8) Atilde_ij Atilde^ij psi^(-7) = 0.
 ```
 
-with `r1` and `r2` measured from the two punctures and `U=(A-1)v`. The first
-physical regression should use the time-symmetric limit (`P1=P2=S1=S2=0`),
-where `U=0` and the Brill-Lindquist conformal factor is exact. The next test
-should enable equal-and-opposite momenta and compare the Hamiltonian residual,
-convergence with spectral order, and ADM diagnostics against published
-TwoPunctures results.
+The solver variable does not have to equal the residual variable. The generic
+`SpectralUnknownMap` transforms a solver field and its complete derivative
+bundle before coordinate transformation and generated residual evaluation.
+For this problem it is configured as
 
-After TP-2, the production path is:
+```cpp
+const std::array<double, 3> unknownMapParams = {0.0, 1.0, 1.0};
+problem.unknownMap = makeLinearBoundaryFactorUnknownMap();
+problem.unknownMapParams = unknownMapParams; // U=(A-1)*v
+```
 
-1. implement regularity/parity and mapped-domain preconditioning;
-2. add spin, unequal masses, and the physical-parameter root search;
-3. validate convergence and global charges against TwoPunctures reference
+The map is not puncture-specific: it represents any scalar unknown multiplied
+by a linear boundary factor along a selected logical axis. Other initial-data
+equations can omit it or choose another representation independently of the
+generated kernel.
+
+The TP-2 regression validates the generated Bowen-York tensor against the
+closed single-puncture contractions
+
+```text
+A_P^2 = 9/(2 r^4) * (P^2 + 2(P.n)^2)
+A_S^2 = 18/r^6 * (S^2 - (S.n)^2),
+```
+
+obtains exactly zero residual for time-symmetric Brill-Lindquist data, and
+solves an equal-mass binary with equal-and-opposite tangential momenta. On the
+small regression grid the nonlinear residual decreases from about `1.54e-3`
+to `4.4e-15` while the conformal factor remains positive.
+
+Run it directly with:
+
+```bash
+bash tools/dev/test_generated_two_puncture_hamiltonian_solve_ll.sh
+```
+
+## What remains before production TwoPunctures
+
+TP-2 is a genuine physical residual and nonlinear solve, but it is still a
+small dense regression. It does not yet provide:
+
+- puncture and axis regularity enforced through basis/parity rules;
+- resolution studies against published TwoPunctures data;
+- ADM mass, angular momentum, and momentum diagnostics;
+- the nonlinear bare-mass search needed to match requested physical masses;
+- a mapped-domain preconditioner suitable for production resolutions;
+- interpolation and metadata export to an external evolution solver;
+- automatic selection of coordinate and unknown maps from DSL/module metadata.
+
+The compiled spectral residual path currently differentiates one scalar
+unknown per equation. General coupled scalar systems are supported through
+auxiliary-unknown mappings, but arbitrary tensor-valued multidimensional
+elliptic unknowns still require additional lowering and runtime work.
+
+## Next milestone: TP-3 validation and scaling
+
+The production path is now:
+
+1. add interpolation at fixed physical/logical probes and demonstrate spectral
+   convergence with increasing `(nA,nB,nPhi)`;
+2. implement regularity/parity and a mapped-domain preconditioner;
+3. add ADM diagnostics and the physical-parameter root search;
+4. validate unequal-mass, boosted, and spinning cases against TwoPunctures
    cases;
-4. interpolate the solved fields onto the external evolution grid and verify
+5. interpolate the solved fields onto the external evolution grid and verify
    the Hamiltonian and momentum constraints after handoff.
 
 ## References

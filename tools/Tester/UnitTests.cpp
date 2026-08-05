@@ -13,6 +13,7 @@
 #include "tensorium_mlir/Runtime/HostBuffers.h"
 #include "tensorium_mlir/Runtime/SpectralGrid.h"
 #include "tensorium_mlir/Runtime/SpectralResidualAssembly.h"
+#include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMap.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
@@ -5723,6 +5724,120 @@ static bool testTwoPunctureMappedSpectralDerivatives() {
   return true;
 }
 
+static bool testLinearBoundaryFactorUnknownMapProductRule() {
+  using tensorium_mlir::runtime::SpectralPointDerivatives3D;
+  using tensorium_mlir::runtime::linearBoundaryFactorUnknownMap;
+
+  const double logical[3] = {0.25, -0.4, 0.7};
+  const double params[3] = {0.0, 1.0, 1.0};
+  const SpectralPointDerivatives3D solver{
+      2.0, 3.0,  5.0,  7.0,  11.0,
+      13.0, 17.0, 19.0, 23.0, 29.0};
+  SpectralPointDerivatives3D physical;
+  linearBoundaryFactorUnknownMap(logical, &solver, &physical, params, 3,
+                                 nullptr);
+
+  const SpectralPointDerivatives3D expected{
+      -1.5, -0.25, -3.75, -5.25, -2.25,
+      -4.75, -5.75, -14.25, -17.25, -21.75};
+  const std::array<double, 10> actualValues = {
+      physical.value, physical.d1,  physical.d2,  physical.d3,
+      physical.d11,  physical.d12, physical.d13, physical.d22,
+      physical.d23,  physical.d33};
+  const std::array<double, 10> expectedValues = {
+      expected.value, expected.d1,  expected.d2,  expected.d3,
+      expected.d11,  expected.d12, expected.d13, expected.d22,
+      expected.d23,  expected.d33};
+  double maxError = 0.0;
+  for (std::size_t i = 0; i < actualValues.size(); ++i)
+    maxError = std::max(maxError,
+                        std::abs(actualValues[i] - expectedValues[i]));
+  if (maxError > 1.0e-14) {
+    std::cerr << "FAIL: linear boundary-factor product-rule error="
+              << maxError << "\n";
+    return false;
+  }
+  return true;
+}
+
+static double mappedUnknownValueKernel(
+    const tensorium_spectral_residual_point *point, const double *,
+    std::int64_t, void *) {
+  return point->value;
+}
+
+static double mappedAuxiliaryValueKernel(
+    const tensorium_spectral_residual_point *point, const double *,
+    std::int64_t, void *) {
+  return point->aux_count == 1 ? point->aux_values[0]
+                               : std::numeric_limits<double>::quiet_NaN();
+}
+
+static bool testSpectralSystemAuxiliaryUsesMappedUnknownValue() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralAuxiliaryUnknownIndex;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::SpectralResidualKernel;
+  using tensorium_mlir::runtime::SpectralResidualProblem;
+  using tensorium_mlir::runtime::SpectralResidualSystemEquation;
+  using tensorium_mlir::runtime::SpectralResidualSystemProblem;
+  using tensorium_mlir::runtime::assembleSpectralResidualSystem;
+  using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(3),
+                      SpectralAxis::chebyshevZeros(3),
+                      SpectralAxis::fourierPeriodic(4));
+  const std::array<double, 3> mapParams = {0.0, 1.0, 1.0};
+  const std::array<std::vector<double>, 2> unknowns = {
+      std::vector<double>(grid.size(), 2.0),
+      std::vector<double>(grid.size(), 0.0)};
+  const std::array<std::vector<double>, 1> auxiliaryPlaceholder = {
+      std::vector<double>(grid.size(), 0.0)};
+  const std::array<SpectralAuxiliaryUnknownIndex, 1> auxiliaryMap = {0};
+
+  SpectralResidualProblem mappedProblem;
+  mappedProblem.grid = &grid;
+  mappedProblem.kernel =
+      SpectralResidualKernel{"mapped_value", &mappedUnknownValueKernel};
+  mappedProblem.unknownMap = makeLinearBoundaryFactorUnknownMap();
+  mappedProblem.unknownMapParams = mapParams;
+
+  SpectralResidualProblem auxiliaryProblem;
+  auxiliaryProblem.grid = &grid;
+  auxiliaryProblem.kernel =
+      SpectralResidualKernel{"mapped_aux", &mappedAuxiliaryValueKernel};
+  auxiliaryProblem.auxiliaryFields = auxiliaryPlaceholder;
+
+  const std::array<SpectralResidualSystemEquation, 2> equations = {
+      SpectralResidualSystemEquation{mappedProblem, 0, "mapped"},
+      SpectralResidualSystemEquation{auxiliaryProblem, 1, "auxiliary",
+                                     auxiliaryMap}};
+  const SpectralResidualSystemProblem system{&grid, equations};
+  const auto residual = assembleSpectralResidualSystem(system, unknowns);
+
+  double maxError = 0.0;
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const auto point = grid.point(i, j, k);
+        const double expected = 2.0 * (point.x1 - 1.0);
+        maxError =
+            std::max(maxError,
+                     std::abs(residual.values[point.index] - expected));
+        maxError = std::max(
+            maxError,
+            std::abs(residual.values[grid.size() + point.index] - expected));
+      }
+    }
+  }
+  if (!residual.finite || maxError > 2.0e-13) {
+    std::cerr << "FAIL: mapped auxiliary unknown value error=" << maxError
+              << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testRegularBallPoissonConstraintSolve() {
   auto result = tensorium::api::parseAndValidateFile(
       "tests/fixtures/gr/regular_ball_poisson_solve.tn");
@@ -7115,6 +7230,10 @@ int main() {
        &testTwoPunctureCoordinateMapGeometry},
       {"testTwoPunctureMappedSpectralDerivatives",
        &testTwoPunctureMappedSpectralDerivatives},
+      {"testLinearBoundaryFactorUnknownMapProductRule",
+       &testLinearBoundaryFactorUnknownMapProductRule},
+      {"testSpectralSystemAuxiliaryUsesMappedUnknownValue",
+       &testSpectralSystemAuxiliaryUsesMappedUnknownValue},
       {"testCompilerApiCompileFileToLLVMIR",
        &testCompilerApiCompileFileToLLVMIR},
       {"testCompilerApiSymbolicWarningPropagation",

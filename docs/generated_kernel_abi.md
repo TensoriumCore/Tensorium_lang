@@ -165,6 +165,12 @@ consume directly:
   first/second derivative bundle before either kernel path is evaluated; the
   TwoPunctures implementation uses it to expose Cartesian derivatives from the
   compact `(A,B,phi)` collocation domain.
+  An independent `SpectralUnknownMap` may first transform the solver variable
+  and its logical derivatives into the physical unknown consumed by the
+  generated residual. `makeLinearBoundaryFactorUnknownMap()` implements the
+  generic product `u=scale*(q_axis-boundary)*v`; the two-puncture runtime uses
+  it for `U=(A-1)v` without embedding that representation in the DSL equation
+  or nonlinear solver.
   `assembleSpectralResidual(...)` computes the global collocation vector `F(u)`
   plus L2/max norms. When `SpectralResidualProblem::gridKernel` is set from
   `tensorium_spectral_residual_grid_kernels`, assembly uses the generated
@@ -222,6 +228,13 @@ consume directly:
   mapped-domain vertical slice. It compiles a DSL Poisson residual to LLVM,
   transforms the runtime derivative bundle through the compact two-puncture
   geometry, and solves a manufactured `U=(A-1)v` correction with Newton.
+- `tests/fixtures/elliptic/spectral_two_puncture_hamiltonian_3d.tn` contains a
+  physical, generated two-centre Bowen-York/Lichnerowicz residual. The DSL
+  computes both puncture distances, arbitrary momentum and spin contributions,
+  their full symmetric-tensor contraction, the singular conformal background,
+  and the nonlinear Hamiltonian residual. Its runtime test checks the closed
+  single-puncture momentum/spin contractions, the exact Brill-Lindquist limit,
+  and a nonlinear equal-and-opposite-momentum solve on the compact map.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual
