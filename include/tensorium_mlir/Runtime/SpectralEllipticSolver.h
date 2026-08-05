@@ -98,6 +98,55 @@ struct SpectralLinearPreconditioner {
       SpectralBasis::ChebyshevZeros};
 };
 
+inline bool spectralFieldProjectorEnabled(
+    const SpectralResidualProblem &problem) {
+  return problem.fieldProjector.project != nullptr;
+}
+
+inline void projectSpectralField(const SpectralResidualProblem &problem,
+                                 std::span<double> values) {
+  if (!spectralFieldProjectorEnabled(problem))
+    return;
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  if (values.size() != grid.size())
+    throw std::runtime_error("spectral field projector size mismatch");
+  problem.fieldProjector.project(
+      &grid, values.data(), static_cast<std::int64_t>(values.size()),
+      problem.fieldProjector.userData);
+}
+
+inline bool spectralSystemUsesFieldProjector(
+    const SpectralResidualSystemProblem &system) {
+  return std::any_of(system.equations.begin(), system.equations.end(),
+                     [](const SpectralResidualSystemEquation &equation) {
+                       return spectralFieldProjectorEnabled(equation.problem);
+                     });
+}
+
+inline void projectSpectralSystemUnknownVector(
+    const SpectralResidualSystemProblem &system, std::span<double> values,
+    std::size_t fieldCount, std::size_t pointsPerField) {
+  if (values.size() != fieldCount * pointsPerField)
+    throw std::runtime_error("spectral system projector size mismatch");
+  for (const auto &equation : system.equations) {
+    if (equation.unknownIndex >= fieldCount)
+      throw std::runtime_error("spectral system projector unknown mismatch");
+    projectSpectralField(
+        equation.problem,
+        values.subspan(equation.unknownIndex * pointsPerField, pointsPerField));
+  }
+}
+
+inline void projectSpectralSystemUnknownFields(
+    const SpectralResidualSystemProblem &system,
+    std::span<std::vector<double>> fields) {
+  for (const auto &equation : system.equations) {
+    if (equation.unknownIndex >= fields.size())
+      throw std::runtime_error("spectral system projector unknown mismatch");
+    projectSpectralField(equation.problem, fields[equation.unknownIndex]);
+  }
+}
+
 inline double spectralChebyshevAxisLength(const SpectralAxis &axis) {
   const std::size_t n = axis.size();
   if (n <= 1)
@@ -631,39 +680,59 @@ inline bool buildSpectralScalarPreconditioner(
   return false;
 }
 
-inline bool solveSpectralLeastSquaresNormalEquations(
-    const std::vector<double> &hessenberg, std::size_t rows, std::size_t cols,
-    std::size_t leadingDim, double beta, double pivotTolerance,
-    std::vector<double> &solution, double &residualL2,
-    std::size_t vectorSize) {
-  std::vector<double> normal(cols * cols, 0.0);
-  std::vector<double> rhs(cols, 0.0);
-  for (std::size_t col = 0; col < cols; ++col) {
-    rhs[col] = beta * hessenberg[col];
-    for (std::size_t other = 0; other < cols; ++other) {
-      double sum = 0.0;
-      for (std::size_t row = 0; row < rows; ++row)
-        sum += hessenberg[row * leadingDim + col] *
-               hessenberg[row * leadingDim + other];
-      normal[col * cols + other] = sum;
-    }
+inline bool updateSpectralGMRESQR(
+    std::vector<double> &hessenberg, std::size_t leadingDim,
+    std::size_t column, std::vector<double> &cosines,
+    std::vector<double> &sines, std::vector<double> &rotatedRhs,
+    double pivotTolerance, double &residualL2, std::size_t vectorSize) {
+  for (std::size_t row = 0; row < column; ++row) {
+    const double upper = hessenberg[row * leadingDim + column];
+    const double lower = hessenberg[(row + 1) * leadingDim + column];
+    hessenberg[row * leadingDim + column] =
+        cosines[row] * upper + sines[row] * lower;
+    hessenberg[(row + 1) * leadingDim + column] =
+        -sines[row] * upper + cosines[row] * lower;
   }
 
-  if (!solveDenseLinearSystem(std::move(normal), std::move(rhs), solution,
-                              pivotTolerance))
+  const double upper = hessenberg[column * leadingDim + column];
+  const double lower = hessenberg[(column + 1) * leadingDim + column];
+  const double magnitude = std::hypot(upper, lower);
+  if (!std::isfinite(magnitude) || magnitude <= pivotTolerance)
     return false;
+  cosines[column] = upper / magnitude;
+  sines[column] = lower / magnitude;
+  hessenberg[column * leadingDim + column] = magnitude;
+  hessenberg[(column + 1) * leadingDim + column] = 0.0;
 
-  double residualSquared = 0.0;
-  for (std::size_t row = 0; row < rows; ++row) {
-    double value = row == 0 ? beta : 0.0;
-    for (std::size_t col = 0; col < cols; ++col)
-      value -= hessenberg[row * leadingDim + col] * solution[col];
-    residualSquared += value * value;
-  }
+  const double rhs = rotatedRhs[column];
+  rotatedRhs[column] = cosines[column] * rhs;
+  rotatedRhs[column + 1] = -sines[column] * rhs;
   residualL2 =
-      std::sqrt(std::max(0.0, residualSquared) /
-                static_cast<double>(std::max<std::size_t>(1, vectorSize)));
+      std::fabs(rotatedRhs[column + 1]) /
+      std::sqrt(static_cast<double>(std::max<std::size_t>(1, vectorSize)));
   return std::isfinite(residualL2);
+}
+
+inline bool solveSpectralGMRESUpperTriangular(
+    const std::vector<double> &hessenberg, std::size_t leadingDim,
+    std::size_t columns, std::span<const double> rotatedRhs,
+    double pivotTolerance, std::vector<double> &solution) {
+  if (columns == 0 || rotatedRhs.size() < columns)
+    return false;
+  solution.assign(columns, 0.0);
+  for (std::size_t reversed = 0; reversed < columns; ++reversed) {
+    const std::size_t row = columns - 1 - reversed;
+    double rhs = rotatedRhs[row];
+    for (std::size_t col = row + 1; col < columns; ++col)
+      rhs -= hessenberg[row * leadingDim + col] * solution[col];
+    const double diagonal = hessenberg[row * leadingDim + row];
+    if (!std::isfinite(diagonal) || std::fabs(diagonal) <= pivotTolerance)
+      return false;
+    solution[row] = rhs / diagonal;
+    if (!std::isfinite(solution[row]))
+      return false;
+  }
+  return true;
 }
 
 inline SpectralGMRESResult solveSpectralGMRESByJVP(
@@ -705,8 +774,10 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
 
   std::vector<double> hessenberg((maxIterations + 1) * maxIterations, 0.0);
   std::vector<double> arnoldiVector(n, 0.0);
-  std::vector<double> y;
-  std::vector<double> bestY;
+  std::vector<double> cosines(maxIterations, 0.0);
+  std::vector<double> sines(maxIterations, 0.0);
+  std::vector<double> rotatedRhs(maxIterations + 1, 0.0);
+  rotatedRhs[0] = rhsEuclidean;
   std::size_t bestColumns = 0;
 
   for (std::size_t col = 0; col < maxIterations; ++col) {
@@ -715,6 +786,7 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
     if (!applySpectralPreconditioner(preconditioner, directionVector,
                                      options.preconditionerPivotTolerance))
       return result;
+    projectSpectralField(problem, directionVector);
     const auto jvp =
         evaluateSpectralJacobianVectorProduct(problem, values, directionVector,
                                               options.jvpOptions);
@@ -737,18 +809,16 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
         basis[(col + 1) * n + i] = arnoldiVector[i] / nextNorm;
     }
 
-    const std::size_t columns = col + 1;
-    const std::size_t rows = col + 2;
     double projectedResidualL2 = std::numeric_limits<double>::infinity();
-    if (!solveSpectralLeastSquaresNormalEquations(
-            hessenberg, rows, columns, maxIterations, rhsEuclidean,
-            options.linearPivotTolerance, y, projectedResidualL2, n)) {
+    if (!updateSpectralGMRESQR(
+            hessenberg, maxIterations, col, cosines, sines, rotatedRhs,
+            options.linearPivotTolerance, projectedResidualL2, n)) {
       return result;
     }
 
+    const std::size_t columns = col + 1;
     result.iterations = static_cast<int>(columns);
     result.residualL2 = projectedResidualL2;
-    bestY = y;
     bestColumns = columns;
     if (projectedResidualL2 <= target) {
       result.converged = true;
@@ -760,6 +830,11 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
 
   if (bestColumns == 0)
     return result;
+  std::vector<double> bestY;
+  if (!solveSpectralGMRESUpperTriangular(
+          hessenberg, maxIterations, bestColumns, rotatedRhs,
+          options.linearPivotTolerance, bestY))
+    return result;
   result.solution.assign(n, 0.0);
   for (std::size_t col = 0; col < bestColumns; ++col) {
     for (std::size_t i = 0; i < n; ++i)
@@ -768,6 +843,7 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
   if (!applySpectralPreconditioner(preconditioner, result.solution,
                                    options.preconditionerPivotTolerance))
     return SpectralGMRESResult{};
+  projectSpectralField(problem, result.solution);
   return result;
 }
 
@@ -1004,8 +1080,10 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
 
   std::vector<double> hessenberg((maxIterations + 1) * maxIterations, 0.0);
   std::vector<double> arnoldiVector(n, 0.0);
-  std::vector<double> y;
-  std::vector<double> bestY;
+  std::vector<double> cosines(maxIterations, 0.0);
+  std::vector<double> sines(maxIterations, 0.0);
+  std::vector<double> rotatedRhs(maxIterations + 1, 0.0);
+  rotatedRhs[0] = rhsEuclidean;
   std::size_t bestColumns = 0;
 
   for (std::size_t col = 0; col < maxIterations; ++col) {
@@ -1014,6 +1092,8 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
     if (!applySpectralPreconditioner(preconditioner, directionVector,
                                      options.preconditionerPivotTolerance))
       return result;
+    projectSpectralSystemUnknownVector(system, directionVector, fieldCount,
+                                       grid.size());
     const auto directionFields = unflattenSpectralSystemUnknownVectorToFields(
         directionVector, fieldCount, grid.size());
     const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
@@ -1041,18 +1121,16 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
         basis[(col + 1) * n + i] = arnoldiVector[i] / nextNorm;
     }
 
-    const std::size_t columns = col + 1;
-    const std::size_t rows = col + 2;
     double projectedResidualL2 = std::numeric_limits<double>::infinity();
-    if (!solveSpectralLeastSquaresNormalEquations(
-            hessenberg, rows, columns, maxIterations, rhsEuclidean,
-            options.linearPivotTolerance, y, projectedResidualL2, n)) {
+    if (!updateSpectralGMRESQR(
+            hessenberg, maxIterations, col, cosines, sines, rotatedRhs,
+            options.linearPivotTolerance, projectedResidualL2, n)) {
       return result;
     }
 
+    const std::size_t columns = col + 1;
     result.iterations = static_cast<int>(columns);
     result.residualL2 = projectedResidualL2;
-    bestY = y;
     bestColumns = columns;
     if (projectedResidualL2 <= target) {
       result.converged = true;
@@ -1064,6 +1142,11 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
 
   if (bestColumns == 0)
     return result;
+  std::vector<double> bestY;
+  if (!solveSpectralGMRESUpperTriangular(
+          hessenberg, maxIterations, bestColumns, rotatedRhs,
+          options.linearPivotTolerance, bestY))
+    return result;
   result.solution.assign(n, 0.0);
   for (std::size_t col = 0; col < bestColumns; ++col) {
     for (std::size_t i = 0; i < n; ++i)
@@ -1072,6 +1155,8 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
   if (!applySpectralPreconditioner(preconditioner, result.solution,
                                    options.preconditionerPivotTolerance))
     return SpectralGMRESResult{};
+  projectSpectralSystemUnknownVector(system, result.solution, fieldCount,
+                                     grid.size());
   return result;
 }
 
@@ -1156,6 +1241,8 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
     return result;
   }
 
+  projectSpectralField(problem, values);
+  result.usedFieldProjector = spectralFieldProjectorEnabled(problem);
   auto residual = assembleSpectralResidual(problem, values);
   result.initialResidualL2 = residual.l2Norm;
   updateSpectralSolveResidualState(result, residual);
@@ -1215,6 +1302,7 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       }
       correction = linear.solution;
     }
+    projectSpectralField(problem, correction);
 
     bool accepted = false;
     double damping = options.initialDamping;
@@ -1223,6 +1311,7 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
     for (int attempt = 0; attempt <= options.maxLineSearchSteps; ++attempt) {
       for (std::size_t i = 0; i < n; ++i)
         candidate[i] = values[i] + damping * correction[i];
+      projectSpectralField(problem, candidate);
       candidateResidual = assembleSpectralResidual(problem, candidate);
       if (candidateResidual.finite &&
           (candidateResidual.l2Norm < residual.l2Norm ||
@@ -1299,6 +1388,8 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
     return result;
   }
 
+  projectSpectralSystemUnknownFields(system, unknownFields);
+  result.usedFieldProjector = spectralSystemUsesFieldProjector(system);
   auto residual = assembleSpectralResidualSystem(system, unknownFields);
   result.initialResidualL2 = residual.l2Norm;
   updateSpectralSolveResidualState(result, residual);
@@ -1365,6 +1456,8 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       }
       correction = linear.solution;
     }
+    projectSpectralSystemUnknownVector(system, correction, fieldCount,
+                                       pointsPerField);
 
     bool accepted = false;
     double damping = options.initialDamping;
@@ -1379,6 +1472,9 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
               unknownFields[field][p] + damping * correction[offset + p];
         }
       }
+      projectSpectralSystemUnknownFields(
+          system,
+          std::span<std::vector<double>>(candidate.data(), candidate.size()));
       candidateResidual = assembleSpectralResidualSystem(
           system, std::span<const std::vector<double>>(candidate.data(),
                                                        candidate.size()));

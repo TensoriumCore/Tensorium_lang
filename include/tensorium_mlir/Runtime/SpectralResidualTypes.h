@@ -136,6 +136,17 @@ struct SpectralUnknownMap {
   void *userData = nullptr;
 };
 
+using SpectralFieldProjectorFn = void (*)(const SpectralGrid3D *grid,
+                                          double *values,
+                                          std::int64_t valueCount,
+                                          void *userData);
+
+struct SpectralFieldProjector {
+  std::string symbolName = "tensorium_spectral_identity_field_projector";
+  SpectralFieldProjectorFn project = nullptr;
+  void *userData = nullptr;
+};
+
 struct SpectralResidualProblem {
   const SpectralGrid3D *grid = nullptr;
   SpectralResidualKernel kernel;
@@ -147,6 +158,7 @@ struct SpectralResidualProblem {
   SpectralDerivativeMap derivativeMap{};
   SpectralUnknownMap unknownMap{};
   std::span<const double> unknownMapParams{};
+  SpectralFieldProjector fieldProjector{};
 };
 
 struct SpectralResidualAssemblyResult {
@@ -287,6 +299,7 @@ struct SpectralEllipticSolveResult {
   bool usedGeneratedGridKernel = false;
   bool usedMatrixFreeGMRES = false;
   bool usedPreconditioner = false;
+  bool usedFieldProjector = false;
 
   bool converged() const {
     return status == SpectralEllipticSolveStatus::Converged;

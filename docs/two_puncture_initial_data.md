@@ -144,16 +144,57 @@ spectral-convergence claim. The fine solution also satisfies the binary's
 half-turn symmetry to `3.1e-17`, has zero total linear momentum, and has the
 expected orbital angular momentum `Jz=2*b*P`.
 
+## TP-4: Matrix-free solve and an explicit symmetry subspace
+
+The physical regression now forbids dense Jacobian assembly and uses the
+generic Newton--GMRES path with a 64-vector Krylov limit. The GMRES least-
+squares problem is updated by Givens rotations instead of normal equations;
+this avoids squaring the condition number of the Arnoldi Hessenberg matrix.
+The previous normal-equation implementation stalled near `1e-7` on the mapped
+Hamiltonian operator even after using the complete 96-dimensional Krylov
+space.
+
+The selected `DiagonalJVP` preconditioner is map-aware without containing
+TwoPunctures physics: its diagonal is sampled from the composed residual JVP,
+after the unknown map, coordinate map, derivative map, and generated kernel.
+It stores `O(N)` diagonal entries and does not construct an `N x N` Jacobian.
+It is an effective regression preconditioner, but its `N` setup JVPs are not
+yet the multilevel or sparse operator needed for production resolutions.
+
+For the equal-mass, equal-and-opposite tangential-momentum case, the runtime
+also installs an optional field projector onto
+
+```text
+v(A,B,phi) = v(A,-B,phi+pi).
+```
+
+This is even parity under Cartesian inversion for the current coordinate map.
+The Newton state, Krylov directions, preconditioned corrections, and line-
+search candidates are all projected. The projector is a runtime policy on an
+individual residual problem; unequal binaries and unrelated generated DSL
+problems do not inherit it.
+
+The `3x3x4`, `4x4x6`, and `5x5x8` physical solves all converge through this
+matrix-free path. Representative current results are:
+
+```text
+grid 4x4x6: Newton steps 2, cumulative GMRES iterations 38
+grid 5x5x8: Newton steps 2, cumulative GMRES iterations 87
+fine final linear residual L2: 4.1e-11
+fine inversion-parity error: exactly zero after projection
+```
+
 ## What remains before production TwoPunctures
 
-The TP-2/TP-3 path is a genuine physical residual and nonlinear solve, but it
-is still a small dense regression. It does not yet provide:
+The TP-2 through TP-4 path is a genuine physical residual and nonlinear solve,
+but it is still a small collocation regression. It does not yet provide:
 
 - puncture and axis regularity enforced through basis/parity rules;
 - higher-resolution convergence studies against published TwoPunctures data;
 - puncture-local ADM masses or independent surface-integral charge checks;
 - the nonlinear bare-mass search needed to match requested physical masses;
-- a mapped-domain preconditioner suitable for production resolutions;
+- a sparse, multilevel, or multidomain mapped preconditioner suitable for
+  production resolutions;
 - interpolation and metadata export to an external evolution solver;
 - automatic selection of coordinate and unknown maps from DSL/module metadata.
 
@@ -162,12 +203,18 @@ unknown per equation. General coupled scalar systems are supported through
 auxiliary-unknown mappings, but arbitrary tensor-valued multidimensional
 elliptic unknowns still require additional lowering and runtime work.
 
-## Next milestone: TP-4 regularity and scaling
+The inversion projector is not a substitute for regular spectral bases at the
+coordinate degeneracies. In particular, the correct Fourier-mode behavior as
+`rho -> 0` and puncture-corner regularity are still not encoded as basis rules.
+
+## Next milestone: TP-5 mass calibration and production scaling
 
 The production path is now:
 
-1. implement regularity/parity conditions at the coordinate degeneracies;
-2. build a mapped-domain preconditioner and move beyond dense Jacobians;
+1. implement Fourier-mode regularity conditions at the axis and puncture
+   corners;
+2. replace the diagonal JVP setup with a scalable mapped-operator
+   preconditioner and restarted GMRES;
 3. add puncture-mass diagnostics and the physical-parameter root search;
 4. validate higher-resolution unequal-mass, boosted, and spinning cases against
    TwoPunctures cases;
