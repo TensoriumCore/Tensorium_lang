@@ -867,6 +867,10 @@ bash tools/dev/test_generated_spectral_system_residual_ll.sh
 bash tools/dev/test_generated_spectral_newton_solve_ll.sh
 bash tools/dev/test_generated_two_puncture_solve_ll.sh
 bash tools/dev/test_generated_two_puncture_hamiltonian_solve_ll.sh
+TP_SLICE_N=17 bash ./run_two_puncture_qc0.sh /tmp/tensorium_qc0_smoke.csv
+grep -q '^i,j,x,y,z,u,psi,chi,alpha,gammatilde_xx' \
+  /tmp/tensorium_qc0_smoke.csv
+grep -q '"case": "QC0"' /tmp/tensorium_qc0_smoke.csv.json
 bash tools/dev/test_parallel_residual_grid_ll.sh
 
 echo

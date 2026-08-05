@@ -347,6 +347,68 @@ unknown map rather than hard-coding `U=(A-1)v`. The caller still supplies the
 TwoPunctures masses, momenta, spins, and half-separation explicitly. Automatic
 parameter binding from generated module metadata remains future work.
 
+### Executable QC0 data set
+
+`run_two_puncture_qc0.sh` is an end-to-end executable case, separate from the
+published-data regression above. It uses the standard QC0 parameters
+
+```text
+b = 1.168642873
+m_+ = m_- = 0.453
+P_+ = (0, +0.3331917498, 0)
+P_- = (0, -0.3331917498, 0)
+S_+ = S_- = 0.
+```
+
+From the repository root, run
+
+```bash
+./run_two_puncture_qc0.sh /tmp/tensorium_qc0_bssn_slice.csv
+./plot_constraint_slice.py /tmp/tensorium_qc0_bssn_slice.csv chi
+```
+
+The script compiles the physical DSL residual to LLVM, solves the nonlinear
+Hamiltonian constraint, performs the Cartesian BSSN handoff, and writes both
+the requested CSV and `<csv>.json` metadata. The default `10x10x16` spectral
+solve currently reports:
+
+```text
+Newton steps:                  5
+cumulative GMRES iterations:  230
+Hamiltonian residual L2:       1.26e-8
+Hamiltonian residual max:      1.85e-7
+ADM energy:                    1.00792622
+ADM angular momentum Jz:       0.77876433
+puncture ADM masses:           0.51685532, 0.51685532
+axis regularity error:         6.66e-6
+BSSN trace error:              8.33e-17
+```
+
+An `8x8x12 -> 10x10x16` check changes the ADM energy by `1.98e-4`, each
+puncture mass by `6.47e-5`, and improves the axis regularity diagnostic from
+`4.63e-5` to `6.66e-6`.
+
+The exported Cartesian `z=0` slice contains `u`, `psi`, `chi`, the
+pre-collapsed gauge seed `alpha=psi^-2`, the six independent components of
+`gamma_tilde_ij` and `A_tilde_ij`, `K`, all three `Gamma_tilde^i`, and the
+zero shift seed. The JSON records physical parameters, resolutions, charges,
+residuals, gauge choice, fields, spacing, and layout. The Cartesian sampling
+resolution and slice extent can be changed without editing source:
+
+```bash
+TP_SLICE_N=257 TP_HALF_WIDTH=12 \
+  ./run_two_puncture_qc0.sh /tmp/qc0_high.csv
+```
+
+This is a real solved data set and a reproducible handoff example. The CSV is
+intentionally a diagnostic slice, not a production 3D evolution checkpoint;
+an external solver should call the SoA handoff API on its own full Cartesian
+grid. `TP_NA`, `TP_NB`, and `TP_NPHI` also expose the spectral resolution for
+development studies. The `10x10x16` configuration is the validated default;
+the current relaxation preconditioner does not yet converge reliably for QC0
+at `12x12x20`, which is why production-resolution scaling remains an explicit
+open item rather than an implied capability.
+
 ## What remains before production TwoPunctures
 
 The TP-2 through TP-7 path is a genuine physical residual and nonlinear solve,
@@ -389,6 +451,9 @@ The production path is now:
   https://doi.org/10.1103/PhysRevD.70.064011.
 - Einstein Toolkit, *TwoPunctures thorn documentation*,
   https://einsteintoolkit.org/thornguide/EinsteinInitialData/TwoPunctures/documentation.html.
+- E. Bentivegna, *Solving the Einstein constraints in periodic spaces with a
+  multigrid approach*, Class. Quantum Grav. 31, 035004 (2014), QC0 comparison,
+  https://doi.org/10.1088/0264-9381/31/3/035004.
 - P. Grandclement, *KADATH: a spectral solver for theoretical physics*,
   J. Comput. Phys. 229, 3334-3357 (2010),
   https://doi.org/10.1016/j.jcp.2010.01.005.

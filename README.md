@@ -101,6 +101,19 @@ emits `tensorium_rhs_grid_parallel` and, for `constraints` blocks,
 `tensorium_residual_grid_parallel`. LLVM emission lowers the parallel grid loop
 through OpenMP runtime calls.
 
+## Solved QC0 two-puncture data
+
+The repository includes an end-to-end binary-black-hole initial-data case. It
+compiles the generated Hamiltonian residual, solves the QC0 Bowen--York puncture
+configuration, and exports a Cartesian BSSN slice plus JSON metadata:
+
+```bash
+./run_two_puncture_qc0.sh /tmp/tensorium_qc0_bssn_slice.csv
+```
+
+See `docs/two_puncture_initial_data.md` for parameters, output fields,
+resolution controls, validation results, and current production limitations.
+
 # Test
 
 All test programs are located in tests/.
