@@ -1,5 +1,6 @@
 #include "tensorium_mlir/Runtime/GeneratedInitialDataIO.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <iomanip>
@@ -48,6 +49,7 @@ int main(int argc, char **argv) {
       slice.halfWidth = parsePositiveDouble(argv[3], "half_width");
     }
 
+    const auto solveStart = std::chrono::steady_clock::now();
     auto solution = solveGeneratedSpectralInitialData(
         tensorium_spectral_initial_data[0],
         tensorium_spectral_residual_systems,
@@ -56,6 +58,9 @@ int main(int argc, char **argv) {
         TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
         tensorium_spectral_residual_grid_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT);
+    const auto solveEnd = std::chrono::steady_clock::now();
+    const double solveSeconds =
+        std::chrono::duration<double>(solveEnd - solveStart).count();
 
     std::cout << std::setprecision(17)
               << "[initial_data] case = "
@@ -64,6 +69,8 @@ int main(int argc, char **argv) {
               << static_cast<int>(solution.solveResult.status) << " / "
               << solution.solveResult.steps << " / "
               << solution.solveResult.linearIterations << '\n'
+              << "[initial_data] solve wall time = " << solveSeconds
+              << " s\n"
               << "[initial_data] residual L2 / max = "
               << solution.residual.l2Norm << " / "
               << solution.residual.maxAbs << '\n';
@@ -73,11 +80,14 @@ int main(int argc, char **argv) {
 
     const std::string reconstruction =
         tensorium_spectral_initial_data[0].reconstruction;
-    const auto report = reconstruction == "none"
-                            ? exportGeneratedInitialDataCollocationCsv(
-                                  solution, outputPath)
-                            : exportGeneratedInitialDataBssnSlice(
-                                  solution, outputPath, slice);
+    const auto exportStart = std::chrono::steady_clock::now();
+    const auto report =
+        reconstruction == "none"
+            ? exportGeneratedInitialDataCollocationCsv(solution, outputPath)
+            : exportGeneratedInitialDataBssnSlice(solution, outputPath, slice);
+    const auto exportEnd = std::chrono::steady_clock::now();
+    const double exportSeconds =
+        std::chrono::duration<double>(exportEnd - exportStart).count();
     std::cout << "[initial_data] spectral grid = " << solution.grid->n1()
               << 'x' << solution.grid->n2() << 'x' << solution.grid->n3()
               << " (" << solution.grid->size() << " points per field)\n";
@@ -93,6 +103,8 @@ int main(int argc, char **argv) {
                 << "[initial_data] chi range on slice = [" << report.minChi
                 << ", " << report.maxChi << "]\n";
     }
+    std::cout << "[initial_data] export wall time = " << exportSeconds
+              << " s\n";
     std::cout << "[initial_data] CSV = " << report.csvPath << '\n'
               << "[initial_data] metadata = " << report.metadataPath << '\n';
   } catch (const std::exception &error) {

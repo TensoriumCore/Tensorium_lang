@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -15,11 +16,14 @@
 namespace tensorium_mlir::runtime {
 
 inline constexpr double kSpectralPi = 3.14159265358979323846264338327950288;
+inline constexpr std::size_t kSpectralParallelPointThreshold = 32768;
 
 enum class SpectralBasis {
   ChebyshevZeros,
   FourierPeriodic,
 };
+
+class SpectralGrid3D;
 
 struct SpectralAxis {
   SpectralBasis basis = SpectralBasis::ChebyshevZeros;
@@ -43,6 +47,7 @@ struct SpectralAxis {
           kSpectralPi * (static_cast<double>(i) + 0.5) / static_cast<double>(n);
       axis.points[i] = center + scale * std::cos(theta);
     }
+    axis.prepareDerivativeOperators();
     return axis;
   }
 
@@ -61,6 +66,7 @@ struct SpectralAxis {
     for (std::size_t i = 0; i < n; ++i)
       axis.points[i] =
           origin + period * static_cast<double>(i) / static_cast<double>(n);
+    axis.prepareDerivativeOperators();
     return axis;
   }
 
@@ -70,11 +76,43 @@ struct SpectralAxis {
                                     unsigned order) const {
     if (values.size() != points.size())
       throw std::runtime_error("spectral axis value count mismatch");
-    if (order == 0)
-      return values;
-    if (basis == SpectralBasis::FourierPeriodic)
-      return differentiateFourier(values, order);
-    return differentiatePolynomial(values, order);
+    std::vector<double> out(values.size(), 0.0);
+    std::vector<double> scratch(order > 1 ? values.size() : 0, 0.0);
+    std::vector<std::complex<double>> fourierScratch(
+        basis == SpectralBasis::FourierPeriodic && order > 0 ? values.size()
+                                                             : 0);
+    differentiateInto(values, order, out, scratch, fourierScratch);
+    return out;
+  }
+
+  void differentiateInto(std::span<const double> values, unsigned order,
+                         std::span<double> out,
+                         std::span<double> scratch = {},
+                         std::span<std::complex<double>> fourierScratch = {})
+      const {
+    if (values.size() != points.size() || out.size() != points.size())
+      throw std::runtime_error("spectral axis value count mismatch");
+    if (order == 0) {
+      std::copy(values.begin(), values.end(), out.begin());
+      return;
+    }
+
+    prepareDerivativeOperators();
+    if (basis == SpectralBasis::FourierPeriodic) {
+      differentiateFourierInto(values, order, out, fourierScratch);
+      return;
+    }
+
+    if (order > 1 && scratch.size() != points.size())
+      throw std::runtime_error(
+          "spectral derivative scratch buffer has the wrong size");
+    std::span<const double> current = values;
+    for (unsigned applied = 0; applied < order; ++applied) {
+      const unsigned remaining = order - applied;
+      std::span<double> target = remaining % 2 == 1 ? out : scratch;
+      applyMatrix(polynomialDerivativeMatrix_, current, target);
+      current = target;
+    }
   }
 
   double interpolate(const std::vector<double> &values, double coordinate) const {
@@ -109,7 +147,17 @@ struct SpectralAxis {
   }
 
 private:
-  std::vector<double> differentiationMatrix() const {
+  friend class SpectralGrid3D;
+
+  // Axes are immutable after construction in the runtime. Keep the expensive
+  // collocation operators with the axis and reuse them for every residual/JVP.
+  mutable std::vector<double> polynomialDerivativeMatrix_;
+  mutable std::vector<std::complex<double>> fourierForwardPhases_;
+  mutable std::vector<std::complex<double>> fourierInversePhases_;
+  mutable std::array<std::vector<std::complex<double>>, 2>
+      fourierDerivativeFactors_;
+
+  std::vector<double> polynomialDifferentiationMatrix() const {
     const std::size_t n = points.size();
     std::vector<double> weights(n, 1.0);
     for (std::size_t i = 0; i < n; ++i) {
@@ -134,63 +182,103 @@ private:
     return matrix;
   }
 
-  static std::vector<double> applyMatrix(const std::vector<double> &matrix,
-                                         const std::vector<double> &values) {
+  static void applyMatrix(std::span<const double> matrix,
+                          std::span<const double> values,
+                          std::span<double> out) {
     const std::size_t n = values.size();
-    std::vector<double> out(n, 0.0);
+    if (matrix.size() != n * n || out.size() != n)
+      throw std::runtime_error("spectral derivative matrix size mismatch");
     for (std::size_t i = 0; i < n; ++i) {
       double sum = 0.0;
       for (std::size_t j = 0; j < n; ++j)
         sum += matrix[i * n + j] * values[j];
       out[i] = sum;
     }
-    return out;
   }
 
-  std::vector<double> differentiatePolynomial(const std::vector<double> &values,
-                                              unsigned order) const {
-    const auto matrix = differentiationMatrix();
-    std::vector<double> out = values;
-    for (unsigned i = 0; i < order; ++i)
-      out = applyMatrix(matrix, out);
-    return out;
+  void prepareDerivativeOperators() const {
+    const std::size_t matrixSize = points.size() * points.size();
+    if (basis == SpectralBasis::FourierPeriodic) {
+      const std::size_t n = points.size();
+      const std::complex<double> imaginary(0.0, 1.0);
+      if (fourierForwardPhases_.size() != matrixSize ||
+          fourierInversePhases_.size() != matrixSize) {
+        fourierForwardPhases_.resize(matrixSize);
+        fourierInversePhases_.resize(matrixSize);
+        for (std::size_t m = 0; m < n; ++m) {
+          for (std::size_t j = 0; j < n; ++j) {
+            const double forwardPhase =
+                -2.0 * kSpectralPi * static_cast<double>(m * j) /
+                static_cast<double>(n);
+            const double inversePhase =
+                2.0 * kSpectralPi * static_cast<double>(m * j) /
+                static_cast<double>(n);
+            fourierForwardPhases_[m * n + j] =
+                std::exp(imaginary * forwardPhase);
+            fourierInversePhases_[m * n + j] =
+                std::exp(imaginary * inversePhase);
+          }
+        }
+      }
+      for (unsigned order = 1; order <= fourierDerivativeFactors_.size();
+           ++order) {
+        auto &factors = fourierDerivativeFactors_[order - 1];
+        if (factors.size() == n)
+          continue;
+        factors.resize(n);
+        for (std::size_t m = 0; m < n; ++m) {
+          const int waveNumber =
+              m <= n / 2 ? static_cast<int>(m)
+                         : static_cast<int>(m) - static_cast<int>(n);
+          const double angularWave =
+              2.0 * kSpectralPi * static_cast<double>(waveNumber) / period;
+          std::complex<double> factor(1.0, 0.0);
+          for (unsigned p = 0; p < order; ++p)
+            factor *= imaginary * angularWave;
+          factors[m] = factor;
+        }
+      }
+      return;
+    }
+    if (polynomialDerivativeMatrix_.size() != matrixSize)
+      polynomialDerivativeMatrix_ = polynomialDifferentiationMatrix();
   }
 
-  std::vector<double> differentiateFourier(const std::vector<double> &values,
-                                           unsigned order) const {
+  void differentiateFourierInto(
+      std::span<const double> values, unsigned order, std::span<double> out,
+      std::span<std::complex<double>> coeffs) const {
     const std::size_t n = values.size();
-    std::vector<std::complex<double>> coeffs(n);
+    if (coeffs.size() != n)
+      throw std::runtime_error(
+          "spectral Fourier scratch buffer has the wrong size");
     const std::complex<double> imaginary(0.0, 1.0);
 
     for (std::size_t m = 0; m < n; ++m) {
       std::complex<double> coeff(0.0, 0.0);
-      for (std::size_t j = 0; j < n; ++j) {
-        const double phase = -2.0 * kSpectralPi * static_cast<double>(m * j) /
-                             static_cast<double>(n);
-        coeff += values[j] * std::exp(imaginary * phase);
-      }
+      for (std::size_t j = 0; j < n; ++j)
+        coeff += values[j] * fourierForwardPhases_[m * n + j];
       coeffs[m] = coeff / static_cast<double>(n);
     }
 
-    std::vector<double> out(n, 0.0);
     for (std::size_t j = 0; j < n; ++j) {
       std::complex<double> value(0.0, 0.0);
       for (std::size_t m = 0; m < n; ++m) {
-        const int waveNumber =
-            m <= n / 2 ? static_cast<int>(m) : static_cast<int>(m) - static_cast<int>(n);
-        const double angularWave =
-            2.0 * kSpectralPi * static_cast<double>(waveNumber) / period;
         std::complex<double> factor(1.0, 0.0);
-        for (unsigned p = 0; p < order; ++p)
-          factor *= imaginary * angularWave;
-
-        const double phase = 2.0 * kSpectralPi * static_cast<double>(m * j) /
-                             static_cast<double>(n);
-        value += factor * coeffs[m] * std::exp(imaginary * phase);
+        if (order <= fourierDerivativeFactors_.size()) {
+          factor = fourierDerivativeFactors_[order - 1][m];
+        } else {
+          const int waveNumber =
+              m <= n / 2 ? static_cast<int>(m)
+                         : static_cast<int>(m) - static_cast<int>(n);
+          const double angularWave =
+              2.0 * kSpectralPi * static_cast<double>(waveNumber) / period;
+          for (unsigned p = 0; p < order; ++p)
+            factor *= imaginary * angularWave;
+        }
+        value += factor * coeffs[m] * fourierInversePhases_[m * n + j];
       }
       out[j] = value.real();
     }
-    return out;
   }
 
   double interpolateFourier(const std::vector<double> &values,
@@ -263,6 +351,8 @@ public:
       : axes_{std::move(a), std::move(b), std::move(phi)} {
     if (axes_[0].size() == 0 || axes_[1].size() == 0 || axes_[2].size() == 0)
       throw std::runtime_error("spectral grid axes must be non-empty");
+    for (SpectralAxis &axis : axes_)
+      axis.prepareDerivativeOperators();
   }
 
   const SpectralAxis &axis(std::size_t dim) const {
@@ -291,41 +381,77 @@ public:
 
     std::vector<double> out(values.size(), 0.0);
     if (dim == 0) {
-      std::vector<double> line(n1());
-      for (std::size_t k = 0; k < n3(); ++k) {
-        for (std::size_t j = 0; j < n2(); ++j) {
-          for (std::size_t i = 0; i < n1(); ++i)
-            line[i] = values[index(i, j, k)];
-          const auto diff = axes_[0].differentiate(line, order);
-          for (std::size_t i = 0; i < n1(); ++i)
-            out[index(i, j, k)] = diff[i];
+#if defined(_OPENMP)
+#pragma omp parallel if(values.size() >= kSpectralParallelPointThreshold)
+#endif
+      {
+        std::vector<double> scratch(order > 1 ? n1() : 0, 0.0);
+        std::vector<std::complex<double>> fourierScratch(
+            axes_[0].basis == SpectralBasis::FourierPeriodic ? n1() : 0);
+#if defined(_OPENMP)
+#pragma omp for collapse(2) schedule(static)
+#endif
+        for (std::size_t k = 0; k < n3(); ++k) {
+          for (std::size_t j = 0; j < n2(); ++j) {
+            const std::size_t offset = index(0, j, k);
+            axes_[0].differentiateInto(
+                std::span<const double>(values.data() + offset, n1()), order,
+                std::span<double>(out.data() + offset, n1()), scratch,
+                fourierScratch);
+          }
         }
       }
       return out;
     }
 
     if (dim == 1) {
-      std::vector<double> line(n2());
-      for (std::size_t k = 0; k < n3(); ++k) {
-        for (std::size_t i = 0; i < n1(); ++i) {
-          for (std::size_t j = 0; j < n2(); ++j)
-            line[j] = values[index(i, j, k)];
-          const auto diff = axes_[1].differentiate(line, order);
-          for (std::size_t j = 0; j < n2(); ++j)
-            out[index(i, j, k)] = diff[j];
+#if defined(_OPENMP)
+#pragma omp parallel if(values.size() >= kSpectralParallelPointThreshold)
+#endif
+      {
+        std::vector<double> line(n2(), 0.0);
+        std::vector<double> diff(n2(), 0.0);
+        std::vector<double> scratch(order > 1 ? n2() : 0, 0.0);
+        std::vector<std::complex<double>> fourierScratch(
+            axes_[1].basis == SpectralBasis::FourierPeriodic ? n2() : 0);
+#if defined(_OPENMP)
+#pragma omp for collapse(2) schedule(static)
+#endif
+        for (std::size_t k = 0; k < n3(); ++k) {
+          for (std::size_t i = 0; i < n1(); ++i) {
+            for (std::size_t j = 0; j < n2(); ++j)
+              line[j] = values[index(i, j, k)];
+            axes_[1].differentiateInto(line, order, diff, scratch,
+                                       fourierScratch);
+            for (std::size_t j = 0; j < n2(); ++j)
+              out[index(i, j, k)] = diff[j];
+          }
         }
       }
       return out;
     }
 
-    std::vector<double> line(n3());
-    for (std::size_t j = 0; j < n2(); ++j) {
-      for (std::size_t i = 0; i < n1(); ++i) {
-        for (std::size_t k = 0; k < n3(); ++k)
-          line[k] = values[index(i, j, k)];
-        const auto diff = axes_[2].differentiate(line, order);
-        for (std::size_t k = 0; k < n3(); ++k)
-          out[index(i, j, k)] = diff[k];
+#if defined(_OPENMP)
+#pragma omp parallel if(values.size() >= kSpectralParallelPointThreshold)
+#endif
+    {
+      std::vector<double> line(n3(), 0.0);
+      std::vector<double> diff(n3(), 0.0);
+      std::vector<double> scratch(order > 1 ? n3() : 0, 0.0);
+      std::vector<std::complex<double>> fourierScratch(
+          axes_[2].basis == SpectralBasis::FourierPeriodic ? n3() : 0);
+#if defined(_OPENMP)
+#pragma omp for collapse(2) schedule(static)
+#endif
+      for (std::size_t j = 0; j < n2(); ++j) {
+        for (std::size_t i = 0; i < n1(); ++i) {
+          for (std::size_t k = 0; k < n3(); ++k)
+            line[k] = values[index(i, j, k)];
+          axes_[2].differentiateInto(line, order, diff, scratch,
+                                     fourierScratch);
+          for (std::size_t k = 0; k < n3(); ++k)
+            out[index(i, j, k)] = diff[k];
+        }
       }
     }
     return out;

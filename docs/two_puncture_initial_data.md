@@ -414,6 +414,38 @@ the current relaxation preconditioner does not yet converge reliably for QC0
 at `12x12x20`, which is why production-resolution scaling remains an explicit
 open item rather than an implied capability.
 
+## Runtime performance controls
+
+The spectral runtime caches the Chebyshev differentiation matrices, Fourier
+phase tables, and Fourier derivative factors once per axis. Tensor-product
+derivatives reuse one set of line buffers per worker instead of allocating for
+every line. The generated runner reports solve and export wall times separately
+so solver scaling can be measured without counting DSL compilation or CSV I/O.
+
+`run_initial_data.sh` compiles the host runtime with `-O3 -DNDEBUG`. Two
+optional controls are available for production experiments:
+
+```bash
+TENSORIUM_NATIVE=1 \
+TENSORIUM_OPENMP=1 OMP_NUM_THREADS=8 \
+  ./run_initial_data.sh problem.tn /tmp/initial_data.csv
+```
+
+`TENSORIUM_NATIVE=1` enables host-specific code generation and therefore makes
+the executable non-portable. `TENSORIUM_OPENMP=1` parallelizes independent
+tensor-product spectral lines; grids below 32,768 collocation points remain
+sequential because thread-launch overhead dominates at that size. On macOS the
+script detects MacPorts or Homebrew `libomp`; on other platforms it uses
+`-fopenmp`. `TENSORIUM_CXXFLAGS` and `TENSORIUM_LDFLAGS` can append toolchain-
+specific flags.
+
+On the QC0 `10x10x16` regression, operator caching reduces the isolated solve
+wall time by roughly a factor of four while preserving the Newton/GMRES counts,
+residuals, and physical diagnostics. This is a single-machine engineering
+measurement, not a production-scaling claim. Higher resolutions still require
+a stronger preconditioner; faster residual evaluations do not fix the current
+`12x12x20` convergence failure.
+
 ## What remains before production TwoPunctures
 
 The TP-2 through TP-7 path is a genuine physical residual and nonlinear solve,

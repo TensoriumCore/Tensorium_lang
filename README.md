@@ -123,6 +123,9 @@ generic command:
 
 See `docs/two_puncture_initial_data.md` for parameters, output fields,
 resolution controls, validation results, and current production limitations.
+For large spectral grids, `TENSORIUM_OPENMP=1` enables line-level CPU
+parallelism and `TENSORIUM_NATIVE=1` enables host-specific optimization. The
+runner prints solve and export wall times separately.
 
 # Test
 

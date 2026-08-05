@@ -5497,6 +5497,57 @@ static bool testSpectralGridManufacturedPoisson() {
   return true;
 }
 
+static bool testSpectralAxisBufferedDerivativeReuse() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralBasis;
+
+  const auto checkAxis = [](const SpectralAxis &axis) {
+    const std::size_t n = axis.size();
+    std::vector<double> values(n, 0.0);
+    std::vector<double> expectedFirst(n, 0.0);
+    std::vector<double> expectedSecond(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+      const double x = axis.points[i];
+      if (axis.basis == SpectralBasis::FourierPeriodic) {
+        values[i] = std::sin(3.0 * x) + 0.25 * std::cos(2.0 * x);
+        expectedFirst[i] = 3.0 * std::cos(3.0 * x) - 0.5 * std::sin(2.0 * x);
+        expectedSecond[i] =
+            -9.0 * std::sin(3.0 * x) - std::cos(2.0 * x);
+      } else {
+        values[i] = x * x * x * x - 0.5 * x * x + 0.25 * x;
+        expectedFirst[i] = 4.0 * x * x * x - x + 0.25;
+        expectedSecond[i] = 12.0 * x * x - 1.0;
+      }
+    }
+
+    std::vector<double> out(n, 0.0);
+    std::vector<double> scratch(n, 0.0);
+    std::vector<std::complex<double>> fourierScratch(
+        axis.basis == SpectralBasis::FourierPeriodic ? n : 0);
+    double maxError = 0.0;
+    for (int repetition = 0; repetition < 8; ++repetition) {
+      axis.differentiateInto(values, 1, out, scratch, fourierScratch);
+      for (std::size_t i = 0; i < n; ++i)
+        maxError = std::max(maxError, std::abs(out[i] - expectedFirst[i]));
+      axis.differentiateInto(values, 2, out, scratch, fourierScratch);
+      for (std::size_t i = 0; i < n; ++i)
+        maxError = std::max(maxError, std::abs(out[i] - expectedSecond[i]));
+    }
+    return maxError;
+  };
+
+  const double chebyshevError =
+      checkAxis(SpectralAxis::chebyshevZeros(10));
+  const double fourierError =
+      checkAxis(SpectralAxis::fourierPeriodic(16));
+  if (chebyshevError > 2.0e-11 || fourierError > 2.0e-11) {
+    std::cerr << "FAIL: buffered spectral derivative errors Chebyshev="
+              << chebyshevError << " Fourier=" << fourierError << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSpectralGridTensorProductInterpolation() {
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralGrid3D;
@@ -7389,6 +7440,8 @@ int main() {
        &testGeneratedHostStorageEulerUpdatePairs},
       {"testSpectralGridManufacturedPoisson",
        &testSpectralGridManufacturedPoisson},
+      {"testSpectralAxisBufferedDerivativeReuse",
+       &testSpectralAxisBufferedDerivativeReuse},
       {"testSpectralGridTensorProductInterpolation",
        &testSpectralGridTensorProductInterpolation},
       {"testSpectralDerivativeBundleAnalyticMixedTerms",
