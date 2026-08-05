@@ -260,6 +260,7 @@ enum class SpectralPreconditionerKind {
   DiagonalJVP,
   DenseLaplacianShift,
   ModalLaplacianShift,
+  MappedFiniteDifferenceLaplacianShift,
 };
 
 struct SpectralEllipticSolveOptions {
@@ -274,6 +275,7 @@ struct SpectralEllipticSolveOptions {
   std::size_t denseJacobianMaxUnknowns = 2048;
   SpectralLinearSolveKind linearSolver = SpectralLinearSolveKind::Auto;
   int gmresMaxIterations = 64;
+  int gmresRestart = 0;
   double gmresTolerance = 1.0e-10;
   double gmresRelativeTolerance = 1.0e-10;
   SpectralPreconditionerKind gmresPreconditioner =
@@ -281,6 +283,8 @@ struct SpectralEllipticSolveOptions {
   double preconditionerPivotTolerance = 1.0e-12;
   double preconditionerLaplacianShift = 0.0;
   std::vector<double> preconditionerLaplacianShifts{};
+  int preconditionerRelaxationSweeps = 4;
+  double preconditionerRelaxationOmega = 1.0;
   SpectralJacobianVectorProductOptions jvpOptions{};
 };
 

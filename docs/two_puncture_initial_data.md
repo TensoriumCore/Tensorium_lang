@@ -226,16 +226,68 @@ mass refinement change:    8.36e-4 -> 1.10e-5
 This is a same-grid fixed-point regression, not yet a comparison with apparent-
 horizon masses or a published production-resolution parameter set.
 
+## TP-6: Behavioral regularity and bounded-memory scaling
+
+The three logical boundary families `A=-1`, `B=-1`, and `B=+1` map to the
+Cartesian `x` axis. A continuous scalar must have a unique value there,
+independent of `phi`. `TwoPunctureRegularity.h` now measures the maximum
+non-axisymmetric endpoint trace on all three families. It also provides an
+idempotent transfinite projector which removes those traces while preserving
+the Fourier average. A deliberately irregular manufactured field is reduced
+from a boundary error of `1.48` to `4.2e-16`.
+
+The physical solve does not impose this projector as an extra boundary
+condition. The original method uses interior Chebyshev-zero collocation and
+obtains regularity as a behavioral consequence of the elliptic equation.
+Imposing endpoint traces as hard constraints at the current low orders makes
+the discrete collocation equations over-constrained. Tensorium therefore uses
+the projector as a testable policy and reports the unmodified physical trace;
+on the current `7x7x12` solution its maximum variation is `4.2e-6`.
+
+The linear solver now supports restarted GMRES. `gmresMaxIterations` is the
+total iteration budget and `gmresRestart` bounds each Arnoldi basis. The
+physical regression uses GMRES(24), so Krylov storage is `O(24*N)` rather than
+growing with the full iteration budget.
+
+`MappedFiniteDifferenceLaplacianShift` is a generic sparse preconditioner. At
+each collocation point it constructs nonuniform three-point first- and second-
+derivative stencils, passes their derivative bundles through the configured
+unknown and coordinate derivative maps, and retains the mapped physical
+Laplacian plus an optional shift. The result has at most seven entries per row,
+is built in `O(N)` work and storage, and is approximately inverted by symmetric
+relaxation. Mixed logical derivatives produced by a fully non-orthogonal map
+are deliberately omitted by this seven-point approximation; a wider stencil is
+required to represent them. No TwoPunctures residual term is hard-coded into
+this path.
+
+With the sparse mapped preconditioner, the physical regression now includes a
+`7x7x12` grid with 588 unknowns:
+
+```text
+GMRES restart length:                    24
+coarse cumulative linear iterations:    24
+fine cumulative linear iterations:      69
+coarse nonlinear residual L2:            5.1e-11
+fine final linear residual L2:           2.5e-11
+fine scalar-axis regularity error:       4.2e-6
+puncture-mass change:                    8.36e-4 -> 2.49e-4
+```
+
+This removes dense Jacobian storage and the `N` residual-JVP setup calls of the
+previous diagonal preconditioner. Production-scale parallelism and algebraic
+multigrid remain external-backend concerns.
+
 ## What remains before production TwoPunctures
 
-The TP-2 through TP-5 path is a genuine physical residual and nonlinear solve,
+The TP-2 through TP-6 path is a genuine physical residual and nonlinear solve,
 but it is still a small collocation regression. It does not yet provide:
 
-- puncture and axis regularity enforced through basis/parity rules;
+- production-resolution convergence of every Fourier regularity mode at the
+  axes and puncture corners;
 - higher-resolution convergence studies against published TwoPunctures data;
 - apparent-horizon masses or independent surface-integral charge checks;
-- a sparse, multilevel, or multidomain mapped preconditioner suitable for
-  production resolutions;
+- algebraic multigrid, distributed sparse solves, or multidomain
+  preconditioning;
 - interpolation and metadata export to an external evolution solver;
 - automatic selection of coordinate and unknown maps from DSL/module metadata.
 
@@ -244,21 +296,18 @@ unknown per equation. General coupled scalar systems are supported through
 auxiliary-unknown mappings, but arbitrary tensor-valued multidimensional
 elliptic unknowns still require additional lowering and runtime work.
 
-The inversion projector is not a substitute for regular spectral bases at the
-coordinate degeneracies. In particular, the correct Fourier-mode behavior as
-`rho -> 0` and puncture-corner regularity are still not encoded as basis rules.
+The scalar endpoint projector is not a complete tensor regularity system. In
+particular, the expected `rho^|m|` behavior of each Fourier mode and the parity
+of vector/tensor components still need production-resolution validation.
 
-## Next milestone: TP-6 regularity and production scaling
+## Next milestone: TP-7 physical validation and handoff
 
 The production path is now:
 
-1. implement Fourier-mode regularity conditions at the axis and puncture
-   corners;
-2. replace the diagonal JVP setup with a scalable mapped-operator
-   preconditioner and restarted GMRES;
-3. validate higher-resolution unequal-mass, boosted, and spinning cases against
+1. validate higher-resolution unequal-mass, boosted, and spinning cases against
    TwoPunctures cases;
-4. interpolate the solved fields onto the external evolution grid and verify
+2. add apparent-horizon or independent surface-integral diagnostics;
+3. interpolate the solved fields onto the external evolution grid and verify
    the Hamiltonian and momentum constraints after handoff.
 
 ## References

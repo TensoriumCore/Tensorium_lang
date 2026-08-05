@@ -1,8 +1,9 @@
 #include "tensorium_mlir/Runtime/SpectralResidualKernel.h"
 #include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
 #include "tensorium_mlir/Runtime/TwoPunctureDiagnostics.h"
-#include "tensorium_mlir/Runtime/TwoPunctureMassCalibration.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMap.h"
+#include "tensorium_mlir/Runtime/TwoPunctureMassCalibration.h"
+#include "tensorium_mlir/Runtime/TwoPunctureRegularity.h"
 #include "tensorium_mlir/Runtime/TwoPunctureSymmetry.h"
 
 #include <algorithm>
@@ -24,6 +25,8 @@
 namespace {
 
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
+using tensorium_mlir::runtime::
+    buildSpectralMappedFiniteDifferenceLaplacianShift;
 using tensorium_mlir::runtime::calibrateTwoPunctureBareMasses;
 using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
 using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
@@ -32,8 +35,10 @@ using tensorium_mlir::runtime::makeTwoPunctureCoordinateMap;
 using tensorium_mlir::runtime::makeTwoPunctureDerivativeMap;
 using tensorium_mlir::runtime::makeTwoPunctureInversionEvenFieldProjector;
 using tensorium_mlir::runtime::makeTwoPunctureLocalMassDiagnostics;
+using tensorium_mlir::runtime::makeTwoPunctureScalarRegularityFieldProjector;
 using tensorium_mlir::runtime::mapTwoPunctureCoordinates;
 using tensorium_mlir::runtime::measureTwoPunctureInversionParityError;
+using tensorium_mlir::runtime::measureTwoPunctureScalarRegularity;
 using tensorium_mlir::runtime::sampleTwoPunctureRegularField;
 using tensorium_mlir::runtime::solveSpectralNewton;
 using tensorium_mlir::runtime::SpectralAxis;
@@ -117,12 +122,48 @@ int main() {
     projectorProbe[probeImage] = -3.0;
     const double projectorErrorBefore =
         measureTwoPunctureInversionParityError(grid, projectorProbe);
-    problem.fieldProjector.project(
-        &grid, projectorProbe.data(),
-        static_cast<std::int64_t>(projectorProbe.size()),
-        problem.fieldProjector.userData);
+    const auto inversionProjector =
+        makeTwoPunctureInversionEvenFieldProjector();
+    inversionProjector.project(&grid, projectorProbe.data(),
+                               static_cast<std::int64_t>(projectorProbe.size()),
+                               inversionProjector.userData);
     const double projectorErrorAfter =
         measureTwoPunctureInversionParityError(grid, projectorProbe);
+
+    std::vector<double> regularityProbe(grid.size(), 0.0);
+    for (std::size_t k = 0; k < grid.n3(); ++k) {
+      for (std::size_t j = 0; j < grid.n2(); ++j) {
+        for (std::size_t i = 0; i < grid.n1(); ++i) {
+          const auto point = grid.point(i, j, k);
+          regularityProbe[point.index] =
+              0.2 +
+              std::cos(point.x3) * (1.0 + 0.3 * point.x1 - 0.2 * point.x2);
+        }
+      }
+    }
+    const double regularityErrorBefore =
+        measureTwoPunctureScalarRegularity(grid, regularityProbe)
+            .maxPhiVariation();
+    const auto regularityProjector =
+        makeTwoPunctureScalarRegularityFieldProjector();
+    regularityProjector.project(
+        &grid, regularityProbe.data(),
+        static_cast<std::int64_t>(regularityProbe.size()),
+        regularityProjector.userData);
+    const double regularityErrorAfter =
+        measureTwoPunctureScalarRegularity(grid, regularityProbe)
+            .maxPhiVariation();
+    const auto regularityProjectedOnce = regularityProbe;
+    regularityProjector.project(
+        &grid, regularityProbe.data(),
+        static_cast<std::int64_t>(regularityProbe.size()),
+        regularityProjector.userData);
+    double regularityIdempotenceError = 0.0;
+    for (std::size_t p = 0; p < regularityProbe.size(); ++p) {
+      regularityIdempotenceError =
+          std::max(regularityIdempotenceError,
+                   std::abs(regularityProbe[p] - regularityProjectedOnce[p]));
+    }
 
     std::array<std::vector<double>, 1> solverFields{
         std::vector<double>(grid.size(), 0.0)};
@@ -206,13 +247,27 @@ int main() {
     options.residualRatioTarget = 1.0e-9;
     options.linearSolver = SpectralLinearSolveKind::MatrixFreeGMRES;
     options.denseJacobianMaxUnknowns = 1;
-    options.gmresMaxIterations = 64;
+    options.gmresMaxIterations = 128;
+    options.gmresRestart = 24;
     options.gmresTolerance = 1.0e-10;
     options.gmresRelativeTolerance = 1.0e-10;
-    options.gmresPreconditioner = SpectralPreconditionerKind::DiagonalJVP;
+    options.gmresPreconditioner =
+        SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift;
+    options.preconditionerRelaxationSweeps = 6;
     options.jvpOptions.relativeStep = 2.0e-6;
     options.jvpOptions.absoluteStep = 1.0e-8;
     options.linearPivotTolerance = 1.0e-13;
+
+    const auto mappedStencil =
+        buildSpectralMappedFiniteDifferenceLaplacianShift(
+            problem, options.preconditionerLaplacianShift,
+            options.preconditionerPivotTolerance);
+    std::size_t maxStencilWidth = 0;
+    for (std::size_t row = 0; row < mappedStencil.size; ++row) {
+      maxStencilWidth =
+          std::max(maxStencilWidth, mappedStencil.rowOffsets[row + 1] -
+                                        mappedStencil.rowOffsets[row]);
+    }
 
     const auto solveResult =
         solveSpectralNewton(system,
@@ -271,10 +326,12 @@ int main() {
     const auto coarseLocalMasses = makeTwoPunctureLocalMassDiagnostics(
         halfSeparation, mass1, mass2, coarsePunctureSample.values[0],
         coarsePunctureSample.values[1]);
+    const auto coarseRegularity =
+        measureTwoPunctureScalarRegularity(grid, solverFields[0]);
 
-    SpectralGrid3D fineGrid(SpectralAxis::chebyshevZeros(5),
-                            SpectralAxis::chebyshevZeros(5),
-                            SpectralAxis::fourierPeriodic(8));
+    SpectralGrid3D fineGrid(SpectralAxis::chebyshevZeros(7),
+                            SpectralAxis::chebyshevZeros(7),
+                            SpectralAxis::fourierPeriodic(12));
     auto fineGeneratedSystem = makeSpectralResidualSystemFromDesc(
         systemDesc, fineGrid, tensorium_spectral_residual_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
@@ -358,6 +415,8 @@ int main() {
     const auto veryCoarseLocalMasses = makeTwoPunctureLocalMassDiagnostics(
         halfSeparation, mass1, mass2, veryCoarsePunctureSample.values[0],
         veryCoarsePunctureSample.values[1]);
+    const auto veryCoarseRegularity = measureTwoPunctureScalarRegularity(
+        veryCoarseGrid, veryCoarseSolverFields[0]);
     const double veryCoarseProbeDelta = std::abs(coarseProbe - veryCoarseProbe);
     const double veryCoarseAdmDelta =
         std::abs(coarseAdm.energy - veryCoarseAdm.energy);
@@ -369,6 +428,8 @@ int main() {
 
     const double fineSymmetryError = measureTwoPunctureInversionParityError(
         fineGrid, fineSolverFields[0]);
+    const auto fineRegularity =
+        measureTwoPunctureScalarRegularity(fineGrid, fineSolverFields[0]);
 
     const std::array<double, 2> algebraicTargets = {0.63, 0.41};
     const std::array<double, 2> algebraicRegularField = {0.03, 0.07};
@@ -431,6 +492,13 @@ int main() {
     std::printf("[two-puncture-hamiltonian] inversion projector error = "
                 "%.17g -> %.17g\n",
                 projectorErrorBefore, projectorErrorAfter);
+    std::printf("[two-puncture-hamiltonian] scalar regularity projector error "
+                "= %.17g -> %.17g, idempotence %.17g\n",
+                regularityErrorBefore, regularityErrorAfter,
+                regularityIdempotenceError);
+    std::printf("[two-puncture-hamiltonian] mapped sparse stencil nnz/width = "
+                "%zu/%zu\n",
+                mappedStencil.values.size(), maxStencilWidth);
     std::printf("[two-puncture-hamiltonian] boosted initial residual l2 = "
                 "%.17g\n",
                 initialResidual.l2Norm);
@@ -478,6 +546,14 @@ int main() {
     std::printf("[two-puncture-hamiltonian] fine orbital symmetry error = "
                 "%.17g\n",
                 fineSymmetryError);
+    std::printf("[two-puncture-hamiltonian] fine scalar-axis regularity error "
+                "= %.17g\n",
+                fineRegularity.maxPhiVariation());
+    std::printf("[two-puncture-hamiltonian] scalar-axis regularity samples "
+                "= %.17g -> %.17g -> %.17g\n",
+                veryCoarseRegularity.maxPhiVariation(),
+                coarseRegularity.maxPhiVariation(),
+                fineRegularity.maxPhiVariation());
     std::printf("[two-puncture-hamiltonian] coarse puncture ADM masses = "
                 "%.17g %.17g\n",
                 coarseLocalMasses.admMasses[0],
@@ -501,7 +577,14 @@ int main() {
     if (momentumContractionError > 2.0e-12 || spinContractionError > 2.0e-12 ||
         projectorErrorBefore < 1.0 || projectorErrorAfter != 0.0 ||
         projectorProbe[probeIndex] != -1.0 ||
-        projectorProbe[probeImage] != -1.0 ||
+        projectorProbe[probeImage] != -1.0 || regularityErrorBefore < 0.5 ||
+        regularityErrorAfter > 2.0e-12 ||
+        regularityIdempotenceError > 2.0e-12 ||
+        fineRegularity.maxPhiVariation() > 5.0e-3 ||
+        mappedStencil.size != grid.size() || maxStencilWidth > 7 ||
+        mappedStencil.values.size() > 7 * grid.size() ||
+        !(fineRegularity.maxPhiVariation() <
+          coarseRegularity.maxPhiVariation()) ||
         algebraicMassError > 2.0e-14 || !calibrationResult.converged() ||
         !calibrationUsedMatrixFree ||
         std::abs(calibrationResult.bareMasses[0] - mass1) > 2.0e-6 ||
@@ -511,14 +594,15 @@ int main() {
         !initialResidual.finite || initialResidual.l2Norm < 1.0e-5 ||
         !solveResult.converged() || !solveResult.usedGeneratedGridKernel ||
         !solveResult.usedMatrixFreeGMRES || !solveResult.usedPreconditioner ||
-        !solveResult.usedFieldProjector ||
-        !finalResidual.finite || !finalResidual.usedGeneratedGridKernels ||
+        !solveResult.usedFieldProjector || !finalResidual.finite ||
+        !finalResidual.usedGeneratedGridKernels ||
         finalResidual.l2Norm > 2.0e-8 || finalResidual.maxAbs > 2.0e-7 ||
         !(maxCorrection > 1.0e-8) || !(minPsi > 0.0) ||
         !(maxOuterCorrection < maxCorrection) || !fineSolveResult.converged() ||
         !fineSolveResult.usedMatrixFreeGMRES ||
         !fineSolveResult.usedPreconditioner ||
         !fineSolveResult.usedFieldProjector ||
+        fineSolveResult.linearIterations <= options.gmresRestart ||
         !veryCoarseSolveResult.converged() ||
         !veryCoarseSolveResult.usedMatrixFreeGMRES ||
         !veryCoarseSolveResult.usedPreconditioner ||

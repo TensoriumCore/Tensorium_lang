@@ -80,6 +80,14 @@ struct SpectralGMRESResult {
   std::vector<double> solution;
 };
 
+struct SpectralSparseMatrix {
+  std::size_t size = 0;
+  std::vector<std::size_t> rowOffsets;
+  std::vector<std::size_t> columns;
+  std::vector<double> values;
+  std::vector<double> diagonal;
+};
+
 inline bool spectralPreconditionerRequested(
     const SpectralEllipticSolveOptions &options) {
   return options.gmresPreconditioner != SpectralPreconditionerKind::None;
@@ -90,12 +98,15 @@ struct SpectralLinearPreconditioner {
   std::vector<double> inverseDiagonal;
   std::vector<std::vector<double>> denseBlocks;
   std::vector<std::vector<double>> modalBlocks;
+  std::vector<SpectralSparseMatrix> sparseBlocks;
   std::size_t blockSize = 0;
   std::size_t modalBlockSize = 0;
   std::array<std::size_t, 3> modalExtents{0, 0, 0};
   std::array<SpectralBasis, 3> modalBases{
       SpectralBasis::ChebyshevZeros, SpectralBasis::ChebyshevZeros,
       SpectralBasis::ChebyshevZeros};
+  int relaxationSweeps = 0;
+  double relaxationOmega = 1.0;
 };
 
 inline bool spectralFieldProjectorEnabled(
@@ -468,6 +479,53 @@ inline bool applySpectralModalPreconditionerBlock(
   return true;
 }
 
+inline bool solveSpectralSparseRelaxation(const SpectralSparseMatrix &matrix,
+                                          std::span<const double> rhs,
+                                          int sweeps, double omega,
+                                          double pivotTolerance,
+                                          std::vector<double> &solution) {
+  if (matrix.size == 0 || rhs.size() != matrix.size ||
+      matrix.rowOffsets.size() != matrix.size + 1 ||
+      matrix.diagonal.size() != matrix.size || sweeps <= 0 ||
+      !(omega > 0.0 && omega <= 2.0)) {
+    return false;
+  }
+  solution.assign(matrix.size, 0.0);
+  for (std::size_t row = 0; row < matrix.size; ++row) {
+    const double diagonal = matrix.diagonal[row];
+    if (!std::isfinite(diagonal) || std::fabs(diagonal) <= pivotTolerance)
+      return false;
+    solution[row] = rhs[row] / diagonal;
+  }
+
+  const auto relaxRow = [&](std::size_t row) {
+    double remainder = rhs[row];
+    for (std::size_t entry = matrix.rowOffsets[row];
+         entry < matrix.rowOffsets[row + 1]; ++entry) {
+      const std::size_t column = matrix.columns[entry];
+      if (column >= matrix.size)
+        return false;
+      if (column != row)
+        remainder -= matrix.values[entry] * solution[column];
+    }
+    const double candidate = remainder / matrix.diagonal[row];
+    solution[row] += omega * (candidate - solution[row]);
+    return std::isfinite(solution[row]);
+  };
+
+  for (int sweep = 0; sweep < sweeps; ++sweep) {
+    for (std::size_t row = 0; row < matrix.size; ++row) {
+      if (!relaxRow(row))
+        return false;
+    }
+    for (std::size_t reversed = 0; reversed < matrix.size; ++reversed) {
+      if (!relaxRow(matrix.size - 1 - reversed))
+        return false;
+    }
+  }
+  return spectralVectorIsFinite(solution);
+}
+
 inline bool applySpectralPreconditioner(
     const SpectralLinearPreconditioner &preconditioner,
     std::vector<double> &values,
@@ -484,6 +542,31 @@ inline bool applySpectralPreconditioner(
         return false;
     }
     return true;
+  }
+
+  if (preconditioner.kind ==
+      SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift) {
+    if (preconditioner.blockSize == 0 ||
+        values.size() !=
+            preconditioner.blockSize * preconditioner.sparseBlocks.size())
+      return false;
+    std::vector<double> out(values.size(), 0.0);
+    for (std::size_t block = 0; block < preconditioner.sparseBlocks.size();
+         ++block) {
+      const std::size_t offset = block * preconditioner.blockSize;
+      std::vector<double> solution;
+      if (!solveSpectralSparseRelaxation(
+              preconditioner.sparseBlocks[block],
+              std::span<const double>(&values[offset],
+                                      preconditioner.blockSize),
+              preconditioner.relaxationSweeps, preconditioner.relaxationOmega,
+              pivotTolerance, solution)) {
+        return false;
+      }
+      std::copy(solution.begin(), solution.end(), out.begin() + offset);
+    }
+    values = std::move(out);
+    return spectralVectorIsFinite(values);
   }
 
   if (preconditioner.kind == SpectralPreconditionerKind::DenseLaplacianShift) {
@@ -563,6 +646,154 @@ inline bool applySpectralPreconditioner(
   }
 
   return false;
+}
+
+struct SpectralThreePointStencil {
+  std::array<std::size_t, 3> indices{};
+  std::array<double, 3> first{};
+  std::array<double, 3> second{};
+};
+
+inline SpectralThreePointStencil
+buildSpectralThreePointStencil(const SpectralAxis &axis,
+                               std::size_t pointIndex) {
+  const std::size_t n = axis.size();
+  if (n < 3 || pointIndex >= n)
+    throw std::runtime_error(
+        "mapped finite-difference preconditioner requires three axis points");
+
+  SpectralThreePointStencil stencil;
+  std::array<double, 3> coordinates{};
+  const double center = axis.points[pointIndex];
+  if (axis.basis == SpectralBasis::FourierPeriodic) {
+    stencil.indices = {(pointIndex + n - 1) % n, pointIndex,
+                       (pointIndex + 1) % n};
+    const double spacing = axis.period / static_cast<double>(n);
+    coordinates = {center - spacing, center, center + spacing};
+  } else {
+    const std::size_t first =
+        pointIndex == 0 ? 0 : (pointIndex + 1 == n ? n - 3 : pointIndex - 1);
+    stencil.indices = {first, first + 1, first + 2};
+    for (std::size_t q = 0; q < 3; ++q)
+      coordinates[q] = axis.points[stencil.indices[q]];
+  }
+
+  for (std::size_t q = 0; q < 3; ++q) {
+    const std::size_t p = (q + 1) % 3;
+    const std::size_t r = (q + 2) % 3;
+    const double denominator =
+        (coordinates[q] - coordinates[p]) * (coordinates[q] - coordinates[r]);
+    if (!std::isfinite(denominator) || denominator == 0.0)
+      throw std::runtime_error("invalid mapped finite-difference stencil");
+    stencil.first[q] =
+        (2.0 * center - coordinates[p] - coordinates[r]) / denominator;
+    stencil.second[q] = 2.0 / denominator;
+  }
+  return stencil;
+}
+
+inline SpectralPointDerivatives3D transformSpectralPreconditionerBundle(
+    const SpectralResidualProblem &problem, const double logical[3],
+    const SpectralPointDerivatives3D &logicalBundle) {
+  SpectralPointDerivatives3D unknownBundle = logicalBundle;
+  if (problem.unknownMap.transform) {
+    problem.unknownMap.transform(
+        logical, &logicalBundle, &unknownBundle,
+        problem.unknownMapParams.data(),
+        static_cast<std::int64_t>(problem.unknownMapParams.size()),
+        problem.unknownMap.userData);
+  }
+  SpectralPointDerivatives3D physicalBundle = unknownBundle;
+  if (problem.derivativeMap.transform) {
+    problem.derivativeMap.transform(
+        logical, &unknownBundle, &physicalBundle,
+        problem.coordinateParams.data(),
+        static_cast<std::int64_t>(problem.coordinateParams.size()),
+        problem.derivativeMap.userData);
+  }
+  return physicalBundle;
+}
+
+inline SpectralSparseMatrix buildSpectralMappedFiniteDifferenceLaplacianShift(
+    const SpectralResidualProblem &problem, double shift,
+    double pivotTolerance) {
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  if (!std::isfinite(shift))
+    throw std::runtime_error("mapped finite-difference shift is not finite");
+
+  SpectralSparseMatrix matrix;
+  matrix.size = grid.size();
+  matrix.rowOffsets.reserve(matrix.size + 1);
+  matrix.diagonal.assign(matrix.size, 0.0);
+  matrix.rowOffsets.push_back(0);
+
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const SpectralPoint3D point = grid.point(i, j, k);
+        const double logical[3] = {point.x1, point.x2, point.x3};
+        std::vector<std::pair<std::size_t, SpectralPointDerivatives3D>> entries;
+        entries.reserve(7);
+        const auto findOrAdd =
+            [&](std::size_t column) -> SpectralPointDerivatives3D & {
+          for (auto &entry : entries) {
+            if (entry.first == column)
+              return entry.second;
+          }
+          entries.emplace_back(column, SpectralPointDerivatives3D{});
+          return entries.back().second;
+        };
+        findOrAdd(point.index).value = 1.0;
+
+        const std::array<std::size_t, 3> rowIndices = {i, j, k};
+        for (std::size_t dim = 0; dim < 3; ++dim) {
+          const auto stencil =
+              buildSpectralThreePointStencil(grid.axis(dim), rowIndices[dim]);
+          for (std::size_t q = 0; q < 3; ++q) {
+            std::array<std::size_t, 3> columnIndices = {i, j, k};
+            columnIndices[dim] = stencil.indices[q];
+            auto &bundle = findOrAdd(grid.index(
+                columnIndices[0], columnIndices[1], columnIndices[2]));
+            if (dim == 0) {
+              bundle.d1 += stencil.first[q];
+              bundle.d11 += stencil.second[q];
+            } else if (dim == 1) {
+              bundle.d2 += stencil.first[q];
+              bundle.d22 += stencil.second[q];
+            } else {
+              bundle.d3 += stencil.first[q];
+              bundle.d33 += stencil.second[q];
+            }
+          }
+        }
+
+        std::sort(entries.begin(), entries.end(),
+                  [](const auto &lhs, const auto &rhs) {
+                    return lhs.first < rhs.first;
+                  });
+        for (const auto &[column, logicalBundle] : entries) {
+          const auto physicalBundle = transformSpectralPreconditionerBundle(
+              problem, logical, logicalBundle);
+          const double coefficient =
+              physicalBundle.laplacian() + shift * physicalBundle.value;
+          if (!std::isfinite(coefficient))
+            throw std::runtime_error(
+                "mapped finite-difference coefficient is not finite");
+          matrix.columns.push_back(column);
+          matrix.values.push_back(coefficient);
+          if (column == point.index)
+            matrix.diagonal[point.index] = coefficient;
+        }
+        if (!std::isfinite(matrix.diagonal[point.index]) ||
+            std::fabs(matrix.diagonal[point.index]) <= pivotTolerance) {
+          throw std::runtime_error(
+              "mapped finite-difference diagonal is singular");
+        }
+        matrix.rowOffsets.push_back(matrix.columns.size());
+      }
+    }
+  }
+  return matrix;
 }
 
 inline std::vector<double> buildSpectralLaplacianShiftMatrix(
@@ -656,6 +887,22 @@ inline bool buildSpectralScalarPreconditioner(
                                                    preconditioner);
   }
   if (options.gmresPreconditioner ==
+      SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift) {
+    const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+    if (values.size() != grid.size())
+      return false;
+    preconditioner.kind =
+        SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift;
+    preconditioner.blockSize = grid.size();
+    preconditioner.relaxationSweeps = options.preconditionerRelaxationSweeps;
+    preconditioner.relaxationOmega = options.preconditionerRelaxationOmega;
+    preconditioner.sparseBlocks.push_back(
+        buildSpectralMappedFiniteDifferenceLaplacianShift(
+            problem, options.preconditionerLaplacianShift,
+            options.preconditionerPivotTolerance));
+    return true;
+  }
+  if (options.gmresPreconditioner ==
       SpectralPreconditionerKind::DenseLaplacianShift) {
     const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
     if (values.size() != grid.size())
@@ -735,6 +982,137 @@ inline bool solveSpectralGMRESUpperTriangular(
   return true;
 }
 
+template <typename ApplyOperatorFn, typename ApplyRightPreconditionerFn>
+inline SpectralGMRESResult solveSpectralRestartedGMRES(
+    std::size_t n, std::span<const double> rhs,
+    const SpectralEllipticSolveOptions &options,
+    ApplyOperatorFn &&applyOperator,
+    ApplyRightPreconditionerFn &&applyRightPreconditioner) {
+  SpectralGMRESResult result;
+  result.solution.assign(n, 0.0);
+  if (rhs.size() != n || n == 0 || options.gmresMaxIterations < 0 ||
+      options.gmresRestart <= 0)
+    return result;
+
+  const double rhsEuclidean = spectralVectorEuclideanNorm(rhs);
+  const double rhsL2 = rhsEuclidean / std::sqrt(static_cast<double>(n));
+  const double target =
+      std::max(options.gmresTolerance, options.gmresRelativeTolerance * rhsL2);
+  result.residualL2 = rhsL2;
+  if (rhsL2 <= target) {
+    result.converged = true;
+    return result;
+  }
+
+  const std::size_t maxIterations =
+      static_cast<std::size_t>(options.gmresMaxIterations);
+  const std::size_t restart =
+      std::min<std::size_t>(n, static_cast<std::size_t>(options.gmresRestart));
+  if (maxIterations == 0 || restart == 0)
+    return result;
+
+  std::vector<double> residual(rhs.begin(), rhs.end());
+  std::vector<double> operatorValue(n, 0.0);
+  std::size_t totalIterations = 0;
+  while (totalIterations < maxIterations) {
+    const double beta = spectralVectorEuclideanNorm(residual);
+    result.residualL2 = beta / std::sqrt(static_cast<double>(n));
+    if (result.residualL2 <= target) {
+      result.converged = true;
+      break;
+    }
+
+    const std::size_t cycleIterations =
+        std::min(restart, maxIterations - totalIterations);
+    std::vector<double> basis((cycleIterations + 1) * n, 0.0);
+    for (std::size_t i = 0; i < n; ++i)
+      basis[i] = residual[i] / beta;
+    std::vector<double> hessenberg((cycleIterations + 1) * cycleIterations,
+                                   0.0);
+    std::vector<double> cosines(cycleIterations, 0.0);
+    std::vector<double> sines(cycleIterations, 0.0);
+    std::vector<double> rotatedRhs(cycleIterations + 1, 0.0);
+    rotatedRhs[0] = beta;
+    std::vector<double> arnoldiVector(n, 0.0);
+    std::size_t columns = 0;
+    bool projectedConverged = false;
+
+    for (std::size_t col = 0; col < cycleIterations; ++col) {
+      std::vector<double> direction(&basis[col * n], &basis[(col + 1) * n]);
+      if (!applyRightPreconditioner(direction) ||
+          !applyOperator(direction, arnoldiVector) ||
+          arnoldiVector.size() != n || !spectralVectorIsFinite(arnoldiVector)) {
+        return result;
+      }
+
+      for (std::size_t row = 0; row <= col; ++row) {
+        std::span<const double> basisVector(&basis[row * n], n);
+        const double h = spectralVectorDot(arnoldiVector, basisVector);
+        hessenberg[row * cycleIterations + col] = h;
+        for (std::size_t i = 0; i < n; ++i)
+          arnoldiVector[i] -= h * basisVector[i];
+      }
+
+      const double nextNorm = spectralVectorEuclideanNorm(arnoldiVector);
+      hessenberg[(col + 1) * cycleIterations + col] = nextNorm;
+      if (nextNorm > options.linearPivotTolerance) {
+        for (std::size_t i = 0; i < n; ++i)
+          basis[(col + 1) * n + i] = arnoldiVector[i] / nextNorm;
+      }
+
+      double projectedResidualL2 = std::numeric_limits<double>::infinity();
+      if (!updateSpectralGMRESQR(
+              hessenberg, cycleIterations, col, cosines, sines, rotatedRhs,
+              options.linearPivotTolerance, projectedResidualL2, n)) {
+        return result;
+      }
+      ++totalIterations;
+      columns = col + 1;
+      result.iterations = static_cast<int>(totalIterations);
+      result.residualL2 = projectedResidualL2;
+      projectedConverged = projectedResidualL2 <= target;
+      if (projectedConverged || nextNorm <= options.linearPivotTolerance)
+        break;
+    }
+
+    if (columns == 0)
+      return result;
+    std::vector<double> coefficients;
+    if (!solveSpectralGMRESUpperTriangular(
+            hessenberg, cycleIterations, columns, rotatedRhs,
+            options.linearPivotTolerance, coefficients)) {
+      return result;
+    }
+    std::vector<double> correction(n, 0.0);
+    for (std::size_t col = 0; col < columns; ++col) {
+      for (std::size_t i = 0; i < n; ++i)
+        correction[i] += coefficients[col] * basis[col * n + i];
+    }
+    if (!applyRightPreconditioner(correction))
+      return result;
+    for (std::size_t i = 0; i < n; ++i)
+      result.solution[i] += correction[i];
+    if (projectedConverged) {
+      result.converged = true;
+      break;
+    }
+
+    if (!applyOperator(result.solution, operatorValue) ||
+        operatorValue.size() != n || !spectralVectorIsFinite(operatorValue)) {
+      return result;
+    }
+    for (std::size_t i = 0; i < n; ++i)
+      residual[i] = rhs[i] - operatorValue[i];
+    result.residualL2 = spectralVectorEuclideanNorm(residual) /
+                        std::sqrt(static_cast<double>(n));
+    if (result.residualL2 <= target) {
+      result.converged = true;
+      break;
+    }
+  }
+  return result;
+}
+
 inline SpectralGMRESResult solveSpectralGMRESByJVP(
     const SpectralResidualProblem &problem, const std::vector<double> &values,
     std::span<const double> rhs,
@@ -752,6 +1130,27 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
     return result;
   result.usedPreconditioner =
       preconditioner.kind != SpectralPreconditionerKind::None;
+
+  if (options.gmresRestart > 0) {
+    auto restarted = solveSpectralRestartedGMRES(
+        n, rhs, options,
+        [&](const std::vector<double> &direction, std::vector<double> &out) {
+          const auto jvp = evaluateSpectralJacobianVectorProduct(
+              problem, values, direction, options.jvpOptions);
+          out = jvp.values;
+          return jvp.finite && out.size() == n;
+        },
+        [&](std::vector<double> &direction) {
+          if (!applySpectralPreconditioner(
+                  preconditioner, direction,
+                  options.preconditionerPivotTolerance))
+            return false;
+          projectSpectralField(problem, direction);
+          return true;
+        });
+    restarted.usedPreconditioner = result.usedPreconditioner;
+    return restarted;
+  }
 
   const double rhsEuclidean = spectralVectorEuclideanNorm(rhs);
   const double rhsL2 =
@@ -1003,6 +1402,28 @@ inline bool buildSpectralSystemPreconditioner(
         system, values, options, preconditioner);
   }
   if (options.gmresPreconditioner ==
+      SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift) {
+    const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+    const std::size_t fieldCount = values.size();
+    if (!validateSpectralSystemSolveLayout(system, values, grid.size()))
+      return false;
+    preconditioner.kind =
+        SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift;
+    preconditioner.blockSize = grid.size();
+    preconditioner.relaxationSweeps = options.preconditionerRelaxationSweeps;
+    preconditioner.relaxationOmega = options.preconditionerRelaxationOmega;
+    preconditioner.sparseBlocks.resize(fieldCount);
+    for (const auto &equation : system.equations) {
+      preconditioner.sparseBlocks[equation.unknownIndex] =
+          buildSpectralMappedFiniteDifferenceLaplacianShift(
+              equation.problem,
+              spectralPreconditionerShiftForBlock(options,
+                                                  equation.unknownIndex),
+              options.preconditionerPivotTolerance);
+    }
+    return true;
+  }
+  if (options.gmresPreconditioner ==
       SpectralPreconditionerKind::DenseLaplacianShift) {
     const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
     const std::size_t fieldCount = values.size();
@@ -1059,6 +1480,36 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
 
   const auto rhsUnknownOrder = mapSpectralSystemEquationVectorToUnknownOrder(
       system, rhs, fieldCount, grid.size());
+  if (options.gmresRestart > 0) {
+    auto restarted = solveSpectralRestartedGMRES(
+        n, rhsUnknownOrder, options,
+        [&](const std::vector<double> &direction, std::vector<double> &out) {
+          const auto directionFields =
+              unflattenSpectralSystemUnknownVectorToFields(
+                  direction, fieldCount, grid.size());
+          const auto jvp = evaluateSpectralResidualSystemJacobianVectorProduct(
+              system, values,
+              std::span<const std::vector<double>>(directionFields.data(),
+                                                   directionFields.size()),
+              options.jvpOptions);
+          if (!jvp.finite || jvp.values.size() != n)
+            return false;
+          out = mapSpectralSystemEquationVectorToUnknownOrder(
+              system, jvp.values, fieldCount, grid.size());
+          return out.size() == n && spectralVectorIsFinite(out);
+        },
+        [&](std::vector<double> &direction) {
+          if (!applySpectralPreconditioner(
+                  preconditioner, direction,
+                  options.preconditionerPivotTolerance))
+            return false;
+          projectSpectralSystemUnknownVector(system, direction, fieldCount,
+                                             grid.size());
+          return true;
+        });
+    restarted.usedPreconditioner = result.usedPreconditioner;
+    return restarted;
+  }
   const double rhsEuclidean = spectralVectorEuclideanNorm(rhsUnknownOrder);
   const double rhsL2 =
       rhsEuclidean / std::sqrt(static_cast<double>(std::max<std::size_t>(1, n)));
@@ -1227,16 +1678,20 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
   result.unknowns = grid.size();
 
   if (values.size() != grid.size() || options.maxNewtonSteps < 0 ||
-      options.maxLineSearchSteps < 0 ||
-      !(options.initialDamping > 0.0) ||
+      options.maxLineSearchSteps < 0 || !(options.initialDamping > 0.0) ||
       !(options.lineSearchReduction > 0.0 &&
         options.lineSearchReduction < 1.0) ||
-      !(options.minDamping > 0.0) ||
-      !(options.linearPivotTolerance > 0.0) ||
-      options.gmresMaxIterations < 0 || options.gmresTolerance < 0.0 ||
-      options.gmresRelativeTolerance < 0.0 ||
+      !(options.minDamping > 0.0) || !(options.linearPivotTolerance > 0.0) ||
+      options.gmresMaxIterations < 0 || options.gmresRestart < 0 ||
+      options.gmresTolerance < 0.0 || options.gmresRelativeTolerance < 0.0 ||
       !(options.preconditionerPivotTolerance > 0.0) ||
-      !std::isfinite(options.preconditionerPivotTolerance)) {
+      !std::isfinite(options.preconditionerPivotTolerance) ||
+      (options.gmresPreconditioner ==
+           SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift &&
+       (options.preconditionerRelaxationSweeps <= 0 ||
+        !std::isfinite(options.preconditionerRelaxationOmega) ||
+        !(options.preconditionerRelaxationOmega > 0.0 &&
+          options.preconditionerRelaxationOmega <= 2.0)))) {
     result.status = SpectralEllipticSolveStatus::InvalidInput;
     return result;
   }
@@ -1364,12 +1819,17 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       !(options.initialDamping > 0.0) ||
       !(options.lineSearchReduction > 0.0 &&
         options.lineSearchReduction < 1.0) ||
-      !(options.minDamping > 0.0) ||
-      !(options.linearPivotTolerance > 0.0) ||
-      options.gmresMaxIterations < 0 || options.gmresTolerance < 0.0 ||
-      options.gmresRelativeTolerance < 0.0 ||
+      !(options.minDamping > 0.0) || !(options.linearPivotTolerance > 0.0) ||
+      options.gmresMaxIterations < 0 || options.gmresRestart < 0 ||
+      options.gmresTolerance < 0.0 || options.gmresRelativeTolerance < 0.0 ||
       !(options.preconditionerPivotTolerance > 0.0) ||
-      !std::isfinite(options.preconditionerPivotTolerance)) {
+      !std::isfinite(options.preconditionerPivotTolerance) ||
+      (options.gmresPreconditioner ==
+           SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift &&
+       (options.preconditionerRelaxationSweeps <= 0 ||
+        !std::isfinite(options.preconditionerRelaxationOmega) ||
+        !(options.preconditionerRelaxationOmega > 0.0 &&
+          options.preconditionerRelaxationOmega <= 2.0)))) {
     result.status = SpectralEllipticSolveStatus::InvalidInput;
     return result;
   }

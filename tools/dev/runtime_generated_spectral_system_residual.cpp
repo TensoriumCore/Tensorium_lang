@@ -233,6 +233,7 @@ int main() {
     solveOptions.linearSolver = SpectralLinearSolveKind::Auto;
     solveOptions.denseJacobianMaxUnknowns = 1;
     solveOptions.gmresMaxIterations = 512;
+    solveOptions.gmresRestart = 32;
     solveOptions.gmresTolerance = 2e-12;
     solveOptions.gmresRelativeTolerance = 1e-13;
     solveOptions.gmresPreconditioner =
