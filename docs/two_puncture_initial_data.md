@@ -244,10 +244,13 @@ the discrete collocation equations over-constrained. Tensorium therefore uses
 the projector as a testable policy and reports the unmodified physical trace;
 on the current `7x7x12` solution its maximum variation is `4.2e-6`.
 
-The linear solver now supports restarted GMRES. `gmresMaxIterations` is the
-total iteration budget and `gmresRestart` bounds each Arnoldi basis. The
-physical regression uses GMRES(24), so Krylov storage is `O(24*N)` rather than
-growing with the full iteration budget.
+The linear solver uses restarted flexible GMRES. `gmresMaxIterations` is the
+total iteration budget and `gmresRestart` bounds each Arnoldi basis. Each
+preconditioned Arnoldi direction is retained and used directly in the solution
+update, so the relaxation preconditioner may vary between iterations without
+invalidating the Krylov correction. The physical regression uses FGMRES(24),
+so Krylov storage is `O(24*N)` rather than growing with the full iteration
+budget.
 
 `MappedFiniteDifferenceLaplacianShift` is a generic sparse preconditioner. At
 each collocation point it constructs nonuniform three-point first- and second-
@@ -375,15 +378,15 @@ performs the Cartesian BSSN handoff, and writes both the requested CSV and
 `<csv>.json` metadata. The default `10x10x16` spectral solve currently reports:
 
 ```text
-Newton steps:                  5
-cumulative GMRES iterations:  230
-Hamiltonian residual L2:       1.26e-8
-Hamiltonian residual max:      1.85e-7
-ADM energy:                    1.00792622
+Newton steps:                  4
+cumulative FGMRES iterations: 90
+Hamiltonian residual L2:       1.86e-8
+Hamiltonian residual max:      1.86e-7
+ADM energy:                    1.00792632
 ADM angular momentum Jz:       0.77876433
 puncture ADM masses:           0.51685532, 0.51685532
 axis regularity error:         6.66e-6
-BSSN trace error:              2.78e-17
+BSSN trace error:              8.33e-17
 ```
 
 An `8x8x12 -> 10x10x16` check changes the ADM energy by `1.98e-4`, each
@@ -439,12 +442,13 @@ script detects MacPorts or Homebrew `libomp`; on other platforms it uses
 `-fopenmp`. `TENSORIUM_CXXFLAGS` and `TENSORIUM_LDFLAGS` can append toolchain-
 specific flags.
 
-On the QC0 `10x10x16` regression, operator caching reduces the isolated solve
-wall time by roughly a factor of four while preserving the Newton/GMRES counts,
-residuals, and physical diagnostics. This is a single-machine engineering
-measurement, not a production-scaling claim. Higher resolutions still require
-a stronger preconditioner; faster residual evaluations do not fix the current
-`12x12x20` convergence failure.
+On the QC0 `10x10x16` regression, operator caching first reduced the isolated
+solve wall time from about `1.56 s` to `0.37 s`. Correct flexible-GMRES updates
+then reduced it to about `0.15 s`, with four Newton steps and 90 cumulative
+Krylov iterations. These are single-machine engineering measurements, not a
+production-scaling claim. Higher resolutions still require a stronger
+preconditioner; the current relaxation preconditioner still fails the
+`12x12x20` QC0 acceptance criterion.
 
 ## What remains before production TwoPunctures
 

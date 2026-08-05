@@ -1034,13 +1034,19 @@ inline SpectralGMRESResult solveSpectralRestartedGMRES(
     std::vector<double> rotatedRhs(cycleIterations + 1, 0.0);
     rotatedRhs[0] = beta;
     std::vector<double> arnoldiVector(n, 0.0);
+    // FGMRES must retain each preconditioned Arnoldi vector because the
+    // preconditioner may vary between iterations.
+    std::vector<double> preconditionedBasis(cycleIterations * n, 0.0);
     std::size_t columns = 0;
     bool projectedConverged = false;
 
     for (std::size_t col = 0; col < cycleIterations; ++col) {
       std::vector<double> direction(&basis[col * n], &basis[(col + 1) * n]);
-      if (!applyRightPreconditioner(direction) ||
-          !applyOperator(direction, arnoldiVector) ||
+      if (!applyRightPreconditioner(direction))
+        return result;
+      std::copy(direction.begin(), direction.end(),
+                preconditionedBasis.begin() + col * n);
+      if (!applyOperator(direction, arnoldiVector) ||
           arnoldiVector.size() != n || !spectralVectorIsFinite(arnoldiVector)) {
         return result;
       }
@@ -1086,10 +1092,9 @@ inline SpectralGMRESResult solveSpectralRestartedGMRES(
     std::vector<double> correction(n, 0.0);
     for (std::size_t col = 0; col < columns; ++col) {
       for (std::size_t i = 0; i < n; ++i)
-        correction[i] += coefficients[col] * basis[col * n + i];
+        correction[i] +=
+            coefficients[col] * preconditionedBasis[col * n + i];
     }
-    if (!applyRightPreconditioner(correction))
-      return result;
     for (std::size_t i = 0; i < n; ++i)
       result.solution[i] += correction[i];
     if (projectedConverged) {

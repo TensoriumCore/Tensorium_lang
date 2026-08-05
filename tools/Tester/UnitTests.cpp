@@ -11,6 +11,7 @@
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
 #include "tensorium_mlir/Runtime/GeneratedHostStorage.h"
 #include "tensorium_mlir/Runtime/HostBuffers.h"
+#include "tensorium_mlir/Runtime/SpectralEllipticSolver.h"
 #include "tensorium_mlir/Runtime/SpectralGrid.h"
 #include "tensorium_mlir/Runtime/SpectralResidualAssembly.h"
 #include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
@@ -5497,6 +5498,57 @@ static bool testSpectralGridManufacturedPoisson() {
   return true;
 }
 
+static bool testSpectralFlexibleGMRESStoresPreconditionedBasis() {
+  using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
+  using tensorium_mlir::runtime::solveSpectralRestartedGMRES;
+
+  SpectralEllipticSolveOptions options;
+  options.gmresMaxIterations = 2;
+  options.gmresRestart = 2;
+  options.gmresTolerance = 1.0e-13;
+  options.gmresRelativeTolerance = 1.0e-13;
+  options.linearPivotTolerance = 1.0e-14;
+
+  const std::array<double, 2> rhs{1.0, 2.0};
+  int preconditionerCalls = 0;
+  const auto result = solveSpectralRestartedGMRES(
+      rhs.size(), rhs, options,
+      [](const std::vector<double> &direction, std::vector<double> &out) {
+        out = {4.0 * direction[0] + direction[1],
+               direction[0] + 3.0 * direction[1]};
+        return true;
+      },
+      [&](std::vector<double> &direction) {
+        ++preconditionerCalls;
+        if (preconditionerCalls == 1) {
+          direction[0] *= 0.25;
+          direction[1] /= 3.0;
+        } else {
+          direction[0] *= 0.5;
+        }
+        return true;
+      });
+
+  if (!result.converged || result.solution.size() != rhs.size() ||
+      preconditionerCalls != 2) {
+    std::cerr << "FAIL: FGMRES did not retain exactly two variable "
+                 "preconditioned directions; converged="
+              << result.converged << " calls=" << preconditionerCalls << "\n";
+    return false;
+  }
+  const double residual0 =
+      4.0 * result.solution[0] + result.solution[1] - rhs[0];
+  const double residual1 =
+      result.solution[0] + 3.0 * result.solution[1] - rhs[1];
+  const double residualNorm = std::hypot(residual0, residual1);
+  if (residualNorm > 1.0e-11) {
+    std::cerr << "FAIL: FGMRES variable-preconditioner residual="
+              << residualNorm << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSpectralAxisBufferedDerivativeReuse() {
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralBasis;
@@ -7440,6 +7492,8 @@ int main() {
        &testGeneratedHostStorageEulerUpdatePairs},
       {"testSpectralGridManufacturedPoisson",
        &testSpectralGridManufacturedPoisson},
+      {"testSpectralFlexibleGMRESStoresPreconditionedBasis",
+       &testSpectralFlexibleGMRESStoresPreconditionedBasis},
       {"testSpectralAxisBufferedDerivativeReuse",
        &testSpectralAxisBufferedDerivativeReuse},
       {"testSpectralGridTensorProductInterpolation",
