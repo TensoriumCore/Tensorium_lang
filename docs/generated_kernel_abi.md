@@ -235,6 +235,11 @@ consume directly:
   and the nonlinear Hamiltonian residual. Its runtime test checks the closed
   single-puncture momentum/spin contractions, the exact Brill-Lindquist limit,
   and a nonlinear equal-and-opposite-momentum solve on the compact map.
+- `SpectralAxis::interpolate(...)` and `SpectralGrid3D::interpolate(...)`
+  evaluate collocation fields at arbitrary logical probes with Chebyshev
+  barycentric/Fourier tensor-product interpolation. The two-puncture regression
+  uses the compactified endpoint value `v(A=1,B=0,phi=0)` for the ADM energy
+  `m1+m2-4*b*v_infinity` and compares fixed probes across three resolutions.
 - The compiler also emits `tensorium_spectral_residual_grid_<target>` MLIR/LLVM
   kernels. These consume the runtime-computed spectral derivative buffers,
   auxiliary field buffers, coordinate buffers, scalar params, and one residual

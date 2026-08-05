@@ -14,6 +14,7 @@
 #include "tensorium_mlir/Runtime/SpectralGrid.h"
 #include "tensorium_mlir/Runtime/SpectralResidualAssembly.h"
 #include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
+#include "tensorium_mlir/Runtime/TwoPunctureDiagnostics.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMap.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
@@ -5404,6 +5405,48 @@ static bool testSpectralGridManufacturedPoisson() {
   return true;
 }
 
+static bool testSpectralGridTensorProductInterpolation() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(7),
+                      SpectralAxis::chebyshevZeros(6),
+                      SpectralAxis::fourierPeriodic(10));
+  const auto function = [](double A, double B, double phi) {
+    return 0.4 + A * A * A - 0.3 * A * B + 0.2 * B * B * B * B +
+           (0.1 + 0.05 * A) * std::cos(2.0 * phi) -
+           0.07 * B * std::sin(phi);
+  };
+  std::vector<double> values(grid.size(), 0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const auto point = grid.point(i, j, k);
+        values[point.index] = function(point.x1, point.x2, point.x3);
+      }
+    }
+  }
+
+  const std::array<std::array<double, 3>, 3> probes = {{
+      {0.13, -0.27, 0.37},
+      {-0.82, 0.61, 5.73},
+      {1.0, 0.0, 0.0},
+  }};
+  double maxError = 0.0;
+  for (const auto &probe : probes) {
+    maxError = std::max(
+        maxError,
+        std::abs(grid.interpolate(values, probe[0], probe[1], probe[2]) -
+                 function(probe[0], probe[1], probe[2])));
+  }
+  if (maxError > 3.0e-13) {
+    std::cerr << "FAIL: tensor-product spectral interpolation error="
+              << maxError << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSpectralDerivativeBundleAnalyticMixedTerms() {
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralGrid3D;
@@ -5575,6 +5618,38 @@ static bool testTwoPunctureCoordinateMapGeometry() {
       std::abs(leftPuncture.rho) > 4.0e-9 ||
       std::hypot(farPoint.x, farPoint.rho) < 1.0e6) {
     std::cerr << "FAIL: two-puncture limiting geometry is incorrect\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testTwoPunctureAdmDiagnostics() {
+  using tensorium_mlir::runtime::makeTwoPunctureAdmDiagnostics;
+
+  constexpr double b = 1.4;
+  constexpr double bareMass1 = 0.55;
+  constexpr double bareMass2 = 0.45;
+  constexpr double vInfinity = -0.012;
+  const std::array<double, 3> momentum1 = {0.0, 0.08, 0.0};
+  const std::array<double, 3> momentum2 = {0.0, -0.08, 0.0};
+  const std::array<double, 3> spin1 = {0.01, 0.02, 0.03};
+  const std::array<double, 3> spin2 = {-0.01, 0.01, 0.04};
+  const auto diagnostics = makeTwoPunctureAdmDiagnostics(
+      b, bareMass1, bareMass2, vInfinity, momentum1, momentum2, spin1,
+      spin2);
+
+  const double expectedEnergy =
+      bareMass1 + bareMass2 - 4.0 * b * vInfinity;
+  const double expectedAngularZ =
+      spin1[2] + spin2[2] + 2.0 * b * momentum1[1];
+  if (std::abs(diagnostics.energy - expectedEnergy) > 1.0e-15 ||
+      std::abs(diagnostics.linearMomentum[0]) > 1.0e-15 ||
+      std::abs(diagnostics.linearMomentum[1]) > 1.0e-15 ||
+      std::abs(diagnostics.linearMomentum[2]) > 1.0e-15 ||
+      std::abs(diagnostics.angularMomentum[0]) > 1.0e-15 ||
+      std::abs(diagnostics.angularMomentum[1] - 0.03) > 1.0e-15 ||
+      std::abs(diagnostics.angularMomentum[2] - expectedAngularZ) > 1.0e-15) {
+    std::cerr << "FAIL: two-puncture ADM diagnostics mismatch\n";
     return false;
   }
   return true;
@@ -7220,6 +7295,8 @@ int main() {
        &testGeneratedHostStorageEulerUpdatePairs},
       {"testSpectralGridManufacturedPoisson",
        &testSpectralGridManufacturedPoisson},
+      {"testSpectralGridTensorProductInterpolation",
+       &testSpectralGridTensorProductInterpolation},
       {"testSpectralDerivativeBundleAnalyticMixedTerms",
        &testSpectralDerivativeBundleAnalyticMixedTerms},
       {"testSpectralPointwisePoissonResidualIsAnalyticallyZero",
@@ -7228,6 +7305,7 @@ int main() {
        &testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero},
       {"testTwoPunctureCoordinateMapGeometry",
        &testTwoPunctureCoordinateMapGeometry},
+      {"testTwoPunctureAdmDiagnostics", &testTwoPunctureAdmDiagnostics},
       {"testTwoPunctureMappedSpectralDerivatives",
        &testTwoPunctureMappedSpectralDerivatives},
       {"testLinearBoundaryFactorUnknownMapProductRule",

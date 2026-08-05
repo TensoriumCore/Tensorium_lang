@@ -1,9 +1,12 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -72,6 +75,37 @@ struct SpectralAxis {
     if (basis == SpectralBasis::FourierPeriodic)
       return differentiateFourier(values, order);
     return differentiatePolynomial(values, order);
+  }
+
+  double interpolate(const std::vector<double> &values, double coordinate) const {
+    if (values.size() != points.size())
+      throw std::runtime_error("spectral axis value count mismatch");
+    if (!std::isfinite(coordinate))
+      throw std::runtime_error("spectral interpolation coordinate is not finite");
+    if (basis == SpectralBasis::FourierPeriodic)
+      return interpolateFourier(values, coordinate);
+
+    const std::size_t n = points.size();
+    double numerator = 0.0;
+    double denominator = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      const double scale =
+          std::max({1.0, std::abs(coordinate), std::abs(points[i])});
+      if (std::abs(coordinate - points[i]) <=
+          8.0 * std::numeric_limits<double>::epsilon() * scale) {
+        return values[i];
+      }
+      const double theta =
+          kSpectralPi * (static_cast<double>(i) + 0.5) /
+          static_cast<double>(n);
+      const double weight = (i % 2 == 0 ? 1.0 : -1.0) * std::sin(theta);
+      const double term = weight / (coordinate - points[i]);
+      numerator += term * values[i];
+      denominator += term;
+    }
+    if (denominator == 0.0 || !std::isfinite(denominator))
+      throw std::runtime_error("spectral interpolation denominator is invalid");
+    return numerator / denominator;
   }
 
 private:
@@ -157,6 +191,31 @@ private:
       out[j] = value.real();
     }
     return out;
+  }
+
+  double interpolateFourier(const std::vector<double> &values,
+                            double coordinate) const {
+    const std::size_t n = values.size();
+    const std::complex<double> imaginary(0.0, 1.0);
+    const double angle =
+        2.0 * kSpectralPi * (coordinate - points.front()) / period;
+    std::complex<double> result(0.0, 0.0);
+    for (std::size_t m = 0; m < n; ++m) {
+      std::complex<double> coefficient(0.0, 0.0);
+      for (std::size_t j = 0; j < n; ++j) {
+        const double phase =
+            -2.0 * kSpectralPi * static_cast<double>(m * j) /
+            static_cast<double>(n);
+        coefficient += values[j] * std::exp(imaginary * phase);
+      }
+      coefficient /= static_cast<double>(n);
+      const int waveNumber =
+          m <= n / 2 ? static_cast<int>(m)
+                     : static_cast<int>(m) - static_cast<int>(n);
+      result += coefficient *
+                std::exp(imaginary * static_cast<double>(waveNumber) * angle);
+    }
+    return result.real();
   }
 };
 
@@ -295,6 +354,31 @@ public:
     out.d23 = derivative(out.d2, 2, 1);
     out.d33 = derivative(values, 2, 2);
     return out;
+  }
+
+  double interpolate(const std::vector<double> &values, double x1, double x2,
+                     double x3) const {
+    if (values.size() != size())
+      throw std::runtime_error("spectral grid value count mismatch");
+
+    std::vector<double> axis1Values(n2() * n3(), 0.0);
+    std::vector<double> line1(n1(), 0.0);
+    for (std::size_t k = 0; k < n3(); ++k) {
+      for (std::size_t j = 0; j < n2(); ++j) {
+        for (std::size_t i = 0; i < n1(); ++i)
+          line1[i] = values[index(i, j, k)];
+        axis1Values[j + n2() * k] = axes_[0].interpolate(line1, x1);
+      }
+    }
+
+    std::vector<double> axis2Values(n3(), 0.0);
+    std::vector<double> line2(n2(), 0.0);
+    for (std::size_t k = 0; k < n3(); ++k) {
+      for (std::size_t j = 0; j < n2(); ++j)
+        line2[j] = axis1Values[j + n2() * k];
+      axis2Values[k] = axes_[1].interpolate(line2, x2);
+    }
+    return axes_[2].interpolate(axis2Values, x3);
   }
 
   SpectralPoint3D point(std::size_t i, std::size_t j, std::size_t k) const {

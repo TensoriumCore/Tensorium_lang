@@ -1,5 +1,6 @@
 #include "tensorium_mlir/Runtime/SpectralResidualKernel.h"
 #include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
+#include "tensorium_mlir/Runtime/TwoPunctureDiagnostics.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMap.h"
 
 #include <algorithm>
@@ -23,6 +24,7 @@ namespace {
 using tensorium_mlir::runtime::assembleSpectralResidualSystem;
 using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
 using tensorium_mlir::runtime::makeSpectralResidualSystemFromDesc;
+using tensorium_mlir::runtime::makeTwoPunctureAdmDiagnostics;
 using tensorium_mlir::runtime::makeTwoPunctureCoordinateMap;
 using tensorium_mlir::runtime::makeTwoPunctureDerivativeMap;
 using tensorium_mlir::runtime::mapTwoPunctureCoordinates;
@@ -220,6 +222,110 @@ int main() {
       }
     }
 
+    constexpr double probeA = 0.0;
+    constexpr double probeB = 0.0;
+    constexpr double probePhi = 0.37;
+    const std::array<double, 3> momentum1 = {0.0, 0.08, 0.0};
+    const std::array<double, 3> momentum2 = {0.0, -0.08, 0.0};
+    const std::array<double, 3> zeroSpin = {0.0, 0.0, 0.0};
+    const double coarseProbe =
+        (probeA - 1.0) *
+        grid.interpolate(solverFields[0], probeA, probeB, probePhi);
+    const double coarseVInfinity =
+        grid.interpolate(solverFields[0], 1.0, 0.0, 0.0);
+    const auto coarseAdm = makeTwoPunctureAdmDiagnostics(
+        halfSeparation, mass1, mass2, coarseVInfinity, momentum1, momentum2,
+        zeroSpin, zeroSpin);
+
+    SpectralGrid3D fineGrid(SpectralAxis::chebyshevZeros(5),
+                            SpectralAxis::chebyshevZeros(5),
+                            SpectralAxis::fourierPeriodic(8));
+    auto fineGeneratedSystem = makeSpectralResidualSystemFromDesc(
+        systemDesc, fineGrid, tensorium_spectral_residual_kernels,
+        TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
+        tensorium_spectral_residual_grid_kernels,
+        TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT, systemInputs);
+    auto &fineProblem = fineGeneratedSystem.equations[0].problem;
+    fineProblem.coordinateMap = makeTwoPunctureCoordinateMap();
+    fineProblem.coordinateParams = coordinateParams;
+    fineProblem.derivativeMap = makeTwoPunctureDerivativeMap();
+    fineProblem.unknownMap = makeLinearBoundaryFactorUnknownMap();
+    fineProblem.unknownMapParams = unknownMapParams;
+    const auto fineSystem = fineGeneratedSystem.view();
+    std::array<std::vector<double>, 1> fineSolverFields{
+        std::vector<double>(fineGrid.size(), 0.0)};
+    SpectralEllipticSolveOptions fineOptions = options;
+    fineOptions.denseJacobianMaxUnknowns = fineGrid.size();
+    const auto fineSolveResult = solveSpectralNewton(
+        fineSystem,
+        std::span<std::vector<double>>(fineSolverFields.data(),
+                                       fineSolverFields.size()),
+        fineOptions);
+    const auto fineResidual = assembleSpectralResidualSystem(
+        fineSystem, std::span<const std::vector<double>>(
+                        fineSolverFields.data(), fineSolverFields.size()));
+    const double fineProbe =
+        (probeA - 1.0) *
+        fineGrid.interpolate(fineSolverFields[0], probeA, probeB, probePhi);
+    const double fineVInfinity =
+        fineGrid.interpolate(fineSolverFields[0], 1.0, 0.0, 0.0);
+    const auto fineAdm = makeTwoPunctureAdmDiagnostics(
+        halfSeparation, mass1, mass2, fineVInfinity, momentum1, momentum2,
+        zeroSpin, zeroSpin);
+    const double probeDelta = std::abs(fineProbe - coarseProbe);
+    const double admDelta = std::abs(fineAdm.energy - coarseAdm.energy);
+
+    SpectralGrid3D veryCoarseGrid(SpectralAxis::chebyshevZeros(3),
+                                  SpectralAxis::chebyshevZeros(3),
+                                  SpectralAxis::fourierPeriodic(4));
+    auto veryCoarseGeneratedSystem = makeSpectralResidualSystemFromDesc(
+        systemDesc, veryCoarseGrid, tensorium_spectral_residual_kernels,
+        TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
+        tensorium_spectral_residual_grid_kernels,
+        TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT, systemInputs);
+    auto &veryCoarseProblem = veryCoarseGeneratedSystem.equations[0].problem;
+    veryCoarseProblem.coordinateMap = makeTwoPunctureCoordinateMap();
+    veryCoarseProblem.coordinateParams = coordinateParams;
+    veryCoarseProblem.derivativeMap = makeTwoPunctureDerivativeMap();
+    veryCoarseProblem.unknownMap = makeLinearBoundaryFactorUnknownMap();
+    veryCoarseProblem.unknownMapParams = unknownMapParams;
+    const auto veryCoarseSystem = veryCoarseGeneratedSystem.view();
+    std::array<std::vector<double>, 1> veryCoarseSolverFields{
+        std::vector<double>(veryCoarseGrid.size(), 0.0)};
+    SpectralEllipticSolveOptions veryCoarseOptions = options;
+    veryCoarseOptions.denseJacobianMaxUnknowns = veryCoarseGrid.size();
+    const auto veryCoarseSolveResult = solveSpectralNewton(
+        veryCoarseSystem,
+        std::span<std::vector<double>>(veryCoarseSolverFields.data(),
+                                       veryCoarseSolverFields.size()),
+        veryCoarseOptions);
+    const double veryCoarseProbe =
+        (probeA - 1.0) * veryCoarseGrid.interpolate(veryCoarseSolverFields[0],
+                                                    probeA, probeB, probePhi);
+    const double veryCoarseVInfinity =
+        veryCoarseGrid.interpolate(veryCoarseSolverFields[0], 1.0, 0.0, 0.0);
+    const auto veryCoarseAdm = makeTwoPunctureAdmDiagnostics(
+        halfSeparation, mass1, mass2, veryCoarseVInfinity, momentum1, momentum2,
+        zeroSpin, zeroSpin);
+    const double veryCoarseProbeDelta = std::abs(coarseProbe - veryCoarseProbe);
+    const double veryCoarseAdmDelta =
+        std::abs(coarseAdm.energy - veryCoarseAdm.energy);
+
+    double fineSymmetryError = 0.0;
+    for (std::size_t k = 0; k < fineGrid.n3(); ++k) {
+      const std::size_t rotatedK = (k + fineGrid.n3() / 2) % fineGrid.n3();
+      for (std::size_t j = 0; j < fineGrid.n2(); ++j) {
+        const std::size_t reflectedJ = fineGrid.n2() - 1 - j;
+        for (std::size_t i = 0; i < fineGrid.n1(); ++i) {
+          fineSymmetryError =
+              std::max(fineSymmetryError,
+                       std::abs(fineSolverFields[0][fineGrid.index(i, j, k)] -
+                                fineSolverFields[0][fineGrid.index(
+                                    i, reflectedJ, rotatedK)]));
+        }
+      }
+    }
+
     std::printf("[two-puncture-hamiltonian] Brill-Lindquist residual max = "
                 "%.17g\n",
                 timeSymmetricResidual.maxAbs);
@@ -243,6 +349,23 @@ int main() {
     std::printf("[two-puncture-hamiltonian] outer correction max = %.17g\n",
                 maxOuterCorrection);
     std::printf("[two-puncture-hamiltonian] minimum psi = %.17g\n", minPsi);
+    std::printf("[two-puncture-hamiltonian] coarse/fine probe delta = %.17g\n",
+                probeDelta);
+    std::printf("[two-puncture-hamiltonian] very-coarse/coarse probe delta = "
+                "%.17g\n",
+                veryCoarseProbeDelta);
+    std::printf("[two-puncture-hamiltonian] coarse ADM energy = %.17g\n",
+                coarseAdm.energy);
+    std::printf("[two-puncture-hamiltonian] fine ADM energy = %.17g\n",
+                fineAdm.energy);
+    std::printf("[two-puncture-hamiltonian] coarse/fine ADM delta = %.17g\n",
+                admDelta);
+    std::printf("[two-puncture-hamiltonian] very-coarse/coarse ADM delta = "
+                "%.17g\n",
+                veryCoarseAdmDelta);
+    std::printf("[two-puncture-hamiltonian] fine orbital symmetry error = "
+                "%.17g\n",
+                fineSymmetryError);
 
     if (momentumContractionError > 2.0e-12 || spinContractionError > 2.0e-12 ||
         !initialResidual.finite || initialResidual.l2Norm < 1.0e-5 ||
@@ -250,7 +373,15 @@ int main() {
         !finalResidual.finite || !finalResidual.usedGeneratedGridKernels ||
         finalResidual.l2Norm > 2.0e-8 || finalResidual.maxAbs > 2.0e-7 ||
         !(maxCorrection > 1.0e-8) || !(minPsi > 0.0) ||
-        !(maxOuterCorrection < maxCorrection)) {
+        !(maxOuterCorrection < maxCorrection) || !fineSolveResult.converged() ||
+        !veryCoarseSolveResult.converged() || !fineResidual.finite ||
+        fineResidual.l2Norm > 2.0e-8 || fineResidual.maxAbs > 2.0e-7 ||
+        probeDelta > 1.0e-3 || admDelta > 2.0e-3 ||
+        fineSymmetryError > 2.0e-8 || !(probeDelta < veryCoarseProbeDelta) ||
+        !(admDelta < veryCoarseAdmDelta) ||
+        std::abs(fineAdm.linearMomentum[1]) > 1.0e-14 ||
+        std::abs(fineAdm.angularMomentum[2] -
+                 2.0 * halfSeparation * momentum1[1]) > 1.0e-14) {
       std::fprintf(stderr, "physical two-puncture Hamiltonian solve failed\n");
       return 4;
     }

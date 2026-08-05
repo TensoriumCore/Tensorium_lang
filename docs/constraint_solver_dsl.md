@@ -792,6 +792,12 @@ contraction, and the Lichnerowicz Hamiltonian residual. The runtime composes
 that generated equation with the compact two-centre coordinate map and the
 generic boundary-factor unknown map `U=(A-1)v`.
 
+Generic tensor-product interpolation evaluates the solved collocation field at
+fixed logical probes and compactified boundaries. The current regression uses
+this to compare three resolutions and to extract the asymptotic regular field
+for the ADM energy. Coordinate-specific global-charge formulas remain runtime
+diagnostics rather than DSL/compiler intrinsics.
+
 This separation is intentional. TwoPunctures is a validation target, not a
 compiler mode: another DSL residual can reuse the same maps and solver, while
 the same generated residual can be paired with a different domain or external

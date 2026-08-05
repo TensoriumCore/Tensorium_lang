@@ -112,14 +112,46 @@ Run it directly with:
 bash tools/dev/test_generated_two_puncture_hamiltonian_solve_ll.sh
 ```
 
+## TP-3: Refinement probes and asymptotic diagnostics
+
+TP-3 adds tensor-product interpolation to the generic spectral grid. A scalar
+collocation field can now be evaluated at arbitrary logical coordinates,
+including the compactified endpoint `A=1`, by Chebyshev barycentric and Fourier
+interpolation. This is runtime infrastructure shared by all generated spectral
+initial-data systems.
+
+For `U=(A-1)v`, the asymptotic TwoPunctures relation is
+
+```text
+M_ADM = m1 + m2 - 4 b v(A=1,B=0,phi=0).
+```
+
+`TwoPunctureDiagnostics.h` evaluates this energy together with total ADM linear
+momentum and angular momentum, including the orbital terms `C_a cross P_a`.
+
+The physical regression now solves the same equal-mass boosted binary on
+`3x3x4`, `4x4x6`, and `5x5x8` grids. It compares the correction at one fixed
+logical probe and the ADM energy:
+
+```text
+probe change:  9.73e-4 -> 4.95e-4
+ADM change:    4.28e-3 -> 1.79e-3
+fine ADM mass: 1.1052842937945357
+```
+
+The decreasing changes are the first refinement guard, not yet a production
+spectral-convergence claim. The fine solution also satisfies the binary's
+half-turn symmetry to `3.1e-17`, has zero total linear momentum, and has the
+expected orbital angular momentum `Jz=2*b*P`.
+
 ## What remains before production TwoPunctures
 
-TP-2 is a genuine physical residual and nonlinear solve, but it is still a
-small dense regression. It does not yet provide:
+The TP-2/TP-3 path is a genuine physical residual and nonlinear solve, but it
+is still a small dense regression. It does not yet provide:
 
 - puncture and axis regularity enforced through basis/parity rules;
-- resolution studies against published TwoPunctures data;
-- ADM mass, angular momentum, and momentum diagnostics;
+- higher-resolution convergence studies against published TwoPunctures data;
+- puncture-local ADM masses or independent surface-integral charge checks;
 - the nonlinear bare-mass search needed to match requested physical masses;
 - a mapped-domain preconditioner suitable for production resolutions;
 - interpolation and metadata export to an external evolution solver;
@@ -130,16 +162,15 @@ unknown per equation. General coupled scalar systems are supported through
 auxiliary-unknown mappings, but arbitrary tensor-valued multidimensional
 elliptic unknowns still require additional lowering and runtime work.
 
-## Next milestone: TP-3 validation and scaling
+## Next milestone: TP-4 regularity and scaling
 
 The production path is now:
 
-1. add interpolation at fixed physical/logical probes and demonstrate spectral
-   convergence with increasing `(nA,nB,nPhi)`;
-2. implement regularity/parity and a mapped-domain preconditioner;
-3. add ADM diagnostics and the physical-parameter root search;
-4. validate unequal-mass, boosted, and spinning cases against TwoPunctures
-   cases;
+1. implement regularity/parity conditions at the coordinate degeneracies;
+2. build a mapped-domain preconditioner and move beyond dense Jacobians;
+3. add puncture-mass diagnostics and the physical-parameter root search;
+4. validate higher-resolution unequal-mass, boosted, and spinning cases against
+   TwoPunctures cases;
 5. interpolate the solved fields onto the external evolution grid and verify
    the Hamiltonian and momentum constraints after handoff.
 
