@@ -1,4 +1,6 @@
-# Tensorium
+![Nouveau projet](https://github.com/user-attachments/assets/5f75f1f9-999d-410b-971e-ba3bd5e8b5e9)
+
+# Tensorium_lang
 
 Tensorium is an experimental domain-specific language and compiler for
 **numerical-relativity initial data**. Its primary goal is to let a researcher
