@@ -400,15 +400,17 @@ performs the Cartesian BSSN handoff, and writes both the requested CSV and
 ```text
 Newton steps:                  4
 cumulative FGMRES iterations: 98
-projected residual L2:         1.01e-8
-projected residual max:        2.02e-7
-raw residual L2:               1.57e-7
-raw residual max:              3.59e-6
+projected residual L2:         9.50e-9
+projected residual max:        2.79e-7
+raw residual L2:               9.50e-9
+raw residual max:              2.79e-7
+projected-out residual L2:     3.47e-15
+projected-out residual max:    1.14e-13
 ADM energy:                    1.00787483
 ADM angular momentum Jz:       0.77876433
 puncture ADM masses:           0.51680444, 0.51680444
 axis regularity error:         1.31e-6
-BSSN trace error:              8.33e-17
+BSSN trace error:              1.39e-17
 ```
 
 `run_two_puncture_convergence.sh` executes the same compiled-DSL workflow with
@@ -416,24 +418,30 @@ runtime resolution overrides, without editing the source. The current standard
 sequence is:
 
 ```text
-grid       Newton  FGMRES  projected L2  raw L2    ADM energy
-10x10x16       4      58       3.38e-9    5.99e-9  1.00792629
-12x12x20       4      70       3.22e-9    2.17e-8  1.00787551
-14x14x24       4      98       1.01e-8    1.57e-7  1.00787483
-16x16x28       8     147       1.96e-8    7.50e-7  1.00787650
+grid       Newton  FGMRES  projected L2  raw L2    projected-out L2  ADM energy
+10x10x16       4      58       3.32e-9    3.32e-9          1.75e-13  1.00792629
+12x12x20       4      70       3.31e-9    3.31e-9          2.01e-16  1.00787551
+14x14x24       4      98       9.50e-9    9.50e-9          3.47e-15  1.00787483
+16x16x28       7     138       1.88e-8    1.88e-8          4.83e-13  1.00787650
 ```
 
 The projected equation meets the configured `2e-8` L2 criterion at every
 listed resolution, and the ADM energy is stable at about the sixth decimal
-from `12x12x20` onward. However, the raw component removed by the inversion
-projector grows with resolution. This is now visible in the console, JSON, and
-summary CSV and must be understood before a production-convergence claim. At
-`16x16x28`, the maximum projected-out component is at approximately
-`(A,B)=(-0.9952,-0.9952)`, the collocation corner nearest one puncture. This
-localizes the loss of symmetry to the most singular cancellation region rather
-than the smooth bulk. The next numerical step is therefore a puncture-regular
-residual formulation or equivalent weighted diagnostic, not merely a looser
-global tolerance.
+from `12x12x20` onward. The earlier raw/projected gap was traced to round-off in
+logical derivatives being amplified by the bispherical-to-Cartesian transform
+near `rho=0`. The QC0 projector now imposes the analytic derivative parities
+under `(A,B,phi) -> (A,-B,phi+pi)` before that transform, in both primal and
+compiled-JVP paths. The coordinate map also evaluates its trigonometric factors
+directly as rational functions of `B`, preserving reflection symmetry in
+floating-point arithmetic. At `16x16x28`, this reduces the projected-out L2
+component from about `7.5e-7` to `4.8e-13`; the raw and projected residuals now
+agree to round-off.
+
+This resolves the symmetry-diagnostic defect, but not the production-scaling
+question. The accepted residual floor rises at `14x14x24` and `16x16x28`, and
+the current sequence is too short to demonstrate asymptotic spectral
+convergence at the punctures. Higher resolutions require a recursive coarse
+hierarchy and further regularity analysis rather than a looser tolerance.
 
 The exported Cartesian `z=0` slice contains `u`, `psi`, `chi`, the
 pre-collapsed gauge seed `alpha=psi^-2`, the six independent components of
@@ -516,14 +524,13 @@ reaction term, while retaining centered finite differences as an ABI fallback.
 On the nonlinear two-puncture regression, the generated `Jv` agrees with the
 fallback centered difference to `8.4e-11` maximum relative error.
 
-On the QC0 sequence, the Jacobian-aware two-grid solve takes about `0.18 s` at
-`10x10x16`, `0.47 s` at `12x12x20`, `1.27 s` at `14x14x24`, and `4.11 s` at
+On the QC0 sequence, the Jacobian-aware two-grid solve takes about `0.19 s` at
+`10x10x16`, `0.48 s` at `12x12x20`, `1.29 s` at `14x14x24`, and `3.94 s` at
 `16x16x28` on the current development machine. These are single-machine
-engineering measurements, not a production-scaling claim. The projected
-constraint now converges at every listed level, but the growing discarded
-component is a numerical-validation issue and the dense coarse LU is an
-algorithmic scaling issue. Both must be addressed before targeting
-`32x32x48` and above.
+engineering measurements, not a production-scaling claim. The raw and
+projected constraints now converge at every listed level, but the rising fine-
+grid residual floor and dense coarse LU remain numerical-validation and
+algorithmic-scaling issues before targeting `32x32x48` and above.
 
 ## What remains before production TwoPunctures
 
@@ -532,8 +539,7 @@ but it is still a small collocation regression. It does not yet provide:
 
 - production-resolution convergence of every Fourier regularity mode at the
   axes and puncture corners;
-- an explanation and reduction of the raw residual component rejected by the
-  QC0 inversion-symmetry projector;
+- convergence beyond `16x16x28` with a controlled fine-grid residual floor;
 - production-resolution convergence of the published unequal-mass case and
   published full-solve spinning comparisons;
 - apparent-horizon masses or independent surface-integral charge checks;

@@ -168,7 +168,8 @@ inline SpectralFieldProjector
 makeTwoPunctureInversionEvenRegularityFieldProjector() {
   return SpectralFieldProjector{
       "tensorium_spectral_two_puncture_inversion_even_regularity_projector",
-      &twoPunctureInversionEvenRegularityFieldProjector, nullptr};
+      &twoPunctureInversionEvenRegularityFieldProjector, nullptr,
+      &twoPunctureInversionEvenDerivativeProjector};
 }
 
 } // namespace tensorium_mlir::runtime

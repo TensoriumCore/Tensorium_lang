@@ -71,7 +71,8 @@ This split is intentional while the generated multidimensional path matures.
 The latest development series completed an end-to-end proof of concept for
 binary-black-hole puncture data:
 
-- compactified two-puncture coordinates and Cartesian derivative transforms;
+- compactified two-puncture coordinates, symmetry-stable Cartesian maps, and
+  parity-conditioned derivative transforms;
 - the physical Bowen-York/Lichnerowicz Hamiltonian residual compiled from DSL;
 - an exact forward-mode Jacobian-vector kernel generated from the same DSL
   residual, with finite differences retained as a runtime fallback;
@@ -86,21 +87,20 @@ binary-black-hole puncture data:
 
 The provided QC0 case converges on its validated `14 x 14 x 24` spectral grid
 with the geometric two-grid preconditioner and exports a Cartesian `z=0` BSSN
-slice. A `16 x 16 x 28` solve also reaches the projected acceptance criterion,
-but is retained as a convergence probe rather than the default. This is a
-genuine nonlinear physical solve, not a manufactured Poisson example. The
-exported CSV is nevertheless a diagnostic artifact, not a production 3D
+slice. A `16 x 16 x 28` solve also reaches the raw and projected acceptance
+criteria, but is retained as a convergence probe rather than the default. This
+is a genuine nonlinear physical solve, not a manufactured Poisson example.
+The exported CSV is nevertheless a diagnostic artifact, not a production 3D
 checkpoint.
 
 ### What is not production-ready
 
-- The constrained QC0 solve converges through `16 x 16 x 28`, but the raw
-  residual component removed by the inversion-symmetry projector grows over
-  the current refinement sequence. Its maximum is localized at the nearest
-  collocation point to a puncture corner, where the unregularized physical
-  residual suffers its strongest cancellation. Raw, projected, and
-  projected-out residuals are now reported; production claims require a
-  regularized diagnostic or formulation that controls this gap.
+- The constrained QC0 solve converges through `16 x 16 x 28`. Enforcing the
+  analytic parity of all logical derivatives before the singular Cartesian
+  derivative map now keeps raw and projected residuals equal to round-off; at
+  `16 x 16 x 28`, the projected-out L2 norm is below `5e-13`. The projected
+  residual floor still rises at the two finest probes, so convergence beyond
+  this range and every puncture/axis regularity mode remain to be established.
 - The geometric preconditioner is still a two-grid method with a dense coarse
   LU. A recursive or matrix-free coarse hierarchy is required before grids in
   the `32 x 32 x 48` range are practical.
@@ -257,9 +257,9 @@ spectral solves, physical benchmarks, and handoff checks. Files containing
 
 The next priorities are:
 
-1. Explain and reduce the projected-out QC0 residual, then make the
-   three-dimensional solve robust at production-oriented resolutions with a
-   recursive coarse hierarchy and convergence studies.
+1. Make the three-dimensional solve robust at production-oriented resolutions
+   with a recursive coarse hierarchy, tighter puncture regularity control, and
+   convergence studies beyond `16 x 16 x 28`.
 2. Add independent physical validation: production-resolution unequal-mass
    and spinning cases, apparent horizons, and surface-integral diagnostics.
 3. Define a versioned C ABI and validate one real external evolution-code

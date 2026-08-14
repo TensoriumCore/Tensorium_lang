@@ -39,8 +39,14 @@ inline TwoPunctureCoordinates mapTwoPunctureCoordinates(double A, double B,
   const double compactA = 0.5 * (A + 1.0);
   const double X = 2.0 * std::atanh(compactA);
   const double R = 0.5 * kSpectralPi + 2.0 * std::atan(B);
-  const double x = b * std::cosh(X) * std::cos(R);
-  const double rho = b * std::sinh(X) * std::sin(R);
+  // Evaluate sin(R) and cos(R) from B directly. Besides avoiding two
+  // transcendental calls, these rational forms preserve x(A,-B)=-x(A,B)
+  // and rho(A,-B)=rho(A,B) exactly in floating-point arithmetic.
+  const double bDenominator = 1.0 + B * B;
+  const double cosR = -2.0 * B / bDenominator;
+  const double sinR = (1.0 - B * B) / bDenominator;
+  const double x = b * std::cosh(X) * cosR;
+  const double rho = b * std::sinh(X) * sinR;
   return TwoPunctureCoordinates{
       x, rho, rho * std::cos(phi), rho * std::sin(phi), X, R};
 }
@@ -92,9 +98,12 @@ twoPunctureDerivativeMap(const double logical[3],
   xr.d33 = logicalDerivatives->d33;
 
   using Complex = std::complex<double>;
-  const Complex C(point.X, point.R);
-  const Complex c = b * std::cosh(C);
-  const Complex c_C = b * std::sinh(C);
+  const double bDenominator = 1.0 + B * B;
+  const double cosR = -2.0 * B / bDenominator;
+  const double sinR = (1.0 - B * B) / bDenominator;
+  const Complex c(point.x, point.rho);
+  const Complex c_C(b * std::sinh(point.X) * cosR,
+                    b * std::cosh(point.X) * sinR);
   const double scale2 = std::norm(c_C);
   const double minScale2 =
       64.0 * std::numeric_limits<double>::epsilon() * b * b;

@@ -440,6 +440,15 @@ inline SpectralResidualAssemblyResult assembleSpectralResidual(
         grid, derivs, problem.unknownMap, problem.unknownMapParams);
     unknownDerivatives = &physicalUnknownDerivatives;
   }
+  SpectralDerivatives3D projectedUnknownDerivatives;
+  if (problem.fieldProjector.projectDerivatives) {
+    projectedUnknownDerivatives = *unknownDerivatives;
+    problem.fieldProjector.projectDerivatives(
+        &grid, &projectedUnknownDerivatives,
+        problem.fieldProjector.userData);
+    validateSpectralDerivativeBundle(grid, projectedUnknownDerivatives);
+    unknownDerivatives = &projectedUnknownDerivatives;
+  }
   SpectralDerivatives3D mappedDerivatives;
   const SpectralDerivatives3D *assembledDerivatives = unknownDerivatives;
   if (problem.derivativeMap.transform) {

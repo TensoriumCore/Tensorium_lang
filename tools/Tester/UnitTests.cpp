@@ -5589,6 +5589,81 @@ static bool testSpectralNewtonProjectsConstrainedResidual() {
   return true;
 }
 
+static bool testTwoPunctureDerivativeProjectorEnforcesParity() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralDerivatives3D;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::makeTwoPunctureInversionEvenFieldProjector;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(3),
+                      SpectralAxis::chebyshevZeros(4),
+                      SpectralAxis::fourierPeriodic(6));
+  SpectralDerivatives3D derivatives;
+  std::array<std::vector<double> *, 10> components{
+      &derivatives.value, &derivatives.d1,  &derivatives.d2,
+      &derivatives.d3,    &derivatives.d11, &derivatives.d12,
+      &derivatives.d13,   &derivatives.d22, &derivatives.d23,
+      &derivatives.d33};
+  for (std::size_t component = 0; component < components.size(); ++component) {
+    components[component]->resize(grid.size());
+    for (std::size_t p = 0; p < grid.size(); ++p) {
+      (*components[component])[p] =
+          static_cast<double>((component + 1) * (p + 3)) / 17.0;
+    }
+  }
+
+  const auto projector = makeTwoPunctureInversionEvenFieldProjector();
+  if (!projector.projectDerivatives) {
+    std::cerr << "FAIL: two-puncture derivative projector is missing\n";
+    return false;
+  }
+  projector.projectDerivatives(&grid, &derivatives, projector.userData);
+
+  const std::array<bool, 10> even{true, true, false, true, true,
+                                  false, true, true, false, true};
+  double parityError = 0.0;
+  for (std::size_t component = 0; component < components.size(); ++component) {
+    for (std::size_t k = 0; k < grid.n3(); ++k) {
+      const std::size_t rotatedK = (k + grid.n3() / 2) % grid.n3();
+      for (std::size_t j = 0; j < grid.n2(); ++j) {
+        const std::size_t reflectedJ = grid.n2() - 1 - j;
+        for (std::size_t i = 0; i < grid.n1(); ++i) {
+          const double value = (*components[component])[grid.index(i, j, k)];
+          const double image =
+              (*components[component])[grid.index(i, reflectedJ, rotatedK)];
+          parityError = std::max(
+              parityError,
+              std::abs(value - (even[component] ? image : -image)));
+        }
+      }
+    }
+  }
+
+  const SpectralDerivatives3D onceProjected = derivatives;
+  projector.projectDerivatives(&grid, &derivatives, projector.userData);
+  double idempotenceError = 0.0;
+  const std::array<const std::vector<double> *, 10> projectedComponents{
+      &onceProjected.value, &onceProjected.d1,  &onceProjected.d2,
+      &onceProjected.d3,    &onceProjected.d11, &onceProjected.d12,
+      &onceProjected.d13,   &onceProjected.d22, &onceProjected.d23,
+      &onceProjected.d33};
+  for (std::size_t component = 0; component < components.size(); ++component) {
+    for (std::size_t p = 0; p < grid.size(); ++p) {
+      idempotenceError =
+          std::max(idempotenceError,
+                   std::abs((*components[component])[p] -
+                            (*projectedComponents[component])[p]));
+    }
+  }
+
+  if (parityError != 0.0 || idempotenceError != 0.0) {
+    std::cerr << "FAIL: two-puncture derivative parity=" << parityError
+              << " idempotence=" << idempotenceError << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSpectralLocalReactionDiagonal() {
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralGrid3D;
@@ -7888,6 +7963,8 @@ int main() {
        &testSpectralGridManufacturedPoisson},
       {"testSpectralNewtonProjectsConstrainedResidual",
        &testSpectralNewtonProjectsConstrainedResidual},
+      {"testTwoPunctureDerivativeProjectorEnforcesParity",
+       &testTwoPunctureDerivativeProjectorEnforcesParity},
       {"testSpectralLocalReactionDiagonal",
        &testSpectralLocalReactionDiagonal},
       {"testSpectralTwoGridTransferPreservesResolvedModes",

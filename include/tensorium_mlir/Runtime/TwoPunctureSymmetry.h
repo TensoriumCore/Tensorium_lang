@@ -10,20 +10,10 @@
 
 namespace tensorium_mlir::runtime {
 
-// Project a scalar field onto the even subspace of
-// (A, B, phi) -> (A, -B, phi + pi). Under the TwoPuncture coordinate map this
-// is Cartesian inversion (x, y, z) -> (-x, -y, -z). Equal-mass binaries with
-// opposite tangential momenta may use this optional reduction; asymmetric
-// binaries must leave it disabled.
-inline void twoPunctureInversionEvenFieldProjector(const SpectralGrid3D *grid,
-                                                   double *values,
-                                                   std::int64_t valueCount,
-                                                   void *) {
-  if (!grid || !values || valueCount < 0 ||
-      static_cast<std::size_t>(valueCount) != grid->size()) {
+inline void validateTwoPunctureInversionGrid(const SpectralGrid3D *grid) {
+  if (!grid)
     throw std::runtime_error(
-        "two-puncture inversion projector received invalid field data");
-  }
+        "two-puncture inversion projector received a null grid");
   if (grid->axis(2).basis != SpectralBasis::FourierPeriodic ||
       grid->n3() == 0 || grid->n3() % 2 != 0) {
     throw std::runtime_error(
@@ -38,28 +28,79 @@ inline void twoPunctureInversionEvenFieldProjector(const SpectralGrid3D *grid,
           "two-puncture inversion projector requires a B-reflection grid");
     }
   }
+}
 
-  for (std::size_t k = 0; k < grid->n3(); ++k) {
-    const std::size_t rotatedK = (k + grid->n3() / 2) % grid->n3();
-    for (std::size_t j = 0; j < grid->n2(); ++j) {
-      const std::size_t reflectedJ = grid->n2() - 1 - j;
-      for (std::size_t i = 0; i < grid->n1(); ++i) {
-        const std::size_t index = grid->index(i, j, k);
-        const std::size_t image = grid->index(i, reflectedJ, rotatedK);
+inline void projectTwoPunctureInversionParity(const SpectralGrid3D &grid,
+                                               std::span<double> values,
+                                               bool even) {
+  if (values.size() != grid.size())
+    throw std::runtime_error(
+        "two-puncture inversion projector received invalid component data");
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const std::size_t rotatedK = (k + grid.n3() / 2) % grid.n3();
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const std::size_t reflectedJ = grid.n2() - 1 - j;
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const std::size_t index = grid.index(i, j, k);
+        const std::size_t image = grid.index(i, reflectedJ, rotatedK);
         if (index >= image)
           continue;
-        const double average = 0.5 * (values[index] + values[image]);
-        values[index] = average;
-        values[image] = average;
+        const double projected =
+            0.5 * (values[index] + (even ? values[image] : -values[image]));
+        values[index] = projected;
+        values[image] = even ? projected : -projected;
       }
     }
   }
 }
 
+// Project a scalar field onto the even subspace of
+// (A, B, phi) -> (A, -B, phi + pi). Under the TwoPuncture coordinate map this
+// is Cartesian inversion (x, y, z) -> (-x, -y, -z). Equal-mass binaries with
+// opposite tangential momenta may use this optional reduction; asymmetric
+// binaries must leave it disabled.
+inline void twoPunctureInversionEvenFieldProjector(const SpectralGrid3D *grid,
+                                                   double *values,
+                                                   std::int64_t valueCount,
+                                                   void *) {
+  if (!grid || !values || valueCount < 0 ||
+      static_cast<std::size_t>(valueCount) != grid->size()) {
+    throw std::runtime_error(
+        "two-puncture inversion projector received invalid field data");
+  }
+  validateTwoPunctureInversionGrid(grid);
+  projectTwoPunctureInversionParity(
+      *grid, std::span<double>(values, static_cast<std::size_t>(valueCount)),
+      true);
+}
+
+// Logical derivatives of an inversion-even scalar have a fixed parity under
+// (A, B, phi) -> (A, -B, phi + pi). Enforce that parity before the singular
+// bispherical-to-Cartesian derivative map amplifies round-off near rho=0.
+inline void twoPunctureInversionEvenDerivativeProjector(
+    const SpectralGrid3D *grid, SpectralDerivatives3D *derivatives, void *) {
+  validateTwoPunctureInversionGrid(grid);
+  if (!derivatives)
+    throw std::runtime_error(
+        "two-puncture inversion projector received null derivatives");
+
+  projectTwoPunctureInversionParity(*grid, derivatives->value, true);
+  projectTwoPunctureInversionParity(*grid, derivatives->d1, true);
+  projectTwoPunctureInversionParity(*grid, derivatives->d2, false);
+  projectTwoPunctureInversionParity(*grid, derivatives->d3, true);
+  projectTwoPunctureInversionParity(*grid, derivatives->d11, true);
+  projectTwoPunctureInversionParity(*grid, derivatives->d12, false);
+  projectTwoPunctureInversionParity(*grid, derivatives->d13, true);
+  projectTwoPunctureInversionParity(*grid, derivatives->d22, true);
+  projectTwoPunctureInversionParity(*grid, derivatives->d23, false);
+  projectTwoPunctureInversionParity(*grid, derivatives->d33, true);
+}
+
 inline SpectralFieldProjector makeTwoPunctureInversionEvenFieldProjector() {
   return SpectralFieldProjector{
       "tensorium_spectral_two_puncture_inversion_even_projector",
-      &twoPunctureInversionEvenFieldProjector, nullptr};
+      &twoPunctureInversionEvenFieldProjector, nullptr,
+      &twoPunctureInversionEvenDerivativeProjector};
 }
 
 inline double

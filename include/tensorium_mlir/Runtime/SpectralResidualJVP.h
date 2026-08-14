@@ -98,6 +98,11 @@ inline SpectralDerivatives3D mapSpectralJvpDerivatives(
     mapped = applySpectralUnknownMap(grid, mapped, problem.unknownMap,
                                      problem.unknownMapParams);
   }
+  if (problem.fieldProjector.projectDerivatives) {
+    problem.fieldProjector.projectDerivatives(
+        &grid, &mapped, problem.fieldProjector.userData);
+    validateSpectralDerivativeBundle(grid, mapped);
+  }
   if (problem.derivativeMap.transform) {
     mapped = applySpectralDerivativeMap(
         grid, mapped, problem.derivativeMap, problem.coordinateParams);

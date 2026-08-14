@@ -199,10 +199,15 @@ using SpectralFieldProjectorFn = void (*)(const SpectralGrid3D *grid,
                                           std::int64_t valueCount,
                                           void *userData);
 
+using SpectralDerivativeProjectorFn = void (*)(
+    const SpectralGrid3D *grid, SpectralDerivatives3D *derivatives,
+    void *userData);
+
 struct SpectralFieldProjector {
   std::string symbolName = "tensorium_spectral_identity_field_projector";
   SpectralFieldProjectorFn project = nullptr;
   void *userData = nullptr;
+  SpectralDerivativeProjectorFn projectDerivatives = nullptr;
 };
 
 struct SpectralResidualProblem {
