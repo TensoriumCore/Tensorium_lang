@@ -39,6 +39,19 @@ struct GeneratedInitialDataExportReport {
   double maxChi = 0.0;
 };
 
+inline SpectralPoint3D generatedInitialDataProjectedOutMaxPoint(
+    const GeneratedSpectralInitialDataSolution &solution) {
+  if (!solution.grid || solution.grid->size() == 0)
+    throw std::runtime_error("generated initial_data residual grid is empty");
+  const std::size_t pointIndex =
+      solution.projectedOutResidualMaxIndex % solution.grid->size();
+  const std::size_t i = pointIndex % solution.grid->n1();
+  const std::size_t line = pointIndex / solution.grid->n1();
+  const std::size_t j = line % solution.grid->n2();
+  const std::size_t k = line / solution.grid->n2();
+  return solution.grid->point(i, j, k);
+}
+
 inline GeneratedInitialDataExportReport
 exportGeneratedInitialDataCollocationCsv(
     const GeneratedSpectralInitialDataSolution &solution,
@@ -113,6 +126,8 @@ exportGeneratedInitialDataCollocationCsv(
     throw std::runtime_error("failed while writing generated initial_data CSV");
 
   const std::string metadataPath = outputPath + ".json";
+  const auto projectedOutMaxPoint =
+      generatedInitialDataProjectedOutMaxPoint(solution);
   std::ofstream metadata(metadataPath);
   if (!metadata)
     throw std::runtime_error("cannot open generated initial_data metadata: " +
@@ -127,8 +142,25 @@ exportGeneratedInitialDataCollocationCsv(
            << "  \"newton_steps\": " << solution.solveResult.steps << ",\n"
            << "  \"linear_iterations\": "
            << solution.solveResult.linearIterations << ",\n"
+           << "  \"solve_wall_seconds\": " << solution.solveWallSeconds
+           << ",\n"
            << "  \"residual_l2\": " << solution.residual.l2Norm << ",\n"
            << "  \"residual_max\": " << solution.residual.maxAbs << ",\n"
+           << "  \"projected_residual_l2\": " << solution.residual.l2Norm
+           << ",\n"
+           << "  \"projected_residual_max\": " << solution.residual.maxAbs
+           << ",\n"
+           << "  \"raw_residual_l2\": " << solution.rawResidual.l2Norm
+           << ",\n"
+           << "  \"raw_residual_max\": " << solution.rawResidual.maxAbs
+           << ",\n"
+           << "  \"projected_out_residual_l2\": "
+           << solution.projectedOutResidualL2 << ",\n"
+           << "  \"projected_out_residual_max\": "
+           << solution.projectedOutResidualMaxAbs << ",\n"
+           << "  \"projected_out_residual_max_logical\": ["
+           << projectedOutMaxPoint.x1 << ", " << projectedOutMaxPoint.x2
+           << ", " << projectedOutMaxPoint.x3 << "],\n"
            << "  \"layout\": \"spectral collocation, i-fastest\"\n"
            << "}\n";
   metadata.close();
@@ -353,6 +385,8 @@ exportGeneratedInitialDataBssnSlice(
     throw std::runtime_error("failed while writing generated initial_data CSV");
 
   const std::string metadataPath = outputPath + ".json";
+  const auto projectedOutMaxPoint =
+      generatedInitialDataProjectedOutMaxPoint(solution);
   std::ofstream metadata(metadataPath);
   if (!metadata)
     throw std::runtime_error("cannot open generated initial_data metadata: " +
@@ -384,8 +418,25 @@ exportGeneratedInitialDataBssnSlice(
            << "  \"newton_steps\": " << solution.solveResult.steps << ",\n"
            << "  \"linear_iterations\": "
            << solution.solveResult.linearIterations << ",\n"
+           << "  \"solve_wall_seconds\": " << solution.solveWallSeconds
+           << ",\n"
            << "  \"residual_l2\": " << solution.residual.l2Norm << ",\n"
            << "  \"residual_max\": " << solution.residual.maxAbs << ",\n"
+           << "  \"projected_residual_l2\": " << solution.residual.l2Norm
+           << ",\n"
+           << "  \"projected_residual_max\": " << solution.residual.maxAbs
+           << ",\n"
+           << "  \"raw_residual_l2\": " << solution.rawResidual.l2Norm
+           << ",\n"
+           << "  \"raw_residual_max\": " << solution.rawResidual.maxAbs
+           << ",\n"
+           << "  \"projected_out_residual_l2\": "
+           << solution.projectedOutResidualL2 << ",\n"
+           << "  \"projected_out_residual_max\": "
+           << solution.projectedOutResidualMaxAbs << ",\n"
+           << "  \"projected_out_residual_max_logical\": ["
+           << projectedOutMaxPoint.x1 << ", " << projectedOutMaxPoint.x2
+           << ", " << projectedOutMaxPoint.x3 << "],\n"
            << "  \"adm_energy\": " << adm.energy << ",\n"
            << "  \"adm_linear_momentum\": [" << adm.linearMomentum[0]
            << ", " << adm.linearMomentum[1] << ", " << adm.linearMomentum[2]

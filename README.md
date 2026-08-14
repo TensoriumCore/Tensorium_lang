@@ -84,17 +84,26 @@ binary-black-hole puncture data:
 - cached spectral operators, optional OpenMP line parallelism, and corrected
   flexible-GMRES updates.
 
-The provided QC0 case converges on its validated `10 x 10 x 16` spectral grid
+The provided QC0 case converges on its validated `14 x 14 x 24` spectral grid
 with the geometric two-grid preconditioner and exports a Cartesian `z=0` BSSN
-slice. This is a genuine nonlinear physical solve, not a manufactured Poisson
-example. The exported CSV is nevertheless a diagnostic artifact, not a
-production 3D checkpoint.
+slice. A `16 x 16 x 28` solve also reaches the projected acceptance criterion,
+but is retained as a convergence probe rather than the default. This is a
+genuine nonlinear physical solve, not a manufactured Poisson example. The
+exported CSV is nevertheless a diagnostic artifact, not a production 3D
+checkpoint.
 
 ### What is not production-ready
 
-- QC0 is not yet reliable at the next tested `12 x 12 x 20` resolution with
-  either the one-level relaxation preconditioner or the first two-grid
-  prototype.
+- The constrained QC0 solve converges through `16 x 16 x 28`, but the raw
+  residual component removed by the inversion-symmetry projector grows over
+  the current refinement sequence. Its maximum is localized at the nearest
+  collocation point to a puncture corner, where the unregularized physical
+  residual suffers its strongest cancellation. Raw, projected, and
+  projected-out residuals are now reported; production claims require a
+  regularized diagnostic or formulation that controls this gap.
+- The geometric preconditioner is still a two-grid method with a dense coarse
+  LU. A recursive or matrix-free coarse hierarchy is required before grids in
+  the `32 x 32 x 48` range are practical.
 - High-resolution convergence, Fourier-mode regularity at axes/punctures, and
   spinning/unequal-mass validation are incomplete.
 - Apparent-horizon masses and independent surface-integral charge checks are
@@ -199,6 +208,20 @@ TENSORIUM_SLICE_N=257 TENSORIUM_HALF_WIDTH=12 \
   ./run_two_puncture_qc0.sh /tmp/qc0_257.csv
 ```
 
+Override the spectral solve resolution without editing the `.tn` source, or
+run the standard QC0 refinement sequence:
+
+```bash
+TP_RESOLUTION=16x16x28 \
+  ./run_two_puncture_qc0.sh /tmp/qc0_16x16x28.csv
+
+./run_two_puncture_convergence.sh /tmp/tensorium-qc0-convergence
+```
+
+The convergence command writes one CSV/JSON/log set per resolution and a
+machine-readable `summary.csv` containing solve cost, raw/projected residuals,
+ADM energy, puncture masses, and axis regularity.
+
 For larger experiments, `TENSORIUM_NATIVE=1` enables host-specific compiler
 optimization and `TENSORIUM_OPENMP=1 OMP_NUM_THREADS=<n>` enables spectral-line
 parallelism. These options improve runtime mechanics but do not remove the
@@ -234,8 +257,9 @@ spectral solves, physical benchmarks, and handoff checks. Files containing
 
 The next priorities are:
 
-1. Make the three-dimensional spectral solve robust at production-oriented
-   resolutions with stronger preconditioning and convergence studies.
+1. Explain and reduce the projected-out QC0 residual, then make the
+   three-dimensional solve robust at production-oriented resolutions with a
+   recursive coarse hierarchy and convergence studies.
 2. Add independent physical validation: production-resolution unequal-mass
    and spinning cases, apparent horizons, and surface-integral diagnostics.
 3. Define a versioned C ABI and validate one real external evolution-code

@@ -1,6 +1,7 @@
 #include "tensorium_mlir/Runtime/GeneratedInitialDataIO.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -8,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -29,6 +31,27 @@ double parsePositiveDouble(const char *text, const char *name) {
   if (text[consumed] != '\0' || !(parsed > 0.0) || !std::isfinite(parsed))
     throw std::runtime_error(std::string("invalid ") + name);
   return parsed;
+}
+
+std::array<std::size_t, 3> parseResolution3D(const char *text) {
+  std::array<std::size_t, 3> resolution{};
+  if (!text || text[0] == '\0')
+    return resolution;
+  std::string normalized(text);
+  for (char &character : normalized) {
+    if (character == 'x' || character == 'X' || character == ',')
+      character = ' ';
+  }
+  std::istringstream input(normalized);
+  std::string trailing;
+  if (!(input >> resolution[0] >> resolution[1] >> resolution[2]) ||
+      (input >> trailing) ||
+      std::any_of(resolution.begin(), resolution.end(),
+                  [](std::size_t value) { return value < 3; })) {
+    throw std::runtime_error(
+        "invalid initial_data resolution; expected N1xN2xN3 with values >= 3");
+  }
+  return resolution;
 }
 
 } // namespace
@@ -56,6 +79,8 @@ int main(int argc, char **argv) {
         std::getenv("TENSORIUM_INITIAL_DATA_PRECONDITIONER");
     const char *preconditionerSweepsText =
         std::getenv("TENSORIUM_INITIAL_DATA_PRECONDITIONER_SWEEPS");
+    const auto resolutionOverride = parseResolution3D(
+        std::getenv("TENSORIUM_INITIAL_DATA_RESOLUTION"));
     int preconditionerSweepsOverride = 0;
     if (preconditionerSweepsText && preconditionerSweepsText[0] != '\0') {
       const std::size_t parsedSweeps =
@@ -73,10 +98,20 @@ int main(int argc, char **argv) {
         TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
         tensorium_spectral_residual_grid_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT, {},
-        preconditionerOverride, preconditionerSweepsOverride);
+        preconditionerOverride, preconditionerSweepsOverride,
+        resolutionOverride);
     const auto solveEnd = std::chrono::steady_clock::now();
     const double solveSeconds =
         std::chrono::duration<double>(solveEnd - solveStart).count();
+    solution.solveWallSeconds = solveSeconds;
+    const std::size_t rejectedPointIndex =
+        solution.projectedOutResidualMaxIndex % solution.grid->size();
+    const std::size_t rejectedI = rejectedPointIndex % solution.grid->n1();
+    const std::size_t rejectedLine = rejectedPointIndex / solution.grid->n1();
+    const std::size_t rejectedJ = rejectedLine % solution.grid->n2();
+    const std::size_t rejectedK = rejectedLine / solution.grid->n2();
+    const auto rejectedPoint =
+        solution.grid->point(rejectedI, rejectedJ, rejectedK);
     const bool usesGeneratedJvp = std::all_of(
         solution.generatedSystem.equations.begin(),
         solution.generatedSystem.equations.end(), [](const auto &equation) {
@@ -111,7 +146,16 @@ int main(int argc, char **argv) {
               << " s\n"
               << "[initial_data] residual L2 / max = "
               << solution.residual.l2Norm << " / "
-              << solution.residual.maxAbs << '\n';
+              << solution.residual.maxAbs << '\n'
+              << "[initial_data] raw residual L2 / max = "
+              << solution.rawResidual.l2Norm << " / "
+              << solution.rawResidual.maxAbs << '\n'
+              << "[initial_data] projected-out residual L2 / max = "
+              << solution.projectedOutResidualL2 << " / "
+              << solution.projectedOutResidualMaxAbs << '\n'
+              << "[initial_data] projected-out max logical point = ["
+              << rejectedPoint.x1 << ", " << rejectedPoint.x2 << ", "
+              << rejectedPoint.x3 << "]\n";
     if (!solution.converged() ||
         solution.residual.l2Norm > solution.options.residualTolerance)
       throw std::runtime_error("generated initial_data solve did not converge");

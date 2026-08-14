@@ -7,6 +7,7 @@
 #include "tensorium_mlir/Runtime/TwoPunctureSymmetry.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -35,10 +36,15 @@ struct GeneratedSpectralInitialDataSolution {
   std::vector<std::vector<double>> fields;
   SpectralEllipticSolveOptions options;
   SpectralEllipticSolveResult solveResult;
+  SpectralResidualSystemAssemblyResult rawResidual;
   SpectralResidualSystemAssemblyResult residual;
+  double projectedOutResidualL2 = 0.0;
+  double projectedOutResidualMaxAbs = 0.0;
+  std::size_t projectedOutResidualMaxIndex = 0;
+  double solveWallSeconds = 0.0;
 
   bool converged() const {
-    return solveResult.converged() && residual.finite;
+    return solveResult.converged() && rawResidual.finite && residual.finite;
   }
 
   SpectralResidualSystemProblem system() const {
@@ -196,7 +202,8 @@ inline GeneratedSpectralInitialDataSolution solveGeneratedSpectralInitialData(
     std::size_t gridKernelCount,
     const std::unordered_map<std::string, double> &parameterOverrides = {},
     const char *preconditionerOverride = nullptr,
-    int preconditionerSweepsOverride = 0) {
+    int preconditionerSweepsOverride = 0,
+    const std::array<std::size_t, 3> &resolutionOverride = {}) {
   if (desc.abi_version !=
       tensorium_mlir::abi::kGeneratedKernelABIVersion)
     throw std::runtime_error(
@@ -217,13 +224,26 @@ inline GeneratedSpectralInitialDataSolution solveGeneratedSpectralInitialData(
   solution.parameters =
       generatedInitialDataParameters(desc, parameterOverrides);
 
+  const bool hasResolutionOverride =
+      std::any_of(resolutionOverride.begin(), resolutionOverride.end(),
+                  [](std::size_t resolution) { return resolution != 0; });
+  if (hasResolutionOverride &&
+      std::any_of(resolutionOverride.begin(), resolutionOverride.end(),
+                  [](std::size_t resolution) { return resolution < 3; })) {
+    throw std::runtime_error(
+        "generated spectral initial_data resolution override must contain "
+        "three values >= 3");
+  }
   std::array<SpectralAxis, 3> axes;
   for (std::size_t axis = 0; axis < 3; ++axis) {
-    if (desc.resolution[axis] < 3)
+    const std::size_t resolution =
+        hasResolutionOverride
+            ? resolutionOverride[axis]
+            : static_cast<std::size_t>(desc.resolution[axis]);
+    if (desc.resolution[axis] < 3 || resolution < 3)
       throw std::runtime_error(
           "generated spectral initial_data resolution must be >= 3");
-    axes[axis] = generatedInitialDataAxis(
-        desc.basis[axis], static_cast<std::size_t>(desc.resolution[axis]));
+    axes[axis] = generatedInitialDataAxis(desc.basis[axis], resolution);
   }
   solution.grid = std::make_unique<SpectralGrid3D>(
       std::move(axes[0]), std::move(axes[1]), std::move(axes[2]));
@@ -361,12 +381,30 @@ inline GeneratedSpectralInitialDataSolution solveGeneratedSpectralInitialData(
       std::span<std::vector<double>>(solution.fields.data(),
                                      solution.fields.size()),
       solution.options);
-  solution.residual = assembleSpectralResidualSystem(
+  solution.rawResidual = assembleSpectralResidualSystem(
       solution.generatedSystem.view(),
       std::span<const std::vector<double>>(solution.fields.data(),
                                            solution.fields.size()));
+  solution.residual = solution.rawResidual;
   projectSpectralResidualSystem(solution.generatedSystem.view(),
                                 solution.residual);
+  double projectedOutSquaredNorm = 0.0;
+  for (std::size_t point = 0; point < solution.residual.values.size();
+       ++point) {
+    const double rejected =
+        solution.rawResidual.values[point] - solution.residual.values[point];
+    projectedOutSquaredNorm += rejected * rejected;
+    const double rejectedAbs = std::fabs(rejected);
+    if (rejectedAbs > solution.projectedOutResidualMaxAbs) {
+      solution.projectedOutResidualMaxAbs = rejectedAbs;
+      solution.projectedOutResidualMaxIndex = point;
+    }
+  }
+  if (!solution.residual.values.empty()) {
+    solution.projectedOutResidualL2 = std::sqrt(
+        projectedOutSquaredNorm /
+        static_cast<double>(solution.residual.values.size()));
+  }
   return solution;
 }
 
