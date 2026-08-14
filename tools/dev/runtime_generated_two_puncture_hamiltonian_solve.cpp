@@ -31,6 +31,8 @@ using tensorium_mlir::runtime::
 using tensorium_mlir::runtime::calibrateTwoPunctureBareMasses;
 using tensorium_mlir::runtime::evaluateTwoPunctureBowenYorkTensor;
 using tensorium_mlir::runtime::evaluateTwoPunctureBssnPoint;
+using tensorium_mlir::runtime::
+    evaluateSpectralResidualSystemJacobianVectorProduct;
 using tensorium_mlir::runtime::interpolateTwoPunctureBssnToCartesianGrid;
 using tensorium_mlir::runtime::invertTwoPunctureCoordinates;
 using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
@@ -50,6 +52,7 @@ using tensorium_mlir::runtime::SpectralAxis;
 using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 using tensorium_mlir::runtime::SpectralGeneratedResidualSystemEquationInputs;
 using tensorium_mlir::runtime::SpectralGrid3D;
+using tensorium_mlir::runtime::SpectralJacobianVectorProductOptions;
 using tensorium_mlir::runtime::SpectralLinearSolveKind;
 using tensorium_mlir::runtime::SpectralPreconditionerKind;
 using tensorium_mlir::runtime::TwoPunctureBssnGridBuffers;
@@ -275,6 +278,44 @@ int main() {
     const auto initialResidual = assembleSpectralResidualSystem(
         system, std::span<const std::vector<double>>(solverFields.data(),
                                                      solverFields.size()));
+
+    std::array<std::vector<double>, 1> jvpState{
+        std::vector<double>(grid.size(), 0.0)};
+    std::array<std::vector<double>, 1> jvpDirection{
+        std::vector<double>(grid.size(), 0.0)};
+    for (std::size_t p = 0; p < grid.size(); ++p) {
+      jvpState[0][p] = 0.01 + 0.0001 * static_cast<double>(p);
+      jvpDirection[0][p] =
+          0.2 - 0.0005 * static_cast<double>(p);
+    }
+    SpectralJacobianVectorProductOptions jvpCheckOptions;
+    jvpCheckOptions.relativeStep = 2.0e-6;
+    jvpCheckOptions.absoluteStep = 1.0e-8;
+    const auto generatedJvp =
+        evaluateSpectralResidualSystemJacobianVectorProduct(
+            system,
+            std::span<const std::vector<double>>(jvpState.data(),
+                                                 jvpState.size()),
+            std::span<const std::vector<double>>(jvpDirection.data(),
+                                                 jvpDirection.size()),
+            jvpCheckOptions);
+    auto fallbackGeneratedSystem = generatedSystem;
+    fallbackGeneratedSystem.equations[0].problem.kernel.evaluateJvp = nullptr;
+    const auto finiteDifferenceJvp =
+        evaluateSpectralResidualSystemJacobianVectorProduct(
+            fallbackGeneratedSystem.view(),
+            std::span<const std::vector<double>>(jvpState.data(),
+                                                 jvpState.size()),
+            std::span<const std::vector<double>>(jvpDirection.data(),
+                                                 jvpDirection.size()),
+            jvpCheckOptions);
+    double generatedJvpRelativeError = 0.0;
+    for (std::size_t p = 0; p < generatedJvp.values.size(); ++p) {
+      generatedJvpRelativeError = std::max(
+          generatedJvpRelativeError,
+          std::abs(generatedJvp.values[p] - finiteDifferenceJvp.values[p]) /
+              (1.0 + std::abs(finiteDifferenceJvp.values[p])));
+    }
 
     SpectralEllipticSolveOptions options;
     options.maxNewtonSteps = 12;
@@ -811,6 +852,9 @@ int main() {
     std::printf("[two-puncture-hamiltonian] boosted initial residual l2 = "
                 "%.17g\n",
                 initialResidual.l2Norm);
+    std::printf("[two-puncture-hamiltonian] generated JVP vs finite "
+                "difference relative error = %.17g\n",
+                generatedJvpRelativeError);
     std::printf("[two-puncture-hamiltonian] boosted final residual l2 = "
                 "%.17g\n",
                 finalResidual.l2Norm);
@@ -939,6 +983,9 @@ int main() {
         calibrationMaxPhiVariation > 2.0e-3 ||
         !(punctureMassDelta < veryCoarsePunctureMassDelta) ||
         !initialResidual.finite || initialResidual.l2Norm < 1.0e-5 ||
+        !generatedJvp.finite || !generatedJvp.usedGeneratedJvpKernels ||
+        finiteDifferenceJvp.usedGeneratedJvpKernels ||
+        generatedJvpRelativeError > 2.0e-7 ||
         !solveResult.converged() || !solveResult.usedGeneratedGridKernel ||
         !solveResult.usedMatrixFreeGMRES || !solveResult.usedPreconditioner ||
         !solveResult.usedFieldProjector || !finalResidual.finite ||

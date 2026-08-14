@@ -64,6 +64,14 @@ if ! grep -q "tensorium_spectral_residual_Hv" "$HOST_HEADER"; then
   echo "error: expected Hv spectral residual symbol" >&2
   exit 2
 fi
+if ! grep -q "tensorium_spectral_residual_jvp_Hu" "$HOST_HEADER"; then
+  echo "error: expected Hu spectral JVP symbol" >&2
+  exit 2
+fi
+if ! grep -q "tensorium_spectral_residual_jvp_Hv" "$HOST_HEADER"; then
+  echo "error: expected Hv spectral JVP symbol" >&2
+  exit 2
+fi
 if ! grep -q "tensorium_spectral_residual_systems" "$HOST_HEADER"; then
   echo "error: expected spectral residual system descriptor table" >&2
   exit 2
@@ -78,6 +86,14 @@ if ! grep -q "tensorium_spectral_residual_grid_Hu" "$LL_PATH"; then
 fi
 if ! grep -q "tensorium_spectral_residual_grid_Hv" "$LL_PATH"; then
   echo "error: expected Hv spectral grid residual LLVM definition" >&2
+  exit 2
+fi
+if ! grep -q "define double @tensorium_spectral_residual_jvp_Hu" "$LL_PATH"; then
+  echo "error: expected Hu spectral JVP LLVM definition" >&2
+  exit 2
+fi
+if ! grep -q "define double @tensorium_spectral_residual_jvp_Hv" "$LL_PATH"; then
+  echo "error: expected Hv spectral JVP LLVM definition" >&2
   exit 2
 fi
 

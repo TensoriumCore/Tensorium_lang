@@ -1,5 +1,6 @@
 #include "tensorium_mlir/Runtime/GeneratedInitialDataIO.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -76,6 +77,11 @@ int main(int argc, char **argv) {
     const auto solveEnd = std::chrono::steady_clock::now();
     const double solveSeconds =
         std::chrono::duration<double>(solveEnd - solveStart).count();
+    const bool usesGeneratedJvp = std::all_of(
+        solution.generatedSystem.equations.begin(),
+        solution.generatedSystem.equations.end(), [](const auto &equation) {
+          return equation.problem.kernel.evaluateJvp != nullptr;
+        });
 
     std::cout << std::setprecision(17)
               << "[initial_data] case = "
@@ -84,6 +90,12 @@ int main(int argc, char **argv) {
               << static_cast<int>(solution.solveResult.status) << " / "
               << solution.solveResult.steps << " / "
               << solution.solveResult.linearIterations << '\n'
+              << "[initial_data] final linear residual L2 = "
+              << solution.solveResult.finalLinearResidualL2 << '\n'
+              << "[initial_data] JVP = "
+              << (usesGeneratedJvp ? "compiled forward mode"
+                                   : "finite-difference fallback")
+              << '\n'
               << "[initial_data] preconditioner = "
               << (preconditionerOverride && preconditionerOverride[0] != '\0'
                       ? preconditionerOverride

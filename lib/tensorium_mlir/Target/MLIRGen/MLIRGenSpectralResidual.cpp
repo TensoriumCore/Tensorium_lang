@@ -649,8 +649,392 @@ private:
   llvm::StringMap<mlir::Value> localValues;
 };
 
+struct SpectralDualValue {
+  mlir::Value primal;
+  mlir::Value tangent;
+  bool active = false;
+};
+
+class SpectralDualEmitter {
+public:
+  SpectralDualEmitter(
+      mlir::OpBuilder &b, mlir::Location loc, std::string unknown,
+      const std::unordered_map<std::string, const ExprIR *> &temps,
+      const SpectralPointArgs &pointArgs,
+      const SpectralPointArgs &directionArgs,
+      const llvm::StringMap<mlir::Value> &auxiliaryArgs,
+      const llvm::StringMap<mlir::Value> &auxiliaryDirectionArgs,
+      const llvm::StringMap<mlir::Value> &paramArgs)
+      : b(b), loc(loc), unknown(std::move(unknown)), temps(temps),
+        pointArgs(pointArgs), directionArgs(directionArgs),
+        auxiliaryArgs(auxiliaryArgs),
+        auxiliaryDirectionArgs(auxiliaryDirectionArgs), paramArgs(paramArgs) {
+    zero = constant(0.0);
+  }
+
+  SpectralDualValue emit(const ExprIR *expr) {
+    if (!expr)
+      emitUnsupportedExprError(loc, "null spectral residual JVP expression");
+
+    switch (expr->kind) {
+    case ExprIR::Kind::Number: {
+      const auto *num = static_cast<const NumberIR *>(expr);
+      return {constant(num->value), zero, false};
+    }
+    case ExprIR::Kind::Var:
+      return emitVar(static_cast<const VarIR *>(expr));
+    case ExprIR::Kind::Binary:
+      return emitBinary(static_cast<const BinaryIR *>(expr));
+    case ExprIR::Kind::TensorProduct:
+      return emitProduct(static_cast<const TensorProductIR *>(expr));
+    case ExprIR::Kind::Call:
+      return emitCall(static_cast<const CallIR *>(expr));
+    case ExprIR::Kind::PartialDerivative:
+      return emitDerivative(static_cast<const PartialDerivativeIR *>(expr));
+    case ExprIR::Kind::Contraction:
+      return emitContraction(static_cast<const ContractionIR *>(expr));
+    case ExprIR::Kind::IndexRename:
+      return emit(static_cast<const IndexRenameIR *>(expr)->in.get());
+    case ExprIR::Kind::IndexPermute:
+      return emit(static_cast<const IndexPermuteIR *>(expr)->in.get());
+    case ExprIR::Kind::Trace:
+      return emitTrace(static_cast<const TraceIR *>(expr));
+    default:
+      emitUnsupportedExprError(
+          loc, "spectral residual JVP supports scalar arithmetic, params, "
+               "coords, field value, d_*, and laplacian() in this pass");
+    }
+  }
+
+private:
+  mlir::Value constant(double value) {
+    return b.create<mlir::arith::ConstantFloatOp>(
+                loc, llvm::APFloat(value),
+                llvm::cast<mlir::FloatType>(b.getF64Type()))
+        .getResult();
+  }
+
+  bool isUnknownExpr(const ExprIR *expr) const {
+    if (!expr)
+      return false;
+    if (expr->kind == ExprIR::Kind::Var) {
+      const auto *var = static_cast<const VarIR *>(expr);
+      if (var->vkind == VarKind::Field)
+        return var->name == unknown;
+      if (var->vkind == VarKind::Local) {
+        auto it = temps.find(var->name);
+        return it != temps.end() && isUnknownExpr(it->second);
+      }
+    }
+    return false;
+  }
+
+  SpectralDualValue emitVar(const VarIR *var) {
+    if (var->vkind == VarKind::Field) {
+      if (var->name == unknown)
+        return {pointArgs.value, directionArgs.value, true};
+      auto primal = auxiliaryArgs.find(var->name);
+      auto tangent = auxiliaryDirectionArgs.find(var->name);
+      if (primal == auxiliaryArgs.end() ||
+          tangent == auxiliaryDirectionArgs.end()) {
+        emitUnsupportedExprError(
+            loc, "spectral residual JVP references unsupported field '" +
+                     var->name + "'");
+      }
+      return {primal->second, tangent->second, true};
+    }
+    if (var->vkind == VarKind::Param) {
+      auto it = paramArgs.find(var->name);
+      if (it == paramArgs.end()) {
+        emitUnsupportedExprError(
+            loc, "missing spectral residual JVP parameter '" + var->name +
+                     "'");
+      }
+      return {it->second, zero, false};
+    }
+    if (var->vkind == VarKind::Coord) {
+      const unsigned axis = static_cast<unsigned>(
+          var->coordIndex >= 0 ? var->coordIndex : 0);
+      return {axis == 0 ? pointArgs.x1
+                        : (axis == 1 ? pointArgs.x2 : pointArgs.x3),
+              zero, false};
+    }
+    if (var->vkind == VarKind::Local) {
+      auto cached = localValues.find(var->name);
+      if (cached != localValues.end())
+        return cached->second;
+      auto it = temps.find(var->name);
+      if (it == temps.end()) {
+        emitUnsupportedExprError(
+            loc, "unknown spectral residual JVP temporary '" + var->name +
+                     "'");
+      }
+      SpectralDualValue value = emit(it->second);
+      localValues[var->name] = value;
+      return value;
+    }
+    emitUnsupportedExprError(loc,
+                             "unsupported spectral residual JVP variable");
+  }
+
+  SpectralDualValue emitBinary(const BinaryIR *bin) {
+    SpectralDualValue lhs = emit(bin->lhs.get());
+    SpectralDualValue rhs = emit(bin->rhs.get());
+    if (bin->op == "+") {
+      mlir::Value primal =
+          b.create<mlir::arith::AddFOp>(loc, lhs.primal, rhs.primal);
+      if (!lhs.active && !rhs.active)
+        return {primal, zero, false};
+      if (!lhs.active)
+        return {primal, rhs.tangent, true};
+      if (!rhs.active)
+        return {primal, lhs.tangent, true};
+      return {primal,
+              b.create<mlir::arith::AddFOp>(loc, lhs.tangent, rhs.tangent),
+              true};
+    }
+    if (bin->op == "-") {
+      mlir::Value primal =
+          b.create<mlir::arith::SubFOp>(loc, lhs.primal, rhs.primal);
+      if (!lhs.active && !rhs.active)
+        return {primal, zero, false};
+      if (!rhs.active)
+        return {primal, lhs.tangent, true};
+      if (!lhs.active) {
+        return {primal,
+                b.create<mlir::arith::NegFOp>(loc, rhs.tangent), true};
+      }
+      return {primal,
+              b.create<mlir::arith::SubFOp>(loc, lhs.tangent, rhs.tangent),
+              true};
+    }
+    if (bin->op == "*")
+      return multiply(lhs, rhs);
+    if (bin->op == "/") {
+      mlir::Value primal =
+          b.create<mlir::arith::DivFOp>(loc, lhs.primal, rhs.primal);
+      if (!lhs.active && !rhs.active)
+        return {primal, zero, false};
+      if (lhs.active && !rhs.active) {
+        return {primal, b.create<mlir::arith::DivFOp>(
+                            loc, lhs.tangent, rhs.primal),
+                true};
+      }
+      mlir::Value denominator =
+          b.create<mlir::arith::MulFOp>(loc, rhs.primal, rhs.primal);
+      if (!lhs.active) {
+        mlir::Value numerator =
+            b.create<mlir::arith::MulFOp>(loc, lhs.primal, rhs.tangent);
+        mlir::Value quotient =
+            b.create<mlir::arith::DivFOp>(loc, numerator, denominator);
+        return {primal, b.create<mlir::arith::NegFOp>(loc, quotient), true};
+      }
+      mlir::Value left =
+          b.create<mlir::arith::MulFOp>(loc, lhs.tangent, rhs.primal);
+      mlir::Value right =
+          b.create<mlir::arith::MulFOp>(loc, lhs.primal, rhs.tangent);
+      mlir::Value numerator =
+          b.create<mlir::arith::SubFOp>(loc, left, right);
+      return {primal,
+              b.create<mlir::arith::DivFOp>(loc, numerator, denominator),
+              true};
+    }
+    emitUnsupportedExprError(loc,
+                             "unsupported spectral residual JVP binary op");
+  }
+
+  SpectralDualValue multiply(SpectralDualValue lhs,
+                             SpectralDualValue rhs) {
+    mlir::Value primal =
+        b.create<mlir::arith::MulFOp>(loc, lhs.primal, rhs.primal);
+    if (!lhs.active && !rhs.active)
+      return {primal, zero, false};
+    if (lhs.active && !rhs.active) {
+      return {primal,
+              b.create<mlir::arith::MulFOp>(loc, lhs.tangent, rhs.primal),
+              true};
+    }
+    if (!lhs.active) {
+      return {primal,
+              b.create<mlir::arith::MulFOp>(loc, lhs.primal, rhs.tangent),
+              true};
+    }
+    mlir::Value left =
+        b.create<mlir::arith::MulFOp>(loc, lhs.tangent, rhs.primal);
+    mlir::Value right =
+        b.create<mlir::arith::MulFOp>(loc, lhs.primal, rhs.tangent);
+    return {primal, b.create<mlir::arith::AddFOp>(loc, left, right), true};
+  }
+
+  SpectralDualValue emitProduct(const TensorProductIR *prod) {
+    return multiply(emit(prod->lhs.get()), emit(prod->rhs.get()));
+  }
+
+  SpectralDualValue emitCall(const CallIR *call) {
+    if (call->callee == "laplacian") {
+      if (call->args.size() != 1 || !isUnknownExpr(call->args[0].get())) {
+        emitUnsupportedExprError(
+            loc, "spectral JVP laplacian() currently expects the scalar "
+                 "unknown");
+      }
+      return laplacian();
+    }
+
+    if (call->isExtern) {
+      if (call->args.size() != 1) {
+        emitUnsupportedExprError(
+            loc, "spectral external scalar JVP calls currently expect one "
+                 "arg");
+      }
+      SpectralDualValue arg = emit(call->args[0].get());
+      if (call->callee == "sqrt") {
+        mlir::Value primal = b.create<mlir::math::SqrtOp>(loc, arg.primal);
+        if (!arg.active)
+          return {primal, zero, false};
+        mlir::Value denominator = b.create<mlir::arith::MulFOp>(
+            loc, constant(2.0), primal);
+        return {primal, b.create<mlir::arith::DivFOp>(
+                            loc, arg.tangent, denominator),
+                true};
+      }
+      if (call->callee == "sin") {
+        mlir::Value primal = b.create<mlir::math::SinOp>(loc, arg.primal);
+        if (!arg.active)
+          return {primal, zero, false};
+        mlir::Value cosine = b.create<mlir::math::CosOp>(loc, arg.primal);
+        return {primal, b.create<mlir::arith::MulFOp>(loc, cosine,
+                                                      arg.tangent),
+                true};
+      }
+    }
+
+    emitUnsupportedExprError(loc, "unsupported spectral residual JVP call '" +
+                                      call->callee + "'");
+  }
+
+  SpectralDualValue emitDerivative(const PartialDerivativeIR *deriv) {
+    if (isUnknownExpr(deriv->in.get()))
+      return firstDerivative(deriv->coordIndex);
+    if (deriv->in && deriv->in->kind == ExprIR::Kind::PartialDerivative) {
+      const auto *inner =
+          static_cast<const PartialDerivativeIR *>(deriv->in.get());
+      if (isUnknownExpr(inner->in.get()))
+        return secondDerivative(inner->coordIndex, deriv->coordIndex);
+    }
+    emitUnsupportedExprError(
+        loc, "spectral JVP derivative currently expects the scalar unknown");
+  }
+
+  SpectralDualValue emitContraction(const ContractionIR *contract) {
+    if (isLaplacianContraction(contract))
+      return laplacian();
+    emitUnsupportedExprError(
+        loc, "spectral JVP contraction currently supports scalar laplacian "
+             "form");
+  }
+
+  SpectralDualValue emitTrace(const TraceIR *trace) {
+    if (isRepeatedSecondDerivativeUnknown(trace->in.get()))
+      return laplacian();
+    emitUnsupportedExprError(
+        loc, "spectral JVP trace currently supports laplacian via "
+             "contraction()");
+  }
+
+  SpectralDualValue laplacian() {
+    mlir::Value primal12 =
+        b.create<mlir::arith::AddFOp>(loc, pointArgs.d11, pointArgs.d22);
+    mlir::Value tangent12 = b.create<mlir::arith::AddFOp>(
+        loc, directionArgs.d11, directionArgs.d22);
+    return {b.create<mlir::arith::AddFOp>(loc, primal12, pointArgs.d33),
+            b.create<mlir::arith::AddFOp>(loc, tangent12,
+                                          directionArgs.d33),
+            true};
+  }
+
+  bool isLaplacianContraction(const ContractionIR *contract) const {
+    if (!contract || !isRepeatedSecondDerivativeUnknown(contract->in.get()))
+      return false;
+    const auto *outer =
+        static_cast<const PartialDerivativeIR *>(contract->in.get());
+    return contract->summedIndices.empty() ||
+           std::find(contract->summedIndices.begin(),
+                     contract->summedIndices.end(), outer->coordIndex) !=
+               contract->summedIndices.end();
+  }
+
+  bool isRepeatedSecondDerivativeUnknown(const ExprIR *expr) const {
+    if (!expr || expr->kind != ExprIR::Kind::PartialDerivative)
+      return false;
+    const auto *outer = static_cast<const PartialDerivativeIR *>(expr);
+    if (!outer->in || outer->in->kind != ExprIR::Kind::PartialDerivative)
+      return false;
+    const auto *inner =
+        static_cast<const PartialDerivativeIR *>(outer->in.get());
+    return outer->coordIndex == inner->coordIndex &&
+           isUnknownExpr(inner->in.get());
+  }
+
+  SpectralDualValue firstDerivative(const std::string &coord) const {
+    const unsigned axis = coordToAxis(coord);
+    if (axis == 0)
+      return {pointArgs.d1, directionArgs.d1, true};
+    if (axis == 1)
+      return {pointArgs.d2, directionArgs.d2, true};
+    return {pointArgs.d3, directionArgs.d3, true};
+  }
+
+  SpectralDualValue secondDerivative(const std::string &lhs,
+                                     const std::string &rhs) const {
+    unsigned a = coordToAxis(lhs);
+    unsigned bAxis = coordToAxis(rhs);
+    if (a > bAxis)
+      std::swap(a, bAxis);
+    if (a == 0 && bAxis == 0)
+      return {pointArgs.d11, directionArgs.d11, true};
+    if (a == 0 && bAxis == 1)
+      return {pointArgs.d12, directionArgs.d12, true};
+    if (a == 0 && bAxis == 2)
+      return {pointArgs.d13, directionArgs.d13, true};
+    if (a == 1 && bAxis == 1)
+      return {pointArgs.d22, directionArgs.d22, true};
+    if (a == 1 && bAxis == 2)
+      return {pointArgs.d23, directionArgs.d23, true};
+    return {pointArgs.d33, directionArgs.d33, true};
+  }
+
+  unsigned coordToAxis(const std::string &coord) const {
+    if (coord == "x" || coord == "r" || coord == "rho" || coord == "i")
+      return 0;
+    if (coord == "y" || coord == "theta" || coord == "j")
+      return 1;
+    if (coord == "z" || coord == "phi" || coord == "k")
+      return 2;
+    emitUnsupportedExprError(
+        loc, "unsupported spectral JVP derivative coordinate '" + coord +
+                 "'");
+  }
+
+  mlir::OpBuilder &b;
+  mlir::Location loc;
+  std::string unknown;
+  const std::unordered_map<std::string, const ExprIR *> &temps;
+  const SpectralPointArgs &pointArgs;
+  const SpectralPointArgs &directionArgs;
+  const llvm::StringMap<mlir::Value> &auxiliaryArgs;
+  const llvm::StringMap<mlir::Value> &auxiliaryDirectionArgs;
+  const llvm::StringMap<mlir::Value> &paramArgs;
+  llvm::StringMap<SpectralDualValue> localValues;
+  mlir::Value zero;
+};
+
 std::string spectralSymbolFor(const std::string &target) {
   return std::string(tensorium_mlir::abi::kSymbolSpectralResidualPrefix) +
+         makeHostCIdentifier(target, "residual");
+}
+
+std::string spectralJvpSymbolFor(const std::string &target) {
+  return std::string(tensorium_mlir::abi::kSymbolSpectralResidualJvpPrefix) +
          makeHostCIdentifier(target, "residual");
 }
 
@@ -731,6 +1115,85 @@ void emitOneSpectralResidual(mlir::OpBuilder &b, mlir::Location loc,
                                 auxiliaryArgs, paramArgs);
   mlir::Value value = emitter.emit(eq.rhs.get());
   b.create<mlir::func::ReturnOp>(loc, value);
+  moduleOp.push_back(fn);
+}
+
+void emitOneSpectralResidualJvp(mlir::OpBuilder &b, mlir::Location loc,
+                                mlir::ModuleOp moduleOp,
+                                const ModuleIR &module,
+                                const EvolutionIR &evo,
+                                const EquationIR &eq,
+                                const SpectralCandidate &candidate) {
+  const std::string symbol = spectralJvpSymbolFor(candidate.target);
+  if (moduleOp.lookupSymbol<mlir::func::FuncOp>(symbol))
+    return;
+
+  const auto temps = tempDefsFor(evo);
+  const std::vector<std::string> params = sortedParamNames(eq.rhs.get(), temps);
+  const std::vector<std::string> coords = spectralCoordNames(module);
+  std::vector<std::string> fields;
+  fields.reserve(1 + candidate.auxiliaryFields.size());
+  fields.push_back(candidate.unknown);
+  fields.insert(fields.end(), candidate.auxiliaryFields.begin(),
+                candidate.auxiliaryFields.end());
+
+  mlir::Type f64 = b.getF64Type();
+  llvm::SmallVector<mlir::Type, 32> argTypes;
+  const std::size_t argumentCount =
+      23 + 2 * candidate.auxiliaryFields.size() + params.size();
+  for (std::size_t i = 0; i < argumentCount; ++i)
+    argTypes.push_back(f64);
+
+  auto fn = mlir::func::FuncOp::create(
+      loc, symbol, b.getFunctionType(argTypes, mlir::TypeRange{f64}));
+  setCommonABIAttrs(b, fn,
+                    tensorium_mlir::abi::kKindSpectralResidualJvpPoint);
+  fn->setAttr(tensorium_mlir::abi::kAttrFieldNames,
+              makeStringArrayAttr(b, fields));
+  fn->setAttr(tensorium_mlir::abi::kAttrOutputNames,
+              makeStringArrayAttr(b, {candidate.target}));
+  fn->setAttr(tensorium_mlir::abi::kAttrCoordNames,
+              makeStringArrayAttr(b, coords));
+  fn->setAttr(tensorium_mlir::abi::kAttrParamNames,
+              makeStringArrayAttr(b, params));
+  fn->setAttr(tensorium_mlir::abi::kAttrStencilRadius, b.getI64IntegerAttr(0));
+
+  mlir::Block *entry = fn.addEntryBlock();
+  b.setInsertionPointToEnd(entry);
+
+  SpectralPointArgs pointArgs{
+      entry->getArgument(0), entry->getArgument(1), entry->getArgument(2),
+      entry->getArgument(3), entry->getArgument(4), entry->getArgument(5),
+      entry->getArgument(6), entry->getArgument(7), entry->getArgument(8),
+      entry->getArgument(9),
+      entry->getArgument(20 + 2 * candidate.auxiliaryFields.size()),
+      entry->getArgument(21 + 2 * candidate.auxiliaryFields.size()),
+      entry->getArgument(22 + 2 * candidate.auxiliaryFields.size())};
+  SpectralPointArgs directionArgs{
+      entry->getArgument(10), entry->getArgument(11), entry->getArgument(12),
+      entry->getArgument(13), entry->getArgument(14), entry->getArgument(15),
+      entry->getArgument(16), entry->getArgument(17), entry->getArgument(18),
+      entry->getArgument(19), pointArgs.x1, pointArgs.x2, pointArgs.x3};
+
+  llvm::StringMap<mlir::Value> auxiliaryArgs;
+  llvm::StringMap<mlir::Value> auxiliaryDirectionArgs;
+  for (std::size_t i = 0; i < candidate.auxiliaryFields.size(); ++i) {
+    auxiliaryArgs[candidate.auxiliaryFields[i]] = entry->getArgument(20 + i);
+    auxiliaryDirectionArgs[candidate.auxiliaryFields[i]] =
+        entry->getArgument(20 + candidate.auxiliaryFields.size() + i);
+  }
+
+  llvm::StringMap<mlir::Value> paramArgs;
+  const std::size_t paramBase =
+      23 + 2 * candidate.auxiliaryFields.size();
+  for (std::size_t i = 0; i < params.size(); ++i)
+    paramArgs[params[i]] = entry->getArgument(paramBase + i);
+
+  SpectralDualEmitter emitter(b, loc, candidate.unknown, temps, pointArgs,
+                              directionArgs, auxiliaryArgs,
+                              auxiliaryDirectionArgs, paramArgs);
+  SpectralDualValue result = emitter.emit(eq.rhs.get());
+  b.create<mlir::func::ReturnOp>(loc, result.tangent);
   moduleOp.push_back(fn);
 }
 
@@ -864,6 +1327,8 @@ void emitSpectralResidualKernels(mlir::OpBuilder &b, mlir::Location loc,
       if (!candidate)
         continue;
       emitOneSpectralResidual(b, loc, moduleOp, module, evo, eq, *candidate);
+      emitOneSpectralResidualJvp(b, loc, moduleOp, module, evo, eq,
+                                 *candidate);
       emitOneSpectralResidualGrid(b, loc, moduleOp, module, evo, eq,
                                   *candidate);
     }

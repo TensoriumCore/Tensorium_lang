@@ -3407,7 +3407,7 @@ constraints IdentityResidual {
       initialData.solve.preconditioner != "mapped_fd_multigrid" ||
       initialData.solve.maxLinearIterations != 1024 ||
       initialData.solve.restart != 64 ||
-      initialData.solve.preconditionerSweeps != 6) {
+      initialData.solve.preconditionerSweeps != 12) {
     std::cerr << "FAIL: QC0 spectral initial_data metadata mismatch\n";
     return false;
   }
@@ -5501,6 +5501,86 @@ static bool testSpectralGridManufacturedPoisson() {
   if (maxD1Err > 2e-11 || maxD3Err > 2e-11 || maxLapErr > 2e-10) {
     std::cerr << "FAIL: spectral manufactured Poisson errors d1=" << maxD1Err
               << " dphi=" << maxD3Err << " lap=" << maxLapErr << "\n";
+    return false;
+  }
+  return true;
+}
+
+static double spectralCubicReactionKernel(
+    const tensorium_spectral_residual_point *point, const double *,
+    std::int64_t, void *) {
+  return point->d11 + point->d22 + point->d33 + 2.0 * point->value +
+         0.5 * point->value * point->value * point->value;
+}
+
+static double spectralCubicReactionJvpKernel(
+    const tensorium_spectral_residual_point *point,
+    const tensorium_spectral_residual_point *direction, const double *,
+    std::int64_t, void *) {
+  return direction->d11 + direction->d22 + direction->d33 +
+         (2.0 + 1.5 * point->value * point->value) * direction->value;
+}
+
+static bool testSpectralLocalReactionDiagonal() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::SpectralJacobianVectorProductOptions;
+  using tensorium_mlir::runtime::SpectralResidualKernel;
+  using tensorium_mlir::runtime::SpectralResidualProblem;
+  using tensorium_mlir::runtime::buildSpectralMappedFiniteDifferenceLaplacianShift;
+  using tensorium_mlir::runtime::estimateSpectralLocalReactionDiagonal;
+  using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(5),
+                      SpectralAxis::chebyshevZeros(4),
+                      SpectralAxis::fourierPeriodic(6));
+  const std::array<double, 3> unknownMapParameters{0.0, 1.0, 1.0};
+  SpectralResidualProblem problem;
+  problem.grid = &grid;
+  problem.kernel = SpectralResidualKernel{
+      "spectral_cubic_reaction", &spectralCubicReactionKernel,
+      "spectral_cubic_reaction_jvp", &spectralCubicReactionJvpKernel};
+  problem.unknownMap = makeLinearBoundaryFactorUnknownMap();
+  problem.unknownMapParams = unknownMapParameters;
+
+  std::vector<double> state(grid.size(), 0.0);
+  for (std::size_t point = 0; point < grid.size(); ++point)
+    state[point] = 0.05 + 0.001 * static_cast<double>(point);
+
+  SpectralJacobianVectorProductOptions jvpOptions;
+  jvpOptions.relativeStep = 1.0e-6;
+  jvpOptions.absoluteStep = 1.0e-8;
+  const auto reaction =
+      estimateSpectralLocalReactionDiagonal(problem, state, jvpOptions);
+  const auto baseMatrix = buildSpectralMappedFiniteDifferenceLaplacianShift(
+      problem, 0.0, 1.0e-12);
+  const auto awareMatrix = buildSpectralMappedFiniteDifferenceLaplacianShift(
+      problem, 0.0, 1.0e-12, reaction);
+
+  double estimateError = 0.0;
+  double insertionError = 0.0;
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const auto point = grid.point(i, j, k);
+        const double weight = point.x1 - 1.0;
+        const double physicalValue = weight * state[point.index];
+        const double expected =
+            (2.0 + 1.5 * physicalValue * physicalValue) * weight;
+        estimateError =
+            std::max(estimateError,
+                     std::abs(reaction[point.index] - expected));
+        insertionError = std::max(
+            insertionError,
+            std::abs((awareMatrix.diagonal[point.index] -
+                      baseMatrix.diagonal[point.index]) -
+                     expected));
+      }
+    }
+  }
+  if (estimateError > 2.0e-9 || insertionError > 2.0e-9) {
+    std::cerr << "FAIL: spectral local reaction estimate=" << estimateError
+              << " insertion=" << insertionError << "\n";
     return false;
   }
   return true;
@@ -7738,6 +7818,8 @@ int main() {
        &testGeneratedHostStorageEulerUpdatePairs},
       {"testSpectralGridManufacturedPoisson",
        &testSpectralGridManufacturedPoisson},
+      {"testSpectralLocalReactionDiagonal",
+       &testSpectralLocalReactionDiagonal},
       {"testSpectralTwoGridTransferPreservesResolvedModes",
        &testSpectralTwoGridTransferPreservesResolvedModes},
       {"testSpectralMappedTwoGridReducesSparseResidual",

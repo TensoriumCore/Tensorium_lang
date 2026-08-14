@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H
@@ -40,6 +41,11 @@ typedef double (*tensorium_spectral_residual_kernel_fn)(
     const tensorium_spectral_residual_point *point, const double *params,
     std::int64_t param_count, void *user_data);
 
+typedef double (*tensorium_spectral_residual_jvp_kernel_fn)(
+    const tensorium_spectral_residual_point *point,
+    const tensorium_spectral_residual_point *direction, const double *params,
+    std::int64_t param_count, void *user_data);
+
 typedef int (*tensorium_spectral_residual_grid_kernel_fn)(
     std::int64_t n_points, const double *params, std::int64_t param_count,
     const double *value, const double *d1, const double *d2, const double *d3,
@@ -55,6 +61,8 @@ typedef void (*tensorium_spectral_coordinate_map_fn)(
 typedef struct tensorium_spectral_residual_kernel_desc {
   const char *symbol_name;
   tensorium_spectral_residual_kernel_fn evaluate;
+  const char *jvp_symbol_name;
+  tensorium_spectral_residual_jvp_kernel_fn evaluate_jvp;
   void *user_data;
 } tensorium_spectral_residual_kernel_desc;
 
@@ -134,7 +142,25 @@ inline constexpr SpectralAuxiliaryUnknownIndex kSpectralStaticAuxiliary = -1;
 struct SpectralResidualKernel {
   std::string symbolName;
   tensorium_spectral_residual_kernel_fn evaluate = nullptr;
+  std::string jvpSymbolName;
+  tensorium_spectral_residual_jvp_kernel_fn evaluateJvp = nullptr;
   void *userData = nullptr;
+
+  SpectralResidualKernel() = default;
+  SpectralResidualKernel(std::string symbolName,
+                         tensorium_spectral_residual_kernel_fn evaluate,
+                         void *userData = nullptr)
+      : symbolName(std::move(symbolName)), evaluate(evaluate),
+        userData(userData) {}
+  SpectralResidualKernel(
+      std::string symbolName,
+      tensorium_spectral_residual_kernel_fn evaluate,
+      std::string jvpSymbolName,
+      tensorium_spectral_residual_jvp_kernel_fn evaluateJvp,
+      void *userData = nullptr)
+      : symbolName(std::move(symbolName)), evaluate(evaluate),
+        jvpSymbolName(std::move(jvpSymbolName)), evaluateJvp(evaluateJvp),
+        userData(userData) {}
 };
 
 struct SpectralResidualGridKernel {
@@ -235,6 +261,7 @@ struct SpectralResidualSystemJacobianVectorProductResult {
   double maxAbs = 0.0;
   bool finite = true;
   bool usedGeneratedGridKernels = false;
+  bool usedGeneratedJvpKernels = false;
 
   std::size_t size() const { return values.size(); }
 };
@@ -268,6 +295,7 @@ struct SpectralJacobianVectorProductResult {
   double l2Norm = 0.0;
   double maxAbs = 0.0;
   bool finite = true;
+  bool usedGeneratedJvpKernel = false;
 
   std::size_t size() const { return values.size(); }
 };
@@ -321,6 +349,7 @@ struct SpectralEllipticSolveOptions {
   int preconditionerMultigridPreSweeps = 3;
   int preconditionerMultigridPostSweeps = 3;
   double preconditionerMultigridRelaxationOmega = 1.0;
+  bool preconditionerMultigridUseLocalReaction = true;
   SpectralJacobianVectorProductOptions jvpOptions{};
 };
 

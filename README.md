@@ -50,7 +50,7 @@ Long term, an initial-data source should be able to declare:
 | Area | Current state |
 | --- | --- |
 | Tensor DSL frontend | Lexer, parser, typed AST, explicit covariant/contravariant indices, free/dummy-index validation, contractions, partial/covariant derivatives, Laplacians, and metric rules. |
-| Compiler | Custom Tensorium MLIR dialect, Einstein canonicalization/validation, stencil and grid lowering, LLVM emission, and generated host ABI metadata. |
+| Compiler | Custom Tensorium MLIR dialect, Einstein canonicalization/validation, stencil and grid lowering, forward-mode JVP generation for spectral residuals, LLVM emission, and generated host ABI metadata. |
 | Radial initial data | Host-side multidomain Chebyshev solver with compactified exteriors, matching, regular scalar-ball support, coupled scalar/vector/tensor layouts, and implemented subsets of CTT and electrostatic Einstein-Maxwell problems. |
 | Multidimensional initial data | Compiled scalar residual systems on tensor-product Chebyshev/Fourier grids, Newton solves, dense or matrix-free FGMRES linear solves, and reusable preconditioners/maps. |
 | Binary black holes | A physical Bowen-York two-puncture Hamiltonian solve on a compactified two-centre domain, with ADM diagnostics, puncture-mass calibration, regularity checks, and low-resolution published-data guards. |
@@ -73,8 +73,10 @@ binary-black-hole puncture data:
 
 - compactified two-puncture coordinates and Cartesian derivative transforms;
 - the physical Bowen-York/Lichnerowicz Hamiltonian residual compiled from DSL;
+- an exact forward-mode Jacobian-vector kernel generated from the same DSL
+  residual, with finite differences retained as a runtime fallback;
 - bounded-memory matrix-free Newton-FGMRES with mapped sparse one-level and
-  experimental geometric two-grid preconditioners;
+  Jacobian-aware geometric two-grid preconditioners;
 - refinement, ADM, puncture-mass, symmetry, and axis-regularity diagnostics;
 - an unequal-mass published-data comparison and Cartesian BSSN handoff;
 - a fully declarative spectral case: physical parameters, resolution, maps,

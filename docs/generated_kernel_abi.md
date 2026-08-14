@@ -1,4 +1,4 @@
-# Tensorium Generated Kernel ABI (v1)
+# Tensorium Generated Kernel ABI (v2)
 
 This document freezes the ABI contract used by generated functions:
 
@@ -15,6 +15,7 @@ This document freezes the ABI contract used by generated functions:
 - `tensorium_residual_grid_affine`
 - `tensorium_residual_grid_parallel`
 - `tensorium_spectral_residual_<target>`
+- `tensorium_spectral_residual_jvp_<target>`
 - `tensorium_spectral_residual_grid_<target>`
 
 Source of truth for ABI constants:
@@ -36,7 +37,7 @@ standalone execution, and optional AMReX integration.
 ## Versioning
 
 - ABI version attribute: `tensorium.abi.version`
-- Current value: `1`
+- Current value: `2`
 - Memory layout attribute: `tensorium.abi.memory_layout = "soa_component_major"`
 - Memref ABI attribute: `tensorium.abi.memref_abi = "strided_memref_rank1_f64"`
 
@@ -175,10 +176,12 @@ consume directly:
   plus L2/max norms. When `SpectralResidualProblem::gridKernel` is set from
   `tensorium_spectral_residual_grid_kernels`, assembly uses the generated
   MLIR/LLVM global kernel; otherwise it falls back to the pointwise callback
-  loop. `evaluateSpectralJacobianVectorProduct(...)` provides a
-  finite-difference JVP hook for future Newton/Krylov elliptic solvers.
+  loop. For ABI v2 kernels,
+  `evaluateSpectralJacobianVectorProduct(...)` calls the generated forward-mode
+  JVP kernel. Manually supplied kernels that leave that callback null retain
+  the centered finite-difference path as a fallback.
 - `solveSpectralNewton(...)` is the first scalar spectral elliptic solve path.
-  It uses finite-difference JVPs to assemble a dense Jacobian, solves the dense
+  It uses the common JVP interface to assemble a dense Jacobian, solves the dense
   Newton system with pivoting, and performs a damped residual-decreasing line
   search. In `SpectralLinearSolveKind::Auto`, small problems use the dense
   Jacobian path and grids above `denseJacobianMaxUnknowns` use matrix-free GMRES
@@ -196,9 +199,11 @@ consume directly:
   the constraint-block name, field-major unknown names, per-equation residual
   names, unknown indices, point/grid kernel indices, parameter names, auxiliary
   field names, and auxiliary-to-unknown maps (`-1` means static auxiliary).
-  `evaluateSpectralResidualSystemJacobianVectorProduct(...)` perturbs the
-  field-major unknown bundle and returns equation-major `Jv`, resolving
-  auxiliary unknown maps so coupled residuals see the current perturbation.
+  `evaluateSpectralResidualSystemJacobianVectorProduct(...)` returns
+  equation-major `Jv`, resolving both primal and tangent auxiliary-unknown maps
+  so coupled residuals receive the current direction. It uses generated JVP
+  kernels only when every equation exposes one, otherwise it falls back to a
+  consistent finite-difference perturbation of the whole field bundle.
   `solveSpectralNewton(...)` also accepts a system problem plus a mutable
   field-major unknown bundle; it solves the square multi-residual system with
   either dense JVP assembly or matrix-free GMRES over the same system JVP.
@@ -222,7 +227,11 @@ consume directly:
   same mapped sparse operator with one geometric coarse level. Restriction and
   prolongation use tensor-product Chebyshev/Fourier interpolation, the coarse
   operator is the Galerkin product `R A P`, and its LU factorization is cached
-  across Krylov applications. This is an experimental two-grid
+  across Krylov applications. At each Newton state, the point JVP kernel also
+  evaluates the local reaction derivative `dF/du` in `O(N)` work (or estimates
+  it with the finite-difference fallback). The derivative is mapped back to the
+  solver variable and inserted on the fine diagonal before `R A P` is formed.
+  This is an experimental two-grid
   preconditioner, not yet a recursive production multigrid hierarchy.
 - `tests/fixtures/elliptic/spectral_hamiltonian_toy_nonlinear_3d.tn` is a
   manufactured nonlinear spectral constraint. Its runtime test solves
@@ -376,9 +385,32 @@ Host callback-level:
 - `point.physical[]` is populated by the runtime coordinate map before the
   generated residual is called.
 
-The initial compiler path supports scalar single-unknown residuals with scalar
-auxiliary point fields. Multi-unknown systems are intentionally left to the next
-ABI extension.
+The compiler path supports one differentiated scalar unknown per residual and
+scalar auxiliary point fields. Residual-system descriptors can bind an
+auxiliary to another current unknown, providing coupled multi-unknown systems.
+
+### `tensorium_spectral_residual_jvp_<target>`
+
+MLIR-level:
+- `(value, d1, ..., d33, direction_value, direction_d1, ...,
+  direction_d33, aux..., direction_aux..., x1, x2, x3, params...) -> f64`
+
+Host callback-level:
+- the ABI v2 residual descriptor pairs `evaluate_jvp` and `jvp_symbol_name`
+  with the primal callback;
+- the callback receives a primal `tensorium_spectral_residual_point` and a
+  direction point with the same derivative/auxiliary layout;
+- parameters and coordinates have zero tangent, while auxiliary tangents are
+  populated from coupled unknown directions when the system descriptor maps
+  them to another unknown.
+
+The compiler emits the primal and tangent MLIR together from the DSL residual.
+The forward-mode rules currently cover scalar `+`, `-`, `*`, `/`, `sqrt`,
+`sin`, first/second derivatives, contractions that form a Laplacian, and
+`laplacian()`. Constants, parameters, and coordinates have zero tangent.
+Opaque external scalar calls without a registered derivative remain
+unsupported in this generated path. The runtime automatically falls back to
+centered finite differences when `evaluate_jvp` is null.
 
 ### `tensorium_spectral_residual_grid_<target>`
 

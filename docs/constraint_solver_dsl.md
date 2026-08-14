@@ -810,7 +810,7 @@ initial_data QC0 {
       max_linear_iterations = 1024
       restart = 64
       preconditioner = mapped_fd_multigrid
-      preconditioner_sweeps = 6
+      preconditioner_sweeps = 12
       jvp_relative_step = 2e-6
       jvp_absolute_step = 1e-8
     }
@@ -828,9 +828,15 @@ coordinate maps, unknown maps, field projectors, and preconditioners.
 The experimental `mapped_fd_multigrid` preconditioner selects a geometric
 two-grid V-cycle over the mapped finite-difference operator;
 `preconditioner_sweeps` controls both its pre- and post-relaxation counts.
-The QC0 fixture uses this two-grid path with six pre- and six post-relaxation
-sweeps. `mapped_fd_laplacian_shift` remains available as the one-level
-alternative.
+The QC0 fixture uses this two-grid path with twelve pre- and twelve
+post-relaxation sweeps. The runtime augments its mapped Laplacian with the
+point kernel's local Jacobian reaction term at every Newton state.
+For supported scalar residual expressions, the compiler also emits a
+forward-mode `tensorium_spectral_residual_jvp_<target>` kernel directly from
+the DSL expression. Newton/FGMRES and the local-reaction estimate use this
+compiled `Jv`; centered finite differences remain the fallback for kernels
+that do not expose the ABI v2 callback.
+`mapped_fd_laplacian_shift` remains available as the one-level alternative.
 The spectral block owns its grid metadata, so a constraint-only source does
 not need a separate `simulation` block; the compiler synthesizes the internal
 three-dimensional spectral compilation metadata when it is absent.

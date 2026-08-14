@@ -76,7 +76,8 @@ inline std::vector<std::vector<double>> perturbSpectralSystemUnknowns(
 inline SpectralResidualSystemJacobianVectorProductResult
 makeSpectralResidualSystemJacobianVectorProductResult(std::vector<double> values,
                                                       double step,
-                                                      bool usedGridKernels) {
+                                                      bool usedGridKernels,
+                                                      bool usedJvpKernels = false) {
   SpectralResidualSystemJacobianVectorProductResult result;
   result.values = std::move(values);
   result.step = step;
@@ -84,7 +85,222 @@ makeSpectralResidualSystemJacobianVectorProductResult(std::vector<double> values
   result.maxAbs = spectralVectorMaxAbs(result.values);
   result.finite = spectralVectorIsFinite(result.values);
   result.usedGeneratedGridKernels = usedGridKernels;
+  result.usedGeneratedJvpKernels = usedJvpKernels;
   return result;
+}
+
+inline SpectralDerivatives3D mapSpectralJvpDerivatives(
+    const SpectralResidualProblem &problem,
+    const SpectralDerivatives3D &derivatives) {
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  SpectralDerivatives3D mapped = derivatives;
+  if (problem.unknownMap.transform) {
+    mapped = applySpectralUnknownMap(grid, mapped, problem.unknownMap,
+                                     problem.unknownMapParams);
+  }
+  if (problem.derivativeMap.transform) {
+    mapped = applySpectralDerivativeMap(
+        grid, mapped, problem.derivativeMap, problem.coordinateParams);
+  }
+  return mapped;
+}
+
+inline std::vector<double> evaluateGeneratedSpectralJacobianVectorProduct(
+    const SpectralResidualProblem &problem,
+    const SpectralDerivatives3D &stateDerivatives,
+    const SpectralDerivatives3D &directionDerivatives,
+    std::span<const std::vector<double>> auxiliaryFields,
+    std::span<const std::vector<double>> auxiliaryDirections = {}) {
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  if (!problem.kernel.evaluateJvp)
+    throw std::runtime_error("spectral residual JVP kernel callback is null");
+  validateSpectralDerivativeBundle(grid, stateDerivatives);
+  validateSpectralDerivativeBundle(grid, directionDerivatives);
+  if (!auxiliaryDirections.empty() &&
+      auxiliaryDirections.size() != auxiliaryFields.size()) {
+    throw std::runtime_error("spectral auxiliary JVP field count mismatch");
+  }
+  for (const auto &field : auxiliaryFields) {
+    if (field.size() != grid.size())
+      throw std::runtime_error("spectral auxiliary JVP field size mismatch");
+  }
+  for (const auto &field : auxiliaryDirections) {
+    if (field.size() != grid.size()) {
+      throw std::runtime_error(
+          "spectral auxiliary JVP direction size mismatch");
+    }
+  }
+
+  const SpectralDerivatives3D state =
+      mapSpectralJvpDerivatives(problem, stateDerivatives);
+  const SpectralDerivatives3D direction =
+      mapSpectralJvpDerivatives(problem, directionDerivatives);
+  std::vector<double> out(grid.size(), 0.0);
+  std::vector<double> pointAuxiliary(auxiliaryFields.size(), 0.0);
+  std::vector<double> directionAuxiliary(auxiliaryFields.size(), 0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const std::size_t index = grid.index(i, j, k);
+        for (std::size_t auxiliary = 0; auxiliary < auxiliaryFields.size();
+             ++auxiliary) {
+          pointAuxiliary[auxiliary] = auxiliaryFields[auxiliary][index];
+          directionAuxiliary[auxiliary] =
+              auxiliaryDirections.empty()
+                  ? 0.0
+                  : auxiliaryDirections[auxiliary][index];
+        }
+        const auto point = makeSpectralResidualPoint(
+            grid, state, i, j, k, problem.coordinateMap,
+            problem.coordinateParams, pointAuxiliary);
+        const auto tangent = makeSpectralResidualPoint(
+            grid, direction, i, j, k, problem.coordinateMap,
+            problem.coordinateParams, directionAuxiliary);
+        out[index] = problem.kernel.evaluateJvp(
+            &point, &tangent, problem.params.data(),
+            static_cast<std::int64_t>(problem.params.size()),
+            problem.kernel.userData);
+      }
+    }
+  }
+  return out;
+}
+
+inline bool spectralResidualSystemHasGeneratedJvpKernels(
+    const SpectralResidualSystemProblem &system) {
+  return !system.equations.empty() &&
+         std::all_of(system.equations.begin(), system.equations.end(),
+                     [](const SpectralResidualSystemEquation &equation) {
+                       return equation.problem.kernel.evaluateJvp != nullptr;
+                     });
+}
+
+inline SpectralResidualSystemJacobianVectorProductResult
+evaluateGeneratedSpectralResidualSystemJacobianVectorProduct(
+    const SpectralResidualSystemProblem &system,
+    std::span<const std::vector<double>> values,
+    std::span<const std::vector<double>> directions, double diagnosticStep) {
+  const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+  if (!spectralResidualSystemHasGeneratedJvpKernels(system))
+    throw std::runtime_error("spectral residual system JVP kernel is missing");
+
+  struct UnknownMapBinding {
+    SpectralUnknownMap map;
+    std::span<const double> params{};
+    bool bound = false;
+  };
+  std::vector<UnknownMapBinding> bindings(values.size());
+  for (const auto &equation : system.equations) {
+    if (equation.unknownIndex >= values.size())
+      throw std::runtime_error(
+          "spectral residual system JVP unknown index out of range");
+    if (!equation.problem.unknownMap.transform)
+      continue;
+    auto &binding = bindings[equation.unknownIndex];
+    if (binding.bound) {
+      const bool sameMap =
+          binding.map.transform == equation.problem.unknownMap.transform &&
+          binding.map.userData == equation.problem.unknownMap.userData;
+      const bool sameParams =
+          binding.params.size() == equation.problem.unknownMapParams.size() &&
+          std::equal(binding.params.begin(), binding.params.end(),
+                     equation.problem.unknownMapParams.begin());
+      if (!sameMap || !sameParams) {
+        throw std::runtime_error(
+            "spectral residual system JVP has conflicting unknown maps");
+      }
+    } else {
+      binding.map = equation.problem.unknownMap;
+      binding.params = equation.problem.unknownMapParams;
+      binding.bound = true;
+    }
+  }
+  for (const auto &equation : system.equations) {
+    if (bindings[equation.unknownIndex].bound &&
+        !equation.problem.unknownMap.transform) {
+      throw std::runtime_error(
+          "spectral residual system JVP equation is missing its unknown map");
+    }
+  }
+
+  std::vector<SpectralDerivatives3D> stateDerivatives;
+  std::vector<SpectralDerivatives3D> directionDerivatives;
+  stateDerivatives.reserve(values.size());
+  directionDerivatives.reserve(directions.size());
+  for (std::size_t unknown = 0; unknown < values.size(); ++unknown) {
+    stateDerivatives.push_back(grid.derivatives(values[unknown]));
+    directionDerivatives.push_back(grid.derivatives(directions[unknown]));
+  }
+
+  std::vector<std::vector<double>> physicalValues(values.size());
+  std::vector<std::vector<double>> physicalDirections(values.size());
+  for (std::size_t unknown = 0; unknown < values.size(); ++unknown) {
+    if (!bindings[unknown].bound)
+      continue;
+    physicalValues[unknown] =
+        applySpectralUnknownMap(grid, stateDerivatives[unknown],
+                                bindings[unknown].map,
+                                bindings[unknown].params)
+            .value;
+    physicalDirections[unknown] =
+        applySpectralUnknownMap(grid, directionDerivatives[unknown],
+                                bindings[unknown].map,
+                                bindings[unknown].params)
+            .value;
+  }
+
+  std::vector<double> out;
+  out.reserve(system.equations.size() * grid.size());
+  for (const auto &equation : system.equations) {
+    SpectralResidualProblem problem = equation.problem;
+    if (!problem.grid)
+      problem.grid = &grid;
+    if (problem.grid != &grid)
+      throw std::runtime_error("spectral residual system JVP grid mismatch");
+
+    std::vector<std::vector<double>> auxiliaryFields;
+    std::vector<std::vector<double>> auxiliaryDirections;
+    auxiliaryFields.reserve(problem.auxiliaryFields.size());
+    auxiliaryDirections.reserve(problem.auxiliaryFields.size());
+    if (!equation.auxiliaryUnknownIndices.empty() &&
+        equation.auxiliaryUnknownIndices.size() !=
+            problem.auxiliaryFields.size()) {
+      throw std::runtime_error(
+          "spectral residual system auxiliary JVP map size mismatch");
+    }
+    for (std::size_t auxiliary = 0;
+         auxiliary < problem.auxiliaryFields.size(); ++auxiliary) {
+      const SpectralAuxiliaryUnknownIndex mappedUnknown =
+          equation.auxiliaryUnknownIndices.empty()
+              ? kSpectralStaticAuxiliary
+              : equation.auxiliaryUnknownIndices[auxiliary];
+      if (mappedUnknown == kSpectralStaticAuxiliary) {
+        auxiliaryFields.push_back(problem.auxiliaryFields[auxiliary]);
+        auxiliaryDirections.emplace_back(grid.size(), 0.0);
+        continue;
+      }
+      if (mappedUnknown < 0 ||
+          static_cast<std::size_t>(mappedUnknown) >= values.size()) {
+        throw std::runtime_error(
+            "spectral residual system auxiliary JVP unknown out of range");
+      }
+      const std::size_t unknown = static_cast<std::size_t>(mappedUnknown);
+      auxiliaryFields.push_back(bindings[unknown].bound
+                                    ? physicalValues[unknown]
+                                    : values[unknown]);
+      auxiliaryDirections.push_back(bindings[unknown].bound
+                                        ? physicalDirections[unknown]
+                                        : directions[unknown]);
+    }
+
+    const auto equationJvp = evaluateGeneratedSpectralJacobianVectorProduct(
+        problem, stateDerivatives[equation.unknownIndex],
+        directionDerivatives[equation.unknownIndex], auxiliaryFields,
+        auxiliaryDirections);
+    out.insert(out.end(), equationJvp.begin(), equationJvp.end());
+  }
+  return makeSpectralResidualSystemJacobianVectorProductResult(
+      std::move(out), diagnosticStep, false, true);
 }
 
 inline SpectralResidualSystemJacobianVectorProductResult
@@ -99,7 +315,12 @@ evaluateSpectralResidualSystemJacobianVectorProduct(
   if (step == 0.0) {
     return makeSpectralResidualSystemJacobianVectorProductResult(
         std::vector<double>(system.equations.size() * grid.size(), 0.0), step,
-        false);
+        false, spectralResidualSystemHasGeneratedJvpKernels(system));
+  }
+
+  if (spectralResidualSystemHasGeneratedJvpKernels(system)) {
+    return evaluateGeneratedSpectralResidualSystemJacobianVectorProduct(
+        system, values, directions, step);
   }
 
   const auto plus = perturbSpectralSystemUnknowns(values, directions, step);
@@ -169,7 +390,16 @@ evaluateSpectralJacobianVectorProduct(
       spectralJacobianVectorProductStep(grid, values, direction, options);
   if (step == 0.0)
     return makeSpectralJacobianVectorProductResult(
-        std::vector<double>(grid.size(), 0.0), step);
+        std::vector<double>(grid.size(), 0.0), step,
+        problem.kernel.evaluateJvp != nullptr);
+
+  if (problem.kernel.evaluateJvp) {
+    return makeSpectralJacobianVectorProductResult(
+        evaluateGeneratedSpectralJacobianVectorProduct(
+            problem, grid.derivatives(values), grid.derivatives(direction),
+            problem.auxiliaryFields),
+        step, true);
+  }
 
   std::vector<double> plus(values.size(), 0.0);
   for (std::size_t p = 0; p < values.size(); ++p)

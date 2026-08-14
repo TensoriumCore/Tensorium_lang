@@ -6,7 +6,7 @@ namespace tensorium_mlir::abi {
 
 // Bump this value only when changing generated symbol signatures or
 // argument-order contracts in a backward-incompatible way.
-inline constexpr std::int64_t kGeneratedKernelABIVersion = 1;
+inline constexpr std::int64_t kGeneratedKernelABIVersion = 2;
 
 // Module and function attributes used to expose the generated ABI contract.
 inline constexpr const char kAttrABIVersion[] = "tensorium.abi.version";
@@ -52,6 +52,8 @@ inline constexpr const char kSymbolResidualGridParallel[] =
     "tensorium_residual_grid_parallel";
 inline constexpr const char kSymbolSpectralResidualPrefix[] =
     "tensorium_spectral_residual_";
+inline constexpr const char kSymbolSpectralResidualJvpPrefix[] =
+    "tensorium_spectral_residual_jvp_";
 inline constexpr const char kSymbolSpectralResidualGridPrefix[] =
     "tensorium_spectral_residual_grid_";
 
@@ -71,6 +73,8 @@ inline constexpr const char kKindResidualGridParallel[] =
     "residual_grid_parallel";
 inline constexpr const char kKindSpectralResidualPoint[] =
     "spectral_residual_point";
+inline constexpr const char kKindSpectralResidualJvpPoint[] =
+    "spectral_residual_jvp_point";
 inline constexpr const char kKindSpectralResidualGrid[] =
     "spectral_residual_grid";
 

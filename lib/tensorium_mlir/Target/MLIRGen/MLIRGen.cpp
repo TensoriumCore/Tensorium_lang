@@ -304,6 +304,51 @@ void emitSpectralResidualWrapper(std::ostringstream &os,
      << "}\n";
 }
 
+void emitSpectralResidualJvpWrapper(std::ostringstream &os,
+                                    const HostKernelABI &kernel) {
+  if (kernel.fields.empty() || kernel.outputs.size() != 1)
+    return;
+  const std::size_t auxiliaryCount = kernel.fields.size() - 1;
+
+  os << "static inline double " << kernel.wrapperName << "(\n"
+     << "    const tensorium_spectral_residual_point *point,\n"
+     << "    const tensorium_spectral_residual_point *direction,\n"
+     << "    const double *params, int64_t param_count, void *user_data) {\n"
+     << "  (void)user_data;\n"
+     << "  if (!point || !direction)\n"
+     << "    return 0.0;\n"
+     << "  if (param_count != "
+     << static_cast<std::int64_t>(kernel.params.size()) << ")\n"
+     << "    return 0.0;\n";
+  if (!kernel.params.empty())
+    os << "  if (!params)\n"
+       << "    return 0.0;\n";
+  os << "  if (point->aux_count != "
+     << static_cast<std::int64_t>(auxiliaryCount)
+     << " || direction->aux_count != "
+     << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
+     << "    return 0.0;\n";
+  if (auxiliaryCount > 0)
+    os << "  if (!point->aux_values || !direction->aux_values)\n"
+       << "    return 0.0;\n";
+
+  os << "  return " << kernel.symbolName << "("
+     << "point->value, point->d1, point->d2, point->d3, point->d11, "
+        "point->d12, point->d13, point->d22, point->d23, point->d33, "
+     << "direction->value, direction->d1, direction->d2, direction->d3, "
+        "direction->d11, direction->d12, direction->d13, direction->d22, "
+        "direction->d23, direction->d33";
+  for (std::size_t i = 0; i < auxiliaryCount; ++i)
+    os << ", point->aux_values[" << i << "]";
+  for (std::size_t i = 0; i < auxiliaryCount; ++i)
+    os << ", direction->aux_values[" << i << "]";
+  os << ", point->physical[0], point->physical[1], point->physical[2]";
+  for (std::size_t i = 0; i < kernel.params.size(); ++i)
+    os << ", params[" << i << "]";
+  os << ");\n"
+     << "}\n";
+}
+
 std::string spectralResidualGridEvalNameFor(const HostKernelABI &kernel) {
   return "tensorium_eval_" +
          makeHostCIdentifier(kernel.symbolName, "spectral_residual_grid");
@@ -456,6 +501,9 @@ void emitConvenienceWrapper(
   } else if (kernel.kind == tensorium_mlir::abi::kKindSpectralResidualPoint) {
     emitSpectralResidualWrapper(os, kernel);
   } else if (kernel.kind ==
+             tensorium_mlir::abi::kKindSpectralResidualJvpPoint) {
+    emitSpectralResidualJvpWrapper(os, kernel);
+  } else if (kernel.kind ==
              tensorium_mlir::abi::kKindSpectralResidualGrid) {
     emitSpectralResidualGridWrapper(os, kernel);
   }
@@ -581,6 +629,10 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "typedef double (*tensorium_spectral_residual_kernel_fn)(\n"
      << "    const tensorium_spectral_residual_point *point,\n"
      << "    const double *params, int64_t param_count, void *user_data);\n\n"
+     << "typedef double (*tensorium_spectral_residual_jvp_kernel_fn)(\n"
+     << "    const tensorium_spectral_residual_point *point,\n"
+     << "    const tensorium_spectral_residual_point *direction,\n"
+     << "    const double *params, int64_t param_count, void *user_data);\n\n"
      << "typedef int (*tensorium_spectral_residual_grid_kernel_fn)(\n"
      << "    int64_t n_points, const double *params, int64_t param_count,\n"
      << "    const double *value, const double *d1, const double *d2,\n"
@@ -595,6 +647,8 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "typedef struct tensorium_spectral_residual_kernel_desc {\n"
      << "  const char *symbol_name;\n"
      << "  tensorium_spectral_residual_kernel_fn evaluate;\n"
+     << "  const char *jvp_symbol_name;\n"
+     << "  tensorium_spectral_residual_jvp_kernel_fn evaluate_jvp;\n"
      << "  void *user_data;\n"
      << "} tensorium_spectral_residual_kernel_desc;\n\n"
      << "typedef struct tensorium_spectral_residual_grid_kernel_desc {\n"
@@ -828,6 +882,10 @@ bool isSpectralResidualKernel(const HostKernelABI &kernel) {
   return kernel.kind == tensorium_mlir::abi::kKindSpectralResidualPoint;
 }
 
+bool isSpectralResidualJvpKernel(const HostKernelABI &kernel) {
+  return kernel.kind == tensorium_mlir::abi::kKindSpectralResidualJvpPoint;
+}
+
 bool isSpectralResidualGridKernel(const HostKernelABI &kernel) {
   return kernel.kind == tensorium_mlir::abi::kKindSpectralResidualGrid;
 }
@@ -846,7 +904,7 @@ void emitSpectralResidualDescriptors(std::ostringstream &os,
         "tensorium_spectral_residual_kernels["
      << (count == 0 ? 1 : count) << "] = {\n";
   if (count == 0) {
-    os << "  {0, 0, 0}\n";
+    os << "  {0, 0, 0, 0, 0}\n";
   } else {
     bool first = true;
     for (const auto &kernel : abi.kernels) {
@@ -855,8 +913,23 @@ void emitSpectralResidualDescriptors(std::ostringstream &os,
       if (!first)
         os << ",\n";
       first = false;
+      const HostKernelABI *jvpKernel = nullptr;
+      for (const auto &candidate : abi.kernels) {
+        if (isSpectralResidualJvpKernel(candidate) &&
+            candidate.outputs == kernel.outputs) {
+          jvpKernel = &candidate;
+          break;
+        }
+      }
       os << "  {" << cStringLiteral(kernel.symbolName) << ", &"
-         << kernel.wrapperName << ", 0}";
+         << kernel.wrapperName << ", ";
+      if (jvpKernel) {
+        os << cStringLiteral(jvpKernel->symbolName) << ", &"
+           << jvpKernel->wrapperName;
+      } else {
+        os << "0, 0";
+      }
+      os << ", 0}";
     }
     os << "\n";
   }
@@ -1080,7 +1153,7 @@ void emitSpectralInitialDataDescriptor(std::ostringstream &os,
   os << std::setprecision(17)
      << "static const tensorium_spectral_initial_data_desc "
         "tensorium_spectral_initial_data[1] = {{\n"
-     << "  1,\n"
+     << "  " << tensorium_mlir::abi::kGeneratedKernelABIVersion << ",\n"
      << "  " << cStringLiteral(initialData.name) << ",\n"
      << "  " << cStringLiteral(initialData.system) << ",\n"
      << "  " << cStringLiteral(initialData.coordinateMap) << ",\n"

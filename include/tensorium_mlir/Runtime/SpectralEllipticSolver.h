@@ -1061,12 +1061,137 @@ inline SpectralPointDerivatives3D transformSpectralPreconditionerBundle(
   return physicalBundle;
 }
 
+inline std::vector<double> estimateSpectralLocalReactionDiagonal(
+    const SpectralResidualProblem &problem, const std::vector<double> &values,
+    const SpectralJacobianVectorProductOptions &options) {
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  if (values.size() != grid.size())
+    throw std::runtime_error(
+        "spectral local reaction state size mismatch");
+  std::vector<double> reaction(grid.size(), 0.0);
+  if (!problem.kernel.evaluate)
+    return reaction;
+  if (!problem.kernel.evaluateJvp &&
+      (!(options.relativeStep > 0.0) ||
+       !std::isfinite(options.relativeStep) || options.absoluteStep < 0.0 ||
+       !std::isfinite(options.absoluteStep))) {
+    throw std::runtime_error(
+        "spectral local reaction finite-difference step is invalid");
+  }
+
+  SpectralDerivatives3D assembled = grid.derivatives(values);
+  if (problem.unknownMap.transform) {
+    assembled = applySpectralUnknownMap(grid, assembled, problem.unknownMap,
+                                        problem.unknownMapParams);
+  }
+  if (problem.derivativeMap.transform) {
+    assembled = applySpectralDerivativeMap(
+        grid, assembled, problem.derivativeMap, problem.coordinateParams);
+  }
+
+  std::vector<double> auxiliaryValues(problem.auxiliaryFields.size(), 0.0);
+  std::vector<double> auxiliaryDirections(problem.auxiliaryFields.size(),
+                                          0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const SpectralPoint3D gridPoint = grid.point(i, j, k);
+        for (std::size_t auxiliary = 0;
+             auxiliary < problem.auxiliaryFields.size(); ++auxiliary) {
+          if (problem.auxiliaryFields[auxiliary].size() != grid.size())
+            throw std::runtime_error(
+                "spectral local reaction auxiliary size mismatch");
+          auxiliaryValues[auxiliary] =
+              problem.auxiliaryFields[auxiliary][gridPoint.index];
+        }
+        auto point = makeSpectralResidualPoint(
+            grid, assembled, i, j, k, problem.coordinateMap,
+            problem.coordinateParams, auxiliaryValues);
+        double derivative = 0.0;
+        SpectralPointDerivatives3D unitSolverValue{};
+        unitSolverValue.value = 1.0;
+        const double logical[3] = {gridPoint.x1, gridPoint.x2,
+                                   gridPoint.x3};
+        const auto physicalUnit = transformSpectralPreconditionerBundle(
+            problem, logical, unitSolverValue);
+        if (problem.kernel.evaluateJvp) {
+          tensorium_spectral_residual_point tangent{};
+          tangent.i = point.i;
+          tangent.j = point.j;
+          tangent.k = point.k;
+          tangent.index = point.index;
+          tangent.value = physicalUnit.value;
+          tangent.aux_values = auxiliaryDirections.data();
+          tangent.aux_count =
+              static_cast<std::int64_t>(auxiliaryDirections.size());
+          derivative = problem.kernel.evaluateJvp(
+              &point, &tangent, problem.params.data(),
+              static_cast<std::int64_t>(problem.params.size()),
+              problem.kernel.userData);
+        } else if (options.centeredDifference) {
+          const double step = std::max(
+              options.absoluteStep,
+              options.relativeStep * std::max(1.0, std::fabs(point.value)));
+          if (!(step > 0.0) || !std::isfinite(step))
+            throw std::runtime_error(
+                "spectral local reaction step is not positive");
+          auto plus = point;
+          auto minus = point;
+          plus.value += step;
+          minus.value -= step;
+          const double plusResidual = problem.kernel.evaluate(
+              &plus, problem.params.data(),
+              static_cast<std::int64_t>(problem.params.size()),
+              problem.kernel.userData);
+          const double minusResidual = problem.kernel.evaluate(
+              &minus, problem.params.data(),
+              static_cast<std::int64_t>(problem.params.size()),
+              problem.kernel.userData);
+          derivative = (plusResidual - minusResidual) / (2.0 * step);
+        } else {
+          const double step = std::max(
+              options.absoluteStep,
+              options.relativeStep * std::max(1.0, std::fabs(point.value)));
+          if (!(step > 0.0) || !std::isfinite(step))
+            throw std::runtime_error(
+                "spectral local reaction step is not positive");
+          const double baseResidual = problem.kernel.evaluate(
+              &point, problem.params.data(),
+              static_cast<std::int64_t>(problem.params.size()),
+              problem.kernel.userData);
+          auto plus = point;
+          plus.value += step;
+          const double plusResidual = problem.kernel.evaluate(
+              &plus, problem.params.data(),
+              static_cast<std::int64_t>(problem.params.size()),
+              problem.kernel.userData);
+          derivative = (plusResidual - baseResidual) / step;
+        }
+
+        reaction[gridPoint.index] =
+            problem.kernel.evaluateJvp
+                ? derivative
+                : derivative * physicalUnit.value;
+        if (!std::isfinite(reaction[gridPoint.index]))
+          throw std::runtime_error(
+              "spectral local reaction diagonal is not finite");
+      }
+    }
+  }
+  return reaction;
+}
+
 inline SpectralSparseMatrix buildSpectralMappedFiniteDifferenceLaplacianShift(
     const SpectralResidualProblem &problem, double shift,
-    double pivotTolerance) {
+    double pivotTolerance,
+    std::span<const double> localReactionDiagonal = {}) {
   const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
   if (!std::isfinite(shift))
     throw std::runtime_error("mapped finite-difference shift is not finite");
+  if (!localReactionDiagonal.empty() &&
+      localReactionDiagonal.size() != grid.size())
+    throw std::runtime_error(
+        "mapped finite-difference local reaction size mismatch");
 
   SpectralSparseMatrix matrix;
   matrix.size = grid.size();
@@ -1121,8 +1246,10 @@ inline SpectralSparseMatrix buildSpectralMappedFiniteDifferenceLaplacianShift(
         for (const auto &[column, logicalBundle] : entries) {
           const auto physicalBundle = transformSpectralPreconditionerBundle(
               problem, logical, logicalBundle);
-          const double coefficient =
+          double coefficient =
               physicalBundle.laplacian() + shift * physicalBundle.value;
+          if (column == point.index && !localReactionDiagonal.empty())
+            coefficient += localReactionDiagonal[point.index];
           if (!std::isfinite(coefficient))
             throw std::runtime_error(
                 "mapped finite-difference coefficient is not finite");
@@ -1215,14 +1342,16 @@ inline std::vector<double> buildSpectralGalerkinCoarseMatrix(
 inline SpectralTwoGridPreconditionerBlock
 buildSpectralMappedFiniteDifferenceTwoGrid(
     const SpectralResidualProblem &problem, double shift,
-    double pivotTolerance) {
+    double pivotTolerance,
+    std::span<const double> localReactionDiagonal = {}) {
   const SpectralGrid3D &fineGrid = requireSpectralResidualGrid(problem);
   SpectralGrid3D coarseGrid = makeSpectralMultigridCoarseGrid(fineGrid);
 
   SpectralTwoGridPreconditionerBlock multigrid;
   multigrid.fineMatrix =
       buildSpectralMappedFiniteDifferenceLaplacianShift(problem, shift,
-                                                         pivotTolerance);
+                                                         pivotTolerance,
+                                                         localReactionDiagonal);
   multigrid.transfer =
       buildSpectralTensorGridTransfer(fineGrid, coarseGrid);
   multigrid.coarseDenseMatrix = buildSpectralGalerkinCoarseMatrix(
@@ -1354,10 +1483,15 @@ inline bool buildSpectralScalarPreconditioner(
         options.preconditionerMultigridPreSweeps;
     preconditioner.multigridPostSweeps =
         options.preconditionerMultigridPostSweeps;
+    const std::vector<double> localReaction =
+        options.preconditionerMultigridUseLocalReaction
+            ? estimateSpectralLocalReactionDiagonal(problem, values,
+                                                    options.jvpOptions)
+            : std::vector<double>{};
     preconditioner.multigridBlocks.push_back(
         buildSpectralMappedFiniteDifferenceTwoGrid(
             problem, options.preconditionerLaplacianShift,
-            options.preconditionerPivotTolerance));
+            options.preconditionerPivotTolerance, localReaction));
     return true;
   }
   if (options.gmresPreconditioner ==
@@ -1903,12 +2037,19 @@ inline bool buildSpectralSystemPreconditioner(
         options.preconditionerMultigridPostSweeps;
     preconditioner.multigridBlocks.resize(fieldCount);
     for (const auto &equation : system.equations) {
+      const std::vector<double> localReaction =
+          options.preconditionerMultigridUseLocalReaction &&
+                  equation.auxiliaryUnknownIndices.empty()
+              ? estimateSpectralLocalReactionDiagonal(
+                    equation.problem, values[equation.unknownIndex],
+                    options.jvpOptions)
+              : std::vector<double>{};
       preconditioner.multigridBlocks[equation.unknownIndex] =
           buildSpectralMappedFiniteDifferenceTwoGrid(
               equation.problem,
               spectralPreconditionerShiftForBlock(options,
                                                   equation.unknownIndex),
-              options.preconditionerPivotTolerance);
+              options.preconditionerPivotTolerance, localReaction);
     }
     return true;
   }

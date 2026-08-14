@@ -94,6 +94,7 @@ bool isHostCallableKind(llvm::StringRef kind) {
          kind == tensorium_mlir::abi::kKindResidualGridAffine ||
          kind == tensorium_mlir::abi::kKindResidualGridParallel ||
          kind == tensorium_mlir::abi::kKindSpectralResidualPoint ||
+         kind == tensorium_mlir::abi::kKindSpectralResidualJvpPoint ||
          kind == tensorium_mlir::abi::kKindSpectralResidualGrid;
 }
 
@@ -146,6 +147,20 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
              "d22",   "d23", "d33"};
     for (std::size_t i = 1; i < fields.size(); ++i)
       names.push_back(fields[i]);
+    append(coords);
+    append(params);
+  } else if (kind ==
+             tensorium_mlir::abi::kKindSpectralResidualJvpPoint) {
+    const char *derivatives[] = {"value", "d1",  "d2",  "d3",  "d11",
+                                 "d12",   "d13", "d22", "d23", "d33"};
+    for (const char *name : derivatives)
+      names.push_back(name);
+    for (const char *name : derivatives)
+      names.push_back(std::string("direction_") + name);
+    for (std::size_t i = 1; i < fields.size(); ++i)
+      names.push_back(fields[i]);
+    for (std::size_t i = 1; i < fields.size(); ++i)
+      names.push_back("direction_" + fields[i]);
     append(coords);
     append(params);
   } else if (kind == tensorium_mlir::abi::kKindSpectralResidualGrid) {

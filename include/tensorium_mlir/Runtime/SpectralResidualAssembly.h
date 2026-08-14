@@ -10,8 +10,10 @@ spectralResidualKernelFromDesc(const tensorium_spectral_residual_kernel_desc &de
     throw std::runtime_error("spectral residual kernel symbol is empty");
   if (!desc.evaluate)
     throw std::runtime_error("spectral residual kernel callback is null");
-  return SpectralResidualKernel{desc.symbol_name, desc.evaluate,
-                                desc.user_data};
+  return SpectralResidualKernel{
+      desc.symbol_name, desc.evaluate,
+      desc.jvp_symbol_name ? desc.jvp_symbol_name : "", desc.evaluate_jvp,
+      desc.user_data};
 }
 
 inline SpectralResidualGridKernel spectralResidualGridKernelFromDesc(
@@ -231,13 +233,15 @@ makeSpectralResidualAssemblyResult(std::vector<double> values,
 
 inline SpectralJacobianVectorProductResult
 makeSpectralJacobianVectorProductResult(std::vector<double> values,
-                                        double step) {
+                                        double step,
+                                        bool usedGeneratedJvpKernel = false) {
   SpectralJacobianVectorProductResult result;
   result.values = std::move(values);
   result.step = step;
   result.l2Norm = spectralVectorL2Norm(result.values);
   result.maxAbs = spectralVectorMaxAbs(result.values);
   result.finite = spectralVectorIsFinite(result.values);
+  result.usedGeneratedJvpKernel = usedGeneratedJvpKernel;
   return result;
 }
 

@@ -43,6 +43,10 @@ if ! grep -q "define void @tensorium_spectral_residual_grid_H" "$LL_PATH"; then
   echo "error: expected generated two-puncture LLVM grid kernel" >&2
   exit 2
 fi
+if ! grep -q "define double @tensorium_spectral_residual_jvp_H" "$LL_PATH"; then
+  echo "error: expected generated two-puncture LLVM JVP kernel" >&2
+  exit 2
+fi
 
 echo "[two-puncture-hamiltonian] compiling generated LLVM and runner"
 if command -v "$LLC_BIN" >/dev/null 2>&1; then

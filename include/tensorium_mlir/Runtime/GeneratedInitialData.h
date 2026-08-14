@@ -5,6 +5,7 @@
 #include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMap.h"
 #include "tensorium_mlir/Runtime/TwoPunctureSymmetry.h"
+#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 
 #include <array>
 #include <cmath>
@@ -196,7 +197,8 @@ inline GeneratedSpectralInitialDataSolution solveGeneratedSpectralInitialData(
     const std::unordered_map<std::string, double> &parameterOverrides = {},
     const char *preconditionerOverride = nullptr,
     int preconditionerSweepsOverride = 0) {
-  if (desc.abi_version != 1)
+  if (desc.abi_version !=
+      tensorium_mlir::abi::kGeneratedKernelABIVersion)
     throw std::runtime_error(
         "unsupported generated spectral initial_data ABI version");
   requireGeneratedInitialDataString(desc.symbol_name, "name");

@@ -65,7 +65,7 @@ initial_data QC0 {
             max_linear_iterations = 1024
             restart = 64
             preconditioner = mapped_fd_multigrid
-            preconditioner_sweeps = 6
+            preconditioner_sweeps = 12
             jvp_relative_step = 2e-6
             jvp_absolute_step = 1e-8
         }

@@ -268,7 +268,11 @@ that operator. It coarsens every Chebyshev/Fourier axis, transfers fields with
 the corresponding tensor-product spectral interpolation, applies symmetric
 pre- and post-relaxation, and solves the Galerkin coarse correction `R A P`.
 The dense coarse LU is built once with the preconditioner and reused by every
-FGMRES application.
+FGMRES application. At each Newton state, the compiled point JVP evaluates the
+nonlinear reaction derivative. After accounting for the unknown map, this
+`O(N)` diagonal correction is inserted into the fine operator before
+constructing `R A P`; no global JVP columns are assembled. Kernels without the
+ABI v2 JVP callback retain the previous local finite-difference estimate.
 
 With the sparse mapped preconditioner, the physical regression now includes a
 `7x7x12` grid with 588 unknowns:
@@ -390,10 +394,10 @@ performs the Cartesian BSSN handoff, and writes both the requested CSV and
 
 ```text
 Newton steps:                  4
-cumulative FGMRES iterations: 67
-Hamiltonian residual L2:       6.69e-9
-Hamiltonian residual max:      7.57e-8
-ADM energy:                    1.00792631
+cumulative FGMRES iterations: 58
+Hamiltonian residual L2:       6.03e-9
+Hamiltonian residual max:      6.23e-8
+ADM energy:                    1.00792629
 ADM angular momentum Jz:       0.77876433
 puncture ADM masses:           0.51685532, 0.51685532
 axis regularity error:         6.66e-6
@@ -466,13 +470,21 @@ script detects MacPorts or Homebrew `libomp`; on other platforms it uses
 `-fopenmp`. `TENSORIUM_CXXFLAGS` and `TENSORIUM_LDFLAGS` can append toolchain-
 specific flags.
 
-On the QC0 `10x10x16` regression, the current two-grid default completes four
-Newton steps in about `0.17 s` with 67 cumulative Krylov iterations, compared
-with 90 iterations for the previous one-level default. These are
-single-machine engineering measurements, not a production-scaling claim.
-Higher resolutions still require a stronger hierarchy and operator
-approximation; the first two-grid prototype still fails the `12x12x20` QC0
-acceptance criterion.
+The compiler now differentiates the DSL residual alongside the primal MLIR
+kernel and emits `tensorium_spectral_residual_jvp_H`. The runtime uses that
+forward-mode kernel for matrix-free Newton/FGMRES and for the multigrid local
+reaction term, while retaining centered finite differences as an ABI fallback.
+On the nonlinear two-puncture regression, the generated `Jv` agrees with the
+fallback centered difference to `8.4e-11` maximum relative error.
+
+On the QC0 `10x10x16` regression, the Jacobian-aware two-grid default completes
+four Newton steps in about `0.19 s` with 58 cumulative Krylov iterations,
+compared with 67 for the Laplacian-only two-grid and 90 for the previous
+one-level default. These are single-machine engineering measurements, not a
+production-scaling claim. At `12x12x20`, the same configuration reaches an L2
+residual of `7.48e-8` before a linear solve exhausts its 1024-iteration budget;
+it therefore still fails the `2e-8` QC0 acceptance criterion. Higher
+resolutions require a stronger hierarchy or operator approximation.
 
 ## What remains before production TwoPunctures
 

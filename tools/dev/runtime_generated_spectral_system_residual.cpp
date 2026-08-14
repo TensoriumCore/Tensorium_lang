@@ -216,9 +216,9 @@ int main() {
                 jvp.l2Norm, jvp.maxAbs);
     std::printf("[generated-spectral-system] jvp max error = %.17g\n",
                 jvpError);
-    if (!jvp.finite || !jvp.usedGeneratedGridKernels ||
+    if (!jvp.finite || !jvp.usedGeneratedJvpKernels ||
         jvp.size() != 2 * grid.size() || jvp.step <= 0.0 ||
-        jvpError > 2e-8) {
+        jvpError > 2e-11) {
       std::fprintf(stderr, "generated spectral system JVP mismatch\n");
       return 4;
     }
@@ -336,8 +336,8 @@ int main() {
     std::printf(
         "[generated-spectral-system] permuted jvp max error = %.17g\n",
         permutedJvpError);
-    if (!permutedJvp.finite || !permutedJvp.usedGeneratedGridKernels ||
-        permutedJvp.size() != 2 * grid.size() || permutedJvpError > 2e-8) {
+    if (!permutedJvp.finite || !permutedJvp.usedGeneratedJvpKernels ||
+        permutedJvp.size() != 2 * grid.size() || permutedJvpError > 2e-11) {
       std::fprintf(stderr, "generated permuted spectral system JVP mismatch\n");
       return 7;
     }
