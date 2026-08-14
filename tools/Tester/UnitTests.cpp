@@ -3432,7 +3432,7 @@ constraints IdentityResidual {
   if (initialData.name != "QC0" ||
       initialData.system != "SpectralTwoPunctureHamiltonian3D" ||
       initialData.coordinateMap != "two_puncture" ||
-      initialData.resolution != std::vector<int>({14, 14, 24}) ||
+      initialData.resolution != std::vector<int>({14, 14, 8}) ||
       initialData.basis !=
           std::vector<std::string>({"chebyshev", "chebyshev", "fourier"}) ||
       initialData.coordinateParameters != std::vector<std::string>({"b"}) ||
@@ -5780,6 +5780,7 @@ static bool testSpectralLocalReactionDiagonal() {
 
 static bool testSpectralTwoGridTransferPreservesResolvedModes() {
   using tensorium_mlir::runtime::buildSpectralTensorGridTransfer;
+  using tensorium_mlir::runtime::interpolateSpectralField;
   using tensorium_mlir::runtime::makeSpectralMultigridCoarseGrid;
   using tensorium_mlir::runtime::prolongSpectralField;
   using tensorium_mlir::runtime::restrictSpectralField;
@@ -5820,17 +5821,25 @@ static bool testSpectralTwoGridTransferPreservesResolvedModes() {
   }
 
   const auto prolonged = prolongSpectralField(transfer, coarseValues);
+  const auto interpolated =
+      interpolateSpectralField(coarse, fine, coarseValues);
   double roundTripError = 0.0;
+  double interpolationError = 0.0;
   for (std::size_t point = 0; point < fine.size(); ++point)
     roundTripError = std::max(roundTripError,
                               std::abs(prolonged[point] - fineValues[point]));
+  for (std::size_t point = 0; point < fine.size(); ++point)
+    interpolationError = std::max(
+        interpolationError, std::abs(interpolated[point] - fineValues[point]));
 
   if (coarse.n1() != 5 || coarse.n2() != 4 || coarse.n3() != 6 ||
-      restrictionError > 2.0e-12 || roundTripError > 3.0e-12) {
+      restrictionError > 2.0e-12 || roundTripError > 3.0e-12 ||
+      interpolationError > 3.0e-12) {
     std::cerr << "FAIL: spectral two-grid transfer extents=" << coarse.n1()
               << 'x' << coarse.n2() << 'x' << coarse.n3()
               << " restriction=" << restrictionError
-              << " round-trip=" << roundTripError << "\n";
+              << " round-trip=" << roundTripError
+              << " interpolation=" << interpolationError << "\n";
     return false;
   }
   return true;

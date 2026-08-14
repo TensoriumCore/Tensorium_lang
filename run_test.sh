@@ -871,18 +871,25 @@ TP_SLICE_N=17 bash ./run_two_puncture_qc0.sh /tmp/tensorium_qc0_smoke.csv
 grep -q '^i,j,x,y,z,u,psi,chi,alpha,gammatilde_xx' \
   /tmp/tensorium_qc0_smoke.csv
 grep -q '"case": "QC0"' /tmp/tensorium_qc0_smoke.csv.json
+grep -q '"spectral_resolution": \[24, 24, 12\]' \
+  /tmp/tensorium_qc0_smoke.csv.json
+grep -q '"continuation_stages": \[{"resolution": \[14, 14, 8\]' \
+  /tmp/tensorium_qc0_smoke.csv.json
 bash ./run_initial_data.sh \
   tests/fixtures/elliptic/spectral_identity_initial_data_3d.tn \
   /tmp/tensorium_spectral_identity.csv
 grep -q '^i,j,k,q1,q2,q3,x,y,z,U$' /tmp/tensorium_spectral_identity.csv
 grep -q '"case": "SpectralIdentity"' \
   /tmp/tensorium_spectral_identity.csv.json
-bash ./run_initial_data.sh \
+TENSORIUM_INITIAL_DATA_CONTINUATION='3x3x4;4x4x4;6x6x4' \
+  bash ./run_initial_data.sh \
   tests/fixtures/elliptic/spectral_two_field_initial_data_3d.tn \
   /tmp/tensorium_coupled_scalar.csv
 grep -q '^i,j,k,q1,q2,q3,x,y,z,u,v$' \
   /tmp/tensorium_coupled_scalar.csv
 grep -q '"case": "CoupledScalarManufactured"' \
+  /tmp/tensorium_coupled_scalar.csv.json
+grep -q '"continuation_stages": \[{"resolution": \[3, 3, 4\]' \
   /tmp/tensorium_coupled_scalar.csv.json
 awk -F, '
   NR > 1 {

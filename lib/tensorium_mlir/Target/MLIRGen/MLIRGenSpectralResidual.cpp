@@ -721,9 +721,12 @@ private:
   }
 
   mlir::Value laplacian(const SpectralPointArgs &args) const {
-    mlir::Value sum =
-        b.create<mlir::arith::AddFOp>(loc, args.d11, args.d22).getResult();
-    return b.create<mlir::arith::AddFOp>(loc, sum, args.d33).getResult();
+    // Pair the transverse Hessian entries before adding the axial one.
+    // Cylindrical-like coordinate maps may form d22 and d33 from individually
+    // large angular terms which cancel in their trace near the axis.
+    mlir::Value transverse =
+        b.create<mlir::arith::AddFOp>(loc, args.d22, args.d33).getResult();
+    return b.create<mlir::arith::AddFOp>(loc, args.d11, transverse).getResult();
   }
 
   mlir::Value gradientDot(const SpectralPointArgs &lhs,
@@ -1087,13 +1090,14 @@ private:
 
   SpectralDualValue laplacian(const SpectralPointArgs &primalArgs,
                               const SpectralPointArgs &tangentArgs) {
-    mlir::Value primal12 =
-        b.create<mlir::arith::AddFOp>(loc, primalArgs.d11, primalArgs.d22);
-    mlir::Value tangent12 =
-        b.create<mlir::arith::AddFOp>(loc, tangentArgs.d11, tangentArgs.d22);
-    return {b.create<mlir::arith::AddFOp>(loc, primal12, primalArgs.d33),
-            b.create<mlir::arith::AddFOp>(loc, tangent12, tangentArgs.d33),
-            true};
+    mlir::Value primalTransverse =
+        b.create<mlir::arith::AddFOp>(loc, primalArgs.d22, primalArgs.d33);
+    mlir::Value tangentTransverse =
+        b.create<mlir::arith::AddFOp>(loc, tangentArgs.d22, tangentArgs.d33);
+    return {
+        b.create<mlir::arith::AddFOp>(loc, primalArgs.d11, primalTransverse),
+        b.create<mlir::arith::AddFOp>(loc, tangentArgs.d11, tangentTransverse),
+        true};
   }
 
   std::optional<std::string>

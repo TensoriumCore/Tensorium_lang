@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -52,6 +53,31 @@ inline SpectralPoint3D generatedInitialDataProjectedOutMaxPoint(
   return solution.grid->point(i, j, k);
 }
 
+inline void writeGeneratedInitialDataContinuationMetadata(
+    std::ostream &output,
+    const GeneratedSpectralInitialDataSolution &solution) {
+  output << "[";
+  for (std::size_t stage = 0; stage < solution.continuationStages.size();
+       ++stage) {
+    const auto &report = solution.continuationStages[stage];
+    if (stage != 0)
+      output << ", ";
+    output << "{\"resolution\": [" << report.resolution[0] << ", "
+           << report.resolution[1] << ", " << report.resolution[2]
+           << "], \"status\": " << static_cast<int>(report.solveResult.status)
+           << ", \"initial_residual_l2\": "
+           << report.solveResult.initialResidualL2
+           << ", \"newton_steps\": " << report.solveResult.steps
+           << ", \"linear_iterations\": " << report.solveResult.linearIterations
+           << ", \"residual_l2\": " << report.residualL2
+           << ", \"residual_max\": " << report.residualMaxAbs
+           << ", \"raw_residual_l2\": " << report.rawResidualL2
+           << ", \"raw_residual_max\": " << report.rawResidualMaxAbs
+           << ", \"solve_wall_seconds\": " << report.solveWallSeconds << "}";
+  }
+  output << "]";
+}
+
 inline GeneratedInitialDataExportReport
 exportGeneratedInitialDataCollocationCsv(
     const GeneratedSpectralInitialDataSolution &solution,
@@ -77,11 +103,10 @@ exportGeneratedInitialDataCollocationCsv(
           "generated initial_data unknown has no residual equation");
     if (problem->unknownMap.transform) {
       physicalFields[unknown] =
-          applySpectralUnknownMap(*solution.grid,
-                                  solution.grid->derivatives(
-                                      solution.fields[unknown]),
-                                  problem->unknownMap,
-                                  problem->unknownMapParams)
+          applySpectralUnknownMap(
+              *solution.grid,
+              solution.grid->derivatives(solution.fields[unknown]),
+              problem->unknownMap, problem->unknownMapParams)
               .value;
     }
   }
@@ -132,35 +157,33 @@ exportGeneratedInitialDataCollocationCsv(
   if (!metadata)
     throw std::runtime_error("cannot open generated initial_data metadata: " +
                              metadataPath);
-  metadata << std::setprecision(17)
-           << "{\n"
-           << "  \"case\": \"" << solution.descriptor->symbol_name
-           << "\",\n"
+  metadata << std::setprecision(17) << "{\n"
+           << "  \"case\": \"" << solution.descriptor->symbol_name << "\",\n"
            << "  \"reconstruction\": \"none\",\n"
            << "  \"spectral_resolution\": [" << solution.grid->n1() << ", "
            << solution.grid->n2() << ", " << solution.grid->n3() << "],\n"
+           << "  \"continuation_stages\": ";
+  writeGeneratedInitialDataContinuationMetadata(metadata, solution);
+  metadata << ",\n"
            << "  \"newton_steps\": " << solution.solveResult.steps << ",\n"
            << "  \"linear_iterations\": "
            << solution.solveResult.linearIterations << ",\n"
-           << "  \"solve_wall_seconds\": " << solution.solveWallSeconds
-           << ",\n"
+           << "  \"solve_wall_seconds\": " << solution.solveWallSeconds << ",\n"
            << "  \"residual_l2\": " << solution.residual.l2Norm << ",\n"
            << "  \"residual_max\": " << solution.residual.maxAbs << ",\n"
            << "  \"projected_residual_l2\": " << solution.residual.l2Norm
            << ",\n"
            << "  \"projected_residual_max\": " << solution.residual.maxAbs
            << ",\n"
-           << "  \"raw_residual_l2\": " << solution.rawResidual.l2Norm
-           << ",\n"
-           << "  \"raw_residual_max\": " << solution.rawResidual.maxAbs
-           << ",\n"
+           << "  \"raw_residual_l2\": " << solution.rawResidual.l2Norm << ",\n"
+           << "  \"raw_residual_max\": " << solution.rawResidual.maxAbs << ",\n"
            << "  \"projected_out_residual_l2\": "
            << solution.projectedOutResidualL2 << ",\n"
            << "  \"projected_out_residual_max\": "
            << solution.projectedOutResidualMaxAbs << ",\n"
            << "  \"projected_out_residual_max_logical\": ["
-           << projectedOutMaxPoint.x1 << ", " << projectedOutMaxPoint.x2
-           << ", " << projectedOutMaxPoint.x3 << "],\n"
+           << projectedOutMaxPoint.x1 << ", " << projectedOutMaxPoint.x2 << ", "
+           << projectedOutMaxPoint.x3 << "],\n"
            << "  \"layout\": \"spectral collocation, i-fastest\"\n"
            << "}\n";
   metadata.close();
@@ -196,8 +219,8 @@ inline double generatedInitialDataParameter(
       canonicalName != descriptiveName) {
     throw std::runtime_error(
         "generated initial_data parameter is ambiguous: '" +
-        std::string(canonicalName) + "' and '" +
-        std::string(descriptiveName) + "' are both available");
+        std::string(canonicalName) + "' and '" + std::string(descriptiveName) +
+        "' are both available");
   }
   if (canonical != solution.parameters.end())
     return canonical->second;
@@ -220,8 +243,7 @@ inline std::array<double *, Components> generatedInitialDataBuffers(
   return pointers;
 }
 
-inline GeneratedInitialDataExportReport
-exportGeneratedInitialDataBssnSlice(
+inline GeneratedInitialDataExportReport exportGeneratedInitialDataBssnSlice(
     const GeneratedSpectralInitialDataSolution &solution,
     const std::string &outputPath,
     const GeneratedInitialDataSliceOptions &sliceOptions = {}) {
@@ -236,12 +258,10 @@ exportGeneratedInitialDataBssnSlice(
   if (std::string_view(solution.descriptor->reconstruction) !=
       "two_puncture_bssn") {
     throw std::runtime_error("unsupported generated BSSN reconstruction '" +
-                             std::string(
-                                 solution.descriptor->reconstruction) +
+                             std::string(solution.descriptor->reconstruction) +
                              "'");
   }
-  if (sliceOptions.resolution < 3 ||
-      !(sliceOptions.halfWidth > 0.0) ||
+  if (sliceOptions.resolution < 3 || !(sliceOptions.halfWidth > 0.0) ||
       !std::isfinite(sliceOptions.halfWidth))
     throw std::runtime_error("invalid generated initial_data slice geometry");
   if (sliceOptions.resolution >
@@ -327,8 +347,7 @@ exportGeneratedInitialDataBssnSlice(
 
   interpolateTwoPunctureBssnToCartesianGrid(
       solution.generatedSystem.equations.front().problem, field, physical,
-      TwoPunctureCartesianGridView{pointCount,
-                                   {x.data(), y.data(), z.data()}},
+      TwoPunctureCartesianGridView{pointCount, {x.data(), y.data(), z.data()}},
       outputs);
 
   std::vector<double> lapse(pointCount, 0.0);
@@ -374,8 +393,8 @@ exportGeneratedInitialDataBssnSlice(
           << traceFreeExtrinsicCurvature[4][point] << ','
           << traceFreeExtrinsicCurvature[5][point] << ','
           << traceFreeExtrinsicCurvature[8][point] << ','
-          << meanCurvature[point] << ',' << conformalConnection[0][point]
-          << ',' << conformalConnection[1][point] << ','
+          << meanCurvature[point] << ',' << conformalConnection[0][point] << ','
+          << conformalConnection[1][point] << ','
           << conformalConnection[2][point] << ',' << shift[0][point] << ','
           << shift[1][point] << ',' << shift[2][point] << '\n';
     }
@@ -391,26 +410,25 @@ exportGeneratedInitialDataBssnSlice(
   if (!metadata)
     throw std::runtime_error("cannot open generated initial_data metadata: " +
                              metadataPath);
-  metadata << std::setprecision(17)
-           << "{\n"
-           << "  \"case\": \"" << solution.descriptor->symbol_name
-           << "\",\n"
+  metadata << std::setprecision(17) << "{\n"
+           << "  \"case\": \"" << solution.descriptor->symbol_name << "\",\n"
            << "  \"formulation\": \"Bowen-York puncture / BSSN\",\n"
            << "  \"half_separation\": " << physical.halfSeparation << ",\n"
            << "  \"bare_masses\": [" << physical.bareMasses[0] << ", "
            << physical.bareMasses[1] << "],\n"
            << "  \"momenta\": [[" << physical.momenta[0][0] << ", "
-           << physical.momenta[0][1] << ", " << physical.momenta[0][2]
-           << "], [" << physical.momenta[1][0] << ", "
-           << physical.momenta[1][1] << ", " << physical.momenta[1][2]
-           << "]],\n"
+           << physical.momenta[0][1] << ", " << physical.momenta[0][2] << "], ["
+           << physical.momenta[1][0] << ", " << physical.momenta[1][1] << ", "
+           << physical.momenta[1][2] << "]],\n"
            << "  \"spins\": [[" << physical.spins[0][0] << ", "
-           << physical.spins[0][1] << ", " << physical.spins[0][2]
-           << "], [" << physical.spins[1][0] << ", "
-           << physical.spins[1][1] << ", " << physical.spins[1][2]
-           << "]],\n"
+           << physical.spins[0][1] << ", " << physical.spins[0][2] << "], ["
+           << physical.spins[1][0] << ", " << physical.spins[1][1] << ", "
+           << physical.spins[1][2] << "]],\n"
            << "  \"spectral_resolution\": [" << solution.grid->n1() << ", "
            << solution.grid->n2() << ", " << solution.grid->n3() << "],\n"
+           << "  \"continuation_stages\": ";
+  writeGeneratedInitialDataContinuationMetadata(metadata, solution);
+  metadata << ",\n"
            << "  \"slice_resolution\": [" << sliceN << ", " << sliceN
            << ", 1],\n"
            << "  \"slice_half_width\": " << sliceOptions.halfWidth << ",\n"
@@ -418,36 +436,31 @@ exportGeneratedInitialDataBssnSlice(
            << "  \"newton_steps\": " << solution.solveResult.steps << ",\n"
            << "  \"linear_iterations\": "
            << solution.solveResult.linearIterations << ",\n"
-           << "  \"solve_wall_seconds\": " << solution.solveWallSeconds
-           << ",\n"
+           << "  \"solve_wall_seconds\": " << solution.solveWallSeconds << ",\n"
            << "  \"residual_l2\": " << solution.residual.l2Norm << ",\n"
            << "  \"residual_max\": " << solution.residual.maxAbs << ",\n"
            << "  \"projected_residual_l2\": " << solution.residual.l2Norm
            << ",\n"
            << "  \"projected_residual_max\": " << solution.residual.maxAbs
            << ",\n"
-           << "  \"raw_residual_l2\": " << solution.rawResidual.l2Norm
-           << ",\n"
-           << "  \"raw_residual_max\": " << solution.rawResidual.maxAbs
-           << ",\n"
+           << "  \"raw_residual_l2\": " << solution.rawResidual.l2Norm << ",\n"
+           << "  \"raw_residual_max\": " << solution.rawResidual.maxAbs << ",\n"
            << "  \"projected_out_residual_l2\": "
            << solution.projectedOutResidualL2 << ",\n"
            << "  \"projected_out_residual_max\": "
            << solution.projectedOutResidualMaxAbs << ",\n"
            << "  \"projected_out_residual_max_logical\": ["
-           << projectedOutMaxPoint.x1 << ", " << projectedOutMaxPoint.x2
-           << ", " << projectedOutMaxPoint.x3 << "],\n"
+           << projectedOutMaxPoint.x1 << ", " << projectedOutMaxPoint.x2 << ", "
+           << projectedOutMaxPoint.x3 << "],\n"
            << "  \"adm_energy\": " << adm.energy << ",\n"
-           << "  \"adm_linear_momentum\": [" << adm.linearMomentum[0]
-           << ", " << adm.linearMomentum[1] << ", " << adm.linearMomentum[2]
-           << "],\n"
-           << "  \"adm_angular_momentum\": [" << adm.angularMomentum[0]
-           << ", " << adm.angularMomentum[1] << ", "
-           << adm.angularMomentum[2] << "],\n"
-           << "  \"puncture_adm_masses\": [" << localMasses.admMasses[0]
-           << ", " << localMasses.admMasses[1] << "],\n"
-           << "  \"axis_regularity_error\": "
-           << regularity.maxPhiVariation() << ",\n"
+           << "  \"adm_linear_momentum\": [" << adm.linearMomentum[0] << ", "
+           << adm.linearMomentum[1] << ", " << adm.linearMomentum[2] << "],\n"
+           << "  \"adm_angular_momentum\": [" << adm.angularMomentum[0] << ", "
+           << adm.angularMomentum[1] << ", " << adm.angularMomentum[2] << "],\n"
+           << "  \"puncture_adm_masses\": [" << localMasses.admMasses[0] << ", "
+           << localMasses.admMasses[1] << "],\n"
+           << "  \"axis_regularity_error\": " << regularity.maxPhiVariation()
+           << ",\n"
            << "  \"bssn_trace_error\": " << maxTrace << ",\n"
            << "  \"gauge\": {\"lapse\": \"psi^-2\", \"shift\": [0, 0, 0]},\n"
            << "  \"fields\": [\"chi\", \"alpha\", \"gammatilde_ij\", "

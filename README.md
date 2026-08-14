@@ -85,28 +85,27 @@ binary-black-hole puncture data:
 - cached spectral operators, optional OpenMP line parallelism, and corrected
   flexible-GMRES updates.
 
-The provided QC0 case converges on its validated `14 x 14 x 24` spectral grid
-with the geometric multigrid preconditioner and exports a Cartesian `z=0` BSSN
-slice. A `16 x 16 x 28` solve also reaches the raw and projected acceptance
-criteria, but is retained as a convergence probe rather than the default. This
-is a genuine nonlinear physical solve, not a manufactured Poisson example.
-The exported CSV is nevertheless a diagnostic artifact, not a production 3D
-checkpoint.
+The provided QC0 case now uses coarse-to-fine continuation through
+`14 x 14 x 8 -> 16 x 16 x 8 -> 20 x 20 x 10 -> 24 x 24 x 12`. This follows
+the balanced Chebyshev/Fourier refinement used by the original single-domain
+method instead of over-resolving the azimuthal direction. The final grid
+converges with the geometric multigrid preconditioner and exports a Cartesian
+`z=0` BSSN slice. This is a genuine nonlinear physical solve, not a
+manufactured Poisson example. The exported CSV is nevertheless a diagnostic
+artifact, not a production 3D checkpoint.
 
 ### What is not production-ready
 
-- The constrained QC0 solve converges through `16 x 16 x 28`. Enforcing the
-  analytic parity of all logical derivatives before the singular Cartesian
-  derivative map now keeps raw and projected residuals equal to round-off; at
-  `16 x 16 x 28`, the projected-out L2 norm is below `5e-13`. The projected
-  residual floor still rises at the two finest probes, so convergence beyond
-  this range and every puncture/axis regularity mode remain to be established.
+- The balanced QC0 continuation converges through `24 x 24 x 12`, with a
+  projected residual L2 of `1.24e-8` and an axis-regularity error of `4.72e-9`.
+  Raw and projected residuals agree to round-off. `28 x 28 x 14` and
+  `30 x 30 x {14,16}` still hit a puncture-corner residual floor, so this is a
+  validated research resolution rather than a production claim.
 - The geometric preconditioner now builds a recursive hierarchy and limits the
   dense LU to a terminal grid of at most 512 points. This removes the first
-  coarse-memory barrier, but a `20 x 20 x 32` probe currently reaches the
-  16-step Newton limit at a `9.3e-8` residual because of the puncture accuracy
-  floor, not the linear solver. Production-resolution continuation is
-  therefore still incomplete.
+  coarse-memory barrier. Continuation removes the zero-seed barrier, but the
+  remaining limit beyond `24 x 24 x 12` is still puncture regularity rather
+  than linear-solver memory.
 - High-resolution convergence, Fourier-mode regularity at axes/punctures, and
   spinning/unequal-mass validation are incomplete.
 - Apparent-horizon masses and independent surface-integral charge checks are
@@ -216,8 +215,8 @@ Override the spectral solve resolution without editing the `.tn` source, or
 run the standard QC0 refinement sequence:
 
 ```bash
-TP_RESOLUTION=16x16x28 \
-  ./run_two_puncture_qc0.sh /tmp/qc0_16x16x28.csv
+TP_CONTINUATION='14x14x8;16x16x8;20x20x10;24x24x12' \
+  ./run_two_puncture_qc0.sh /tmp/qc0_24x24x12.csv
 
 ./run_two_puncture_convergence.sh /tmp/tensorium-qc0-convergence
 ```
@@ -261,9 +260,8 @@ spectral solves, physical benchmarks, and handoff checks. Files containing
 
 The next priorities are:
 
-1. Make the three-dimensional solve robust at production-oriented resolutions
-   with coarse-to-fine continuation, tighter puncture regularity control, and
-   convergence studies beyond `16 x 16 x 28`.
+1. Control the puncture-corner residual floor beyond `24 x 24 x 12`, including
+   the expected `rho^|m|` behavior of every Fourier mode.
 2. Add independent physical validation: production-resolution unequal-mass
    and spinning cases, apparent horizons, and surface-integral diagnostics.
 3. Define a versioned C ABI and validate one real external evolution-code

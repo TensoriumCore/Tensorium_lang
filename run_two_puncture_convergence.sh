@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${1:-/tmp/tensorium-qc0-convergence}"
-RESOLUTIONS="${TP_CONVERGENCE_RESOLUTIONS:-10x10x16 12x12x20 14x14x24 16x16x28}"
+RESOLUTIONS="${TP_CONVERGENCE_RESOLUTIONS:-14x14x8 16x16x8 20x20x10 24x24x12}"
 SLICE_N="${TP_CONVERGENCE_SLICE_N:-17}"
 SUMMARY_PATH="$OUTPUT_DIR/summary.csv"
 
@@ -25,6 +25,7 @@ printf '%s\n' \
   >"$SUMMARY_PATH"
 
 failed=0
+continuation=""
 for requested in $RESOLUTIONS; do
   resolution="${requested//X/x}"
   if [[ ! "$resolution" =~ ^[0-9]+x[0-9]+x[0-9]+$ ]]; then
@@ -38,7 +39,12 @@ for requested in $RESOLUTIONS; do
   log_path="$stem.log"
 
   echo "[convergence] running QC0 at $resolution ($points points)"
-  if TP_RESOLUTION="$resolution" TP_SLICE_N="$SLICE_N" \
+  if [[ -n "$continuation" ]]; then
+    continuation="$continuation;$resolution"
+  else
+    continuation="$resolution"
+  fi
+  if TP_CONTINUATION="$continuation" TP_SLICE_N="$SLICE_N" \
       "$ROOT_DIR/run_two_puncture_qc0.sh" "$csv_path" \
       2>&1 | tee "$log_path"; then
     metadata_path="$csv_path.json"

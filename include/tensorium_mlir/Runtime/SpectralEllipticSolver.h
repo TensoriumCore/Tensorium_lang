@@ -715,6 +715,25 @@ inline std::vector<double> applySpectralTensorGridTransfer(
 }
 
 inline std::vector<double>
+interpolateSpectralField(const SpectralGrid3D &sourceGrid,
+                         const SpectralGrid3D &targetGrid,
+                         std::span<const double> sourceValues) {
+  const std::array<std::size_t, 3> sourceExtents = {
+      sourceGrid.n1(), sourceGrid.n2(), sourceGrid.n3()};
+  const std::array<std::size_t, 3> targetExtents = {
+      targetGrid.n1(), targetGrid.n2(), targetGrid.n3()};
+  std::array<std::vector<double>, 3> interpolationMatrices;
+  for (std::size_t dim = 0; dim < 3; ++dim) {
+    if (sourceGrid.axis(dim).basis != targetGrid.axis(dim).basis)
+      throw std::runtime_error("spectral grid interpolation basis mismatch");
+    interpolationMatrices[dim] = buildSpectralAxisInterpolationMatrix(
+        sourceGrid.axis(dim), targetGrid.axis(dim));
+  }
+  return applySpectralTensorGridTransfer(sourceValues, sourceExtents,
+                                         targetExtents, interpolationMatrices);
+}
+
+inline std::vector<double>
 restrictSpectralField(const SpectralTensorGridTransfer3D &transfer,
                       std::span<const double> fineValues) {
   return applySpectralTensorGridTransfer(fineValues, transfer.fineExtents,
@@ -2619,6 +2638,7 @@ solveSpectralNewton(const SpectralResidualProblem &problem,
     return result;
   }
   if (reachedSpectralResidualTarget(result, options)) {
+    result.finalLinearResidualL2 = 0.0;
     result.status = SpectralEllipticSolveStatus::Converged;
     return result;
   }
@@ -2788,6 +2808,7 @@ solveSpectralNewton(const SpectralResidualSystemProblem &system,
     return result;
   }
   if (reachedSpectralResidualTarget(result, options)) {
+    result.finalLinearResidualL2 = 0.0;
     result.status = SpectralEllipticSolveStatus::Converged;
     return result;
   }

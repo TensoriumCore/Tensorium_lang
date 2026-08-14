@@ -306,9 +306,10 @@ This removes dense Jacobian storage and the `N` residual-JVP setup calls of the
 previous diagonal preconditioner. The original two-grid prototype reduced
 Krylov work by about 22% on this case. The current implementation preserves
 that two-level path on small grids and automatically adds levels once the first
-coarse grid exceeds the terminal-LU limit. For example, QC0 uses
-`14x14x24 -> 7x7x12 -> 4x4x6`; the dense solve therefore has 96 unknowns rather
-than 588. Distributed, algebraic, or multidomain preconditioning remains open
+coarse grid exceeds the terminal-LU limit. For example, the final QC0
+continuation stage uses `24x24x12 -> 12x12x6 -> 6x6x3`; the dense solve
+therefore has 108 unknowns rather than 6912. Distributed, algebraic, or
+multidomain preconditioning remains open
 work, but the first dense-coarse scaling barrier is removed.
 
 ## TP-7: Published unequal-mass case and Cartesian BSSN handoff
@@ -406,21 +407,23 @@ From the repository root, run
 The generic command compiles the physical DSL residual to LLVM, reads its
 generated initial-data descriptor, solves the nonlinear Hamiltonian constraint,
 performs the Cartesian BSSN handoff, and writes both the requested CSV and
-`<csv>.json` metadata. The default `14x14x24` spectral solve currently reports:
+`<csv>.json` metadata. By default the runner performs the balanced continuation
+`14x14x8 -> 16x16x8 -> 20x20x10 -> 24x24x12`. The final stage currently
+reports:
 
 ```text
-Newton steps:                  4
-cumulative FGMRES iterations: 94
-projected residual L2:         9.37e-9
-projected residual max:        1.64e-7
-raw residual L2:               9.37e-9
-raw residual max:              1.64e-7
-projected-out residual L2:     2.69e-15
-projected-out residual max:    5.68e-14
-ADM energy:                    1.00787483
+Newton steps:                  10
+cumulative FGMRES iterations: 99
+projected residual L2:         1.24e-8
+projected residual max:        4.04e-7
+raw residual L2:               1.24e-8
+raw residual max:              4.04e-7
+projected-out residual L2:     6.96e-16
+projected-out residual max:    2.84e-14
+ADM energy:                    1.00787645
 ADM angular momentum Jz:       0.77876433
-puncture ADM masses:           0.51680444, 0.51680444
-axis regularity error:         1.31e-6
+puncture ADM masses:           0.51681749, 0.51681749
+axis regularity error:         4.72e-9
 BSSN trace error:              1.39e-17
 ```
 
@@ -430,32 +433,33 @@ sequence is:
 
 ```text
 grid       Newton  FGMRES  projected L2  raw L2    projected-out L2  ADM energy
-10x10x16       4      58       3.32e-9    3.32e-9          1.75e-13  1.00792629
-12x12x20       4      70       3.31e-9    3.31e-9          2.01e-16  1.00787551
-14x14x24       4      94       9.37e-9    9.37e-9          2.69e-15  1.00787477
-16x16x28       9     170       1.74e-8    1.74e-8          4.84e-13  1.00787650
+14x14x8        4      79       9.34e-10   9.34e-10         1.04e-15  1.00787477
+16x16x8        5      69       4.85e-9    4.85e-9          4.84e-13  1.00787650
+20x20x10       6      41       1.04e-8    1.04e-8          1.91e-15  1.00787640
+24x24x12      10      99       1.24e-8    1.24e-8          6.96e-16  1.00787645
 ```
 
 The projected equation meets the configured `2e-8` L2 criterion at every
 listed resolution, and the ADM energy is stable at about the sixth decimal
-from `12x12x20` onward. The earlier raw/projected gap was traced to round-off in
+from `16x16x8` onward. The earlier raw/projected gap was traced to round-off in
 logical derivatives being amplified by the bispherical-to-Cartesian transform
 near `rho=0`. The QC0 projector now imposes the analytic derivative parities
 under `(A,B,phi) -> (A,-B,phi+pi)` before that transform, in both primal and
 compiled-JVP paths. The coordinate map also evaluates its trigonometric factors
 directly as rational functions of `B`, preserving reflection symmetry in
-floating-point arithmetic. At `16x16x28`, this reduces the projected-out L2
-component from about `7.5e-7` to `4.8e-13`; the raw and projected residuals now
-agree to round-off.
+floating-point arithmetic. At `16x16x8`, the projected-out L2 component is
+`4.8e-13`; the raw and projected residuals agree to round-off.
 
-This resolves the symmetry-diagnostic defect, but not the production-scaling
-question. The accepted residual floor rises at `14x14x24` and `16x16x28`, and
-the current sequence is too short to demonstrate asymptotic spectral
-convergence at the punctures. The recursive hierarchy can run a `20x20x32`
-probe, but Newton reaches its 16-step limit at a `9.3e-8` residual. The next
-accuracy step is therefore coarse-to-fine continuation and further puncture
-regularity analysis rather than a larger dense coarse solve or a looser
-tolerance.
+The crucial refinement correction is the aspect ratio. The original
+single-domain construction uses approximately `nA = nB = 2*nphi`; the earlier
+`14x14x24 -> 20x20x32` probes severely over-resolved the Fourier direction and
+amplified corner regularity errors. Tensor-product coarse-to-fine interpolation
+now seeds each stage from the previous solution, and the generic runner records
+every stage in its console and JSON diagnostics. With the balanced sequence,
+`24x24x12` converges and the measured scalar-axis error falls to `4.72e-9`.
+`28x28x14` and `30x30x{14,16}` still fail at the puncture corners, so further
+work must enforce the modal `rho^|m|` behavior rather than merely increasing
+the Krylov budget or loosening the residual tolerance.
 
 The exported Cartesian `z=0` slice contains `u`, `psi`, `chi`, the
 pre-collapsed gauge seed `alpha=psi^-2`, the six independent components of
@@ -476,8 +480,8 @@ The solve grid can also be overridden without editing the declaration, and the
 standard convergence sequence can be run with:
 
 ```bash
-TP_RESOLUTION=16x16x28 \
-  ./run_two_puncture_qc0.sh /tmp/qc0_16x16x28.csv
+TP_CONTINUATION='14x14x8;16x16x8;20x20x10;24x24x12' \
+  ./run_two_puncture_qc0.sh /tmp/qc0_24x24x12.csv
 
 ./run_two_puncture_convergence.sh /tmp/tensorium-qc0-convergence
 ```
@@ -500,11 +504,14 @@ intentionally a diagnostic slice, not a production 3D evolution checkpoint;
 an external solver should call the SoA handoff API on its own full Cartesian
 grid. The spectral resolution and solver policy are part of the DSL `spectral`
 block, so changing a physical case never requires editing or rebuilding a C++
-runner. `TP_RESOLUTION` is an experimental runtime override for refinement
-studies. The `14x14x24` configuration is the validated default. Raw/projected
-symmetry is now controlled and the coarse hierarchy is recursive, but the
-fine-grid puncture residual floor is why production-resolution scaling remains
-explicit open work rather than an implied capability.
+runner. `TP_RESOLUTION` selects one standalone experimental grid, while
+`TP_CONTINUATION` accepts a quoted semicolon-separated coarse-to-fine sequence.
+The generic equivalents are `TENSORIUM_INITIAL_DATA_RESOLUTION` and
+`TENSORIUM_INITIAL_DATA_CONTINUATION`. The validated default ends at
+`24x24x12`. Raw/projected symmetry is controlled and the coarse hierarchy is
+recursive, but the puncture residual floor beyond that grid is why
+production-resolution scaling remains explicit open work rather than an
+implied capability.
 
 ## Runtime performance controls
 
@@ -538,14 +545,14 @@ reaction term, while retaining centered finite differences as an ABI fallback.
 On the nonlinear two-puncture regression, the generated `Jv` agrees with the
 fallback centered difference to `8.4e-11` maximum relative error.
 
-On the QC0 sequence, the Jacobian-aware multigrid solve takes about `0.15 s` at
-`10x10x16`, `0.37 s` at `12x12x20`, `1.12 s` at `14x14x24`, and `3.43 s` at
-`16x16x28` on the current development machine. These are single-machine
+On the balanced QC0 continuation, the cumulative solve takes about `0.17 s` at
+`14x14x8`, `0.42 s` through `16x16x8`, `0.85 s` through `20x20x10`, and
+`2.72 s` through `24x24x12` on the current development machine. These are single-machine
 engineering measurements, not a production-scaling claim. The raw and
 projected constraints now converge at every listed level, and the recursive
 hierarchy removes the first dense-coarse memory barrier. The rising fine-grid
 residual floor remains the immediate numerical-validation issue before
-targeting `32x32x48` and above.
+targeting larger balanced grids.
 
 ## What remains before production TwoPunctures
 
@@ -554,7 +561,7 @@ but it is still a small collocation regression. It does not yet provide:
 
 - production-resolution convergence of every Fourier regularity mode at the
   axes and puncture corners;
-- convergence beyond `16x16x28` with a controlled fine-grid residual floor;
+- convergence beyond `24x24x12` with a controlled fine-grid residual floor;
 - production-resolution convergence of the published unequal-mass case and
   published full-solve spinning comparisons;
 - apparent-horizon masses or independent surface-integral charge checks;
@@ -575,12 +582,12 @@ The scalar endpoint projector is not a complete tensor regularity system. In
 particular, the expected `rho^|m|` behavior of each Fourier mode and the parity
 of vector/tensor components still need production-resolution validation.
 
-## Next milestone: TP-8 production diagnostics and external adapter
+## Next milestone: TP-8 puncture regularity and external validation
 
 The production path is now:
 
-1. add coarse-to-fine solution continuation and control the puncture residual
-   floor beyond `16x16x28`;
+1. impose or precondition the correct modal `rho^|m|` corner behavior and
+   control the residual floor beyond `24x24x12`;
 2. validate the published unequal-mass case at production resolution and add a
    published spinning full-solve comparison;
 3. add apparent-horizon or independent surface-integral diagnostics;
