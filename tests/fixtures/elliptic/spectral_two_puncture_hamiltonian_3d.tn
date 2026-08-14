@@ -27,7 +27,7 @@ initial_data QC0 {
     spectral {
         system = SpectralTwoPunctureHamiltonian3D
         coordinate_map = two_puncture
-        resolution = [10, 10, 16]
+        resolution = [14, 14, 24]
         basis = [chebyshev, chebyshev, fourier]
         coordinate_parameters = [b]
         unknown_map = linear_boundary

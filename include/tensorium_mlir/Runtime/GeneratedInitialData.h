@@ -365,6 +365,8 @@ inline GeneratedSpectralInitialDataSolution solveGeneratedSpectralInitialData(
       solution.generatedSystem.view(),
       std::span<const std::vector<double>>(solution.fields.data(),
                                            solution.fields.size()));
+  projectSpectralResidualSystem(solution.generatedSystem.view(),
+                                solution.residual);
   return solution;
 }
 

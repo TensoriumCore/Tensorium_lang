@@ -17,6 +17,7 @@
 #include "tensorium_mlir/Runtime/SpectralUnknownMaps.h"
 #include "tensorium_mlir/Runtime/TwoPunctureDiagnostics.h"
 #include "tensorium_mlir/Runtime/TwoPunctureMap.h"
+#include "tensorium_mlir/Runtime/TwoPunctureSymmetry.h"
 #include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
 #include "tensorium_mlir/Target/MLIRGen/InitEvaluator.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
@@ -3394,7 +3395,7 @@ constraints IdentityResidual {
   if (initialData.name != "QC0" ||
       initialData.system != "SpectralTwoPunctureHamiltonian3D" ||
       initialData.coordinateMap != "two_puncture" ||
-      initialData.resolution != std::vector<int>({10, 10, 16}) ||
+      initialData.resolution != std::vector<int>({14, 14, 24}) ||
       initialData.basis !=
           std::vector<std::string>({"chebyshev", "chebyshev", "fourier"}) ||
       initialData.coordinateParameters != std::vector<std::string>({"b"}) ||
@@ -5519,6 +5520,73 @@ static double spectralCubicReactionJvpKernel(
     std::int64_t, void *) {
   return direction->d11 + direction->d22 + direction->d33 +
          (2.0 + 1.5 * point->value * point->value) * direction->value;
+}
+
+static double spectralProjectedIdentityKernel(
+    const tensorium_spectral_residual_point *point, const double *,
+    std::int64_t, void *) {
+  return point->value - 1.0 + point->logical[1];
+}
+
+static double spectralProjectedIdentityJvpKernel(
+    const tensorium_spectral_residual_point *,
+    const tensorium_spectral_residual_point *direction, const double *,
+    std::int64_t, void *) {
+  return direction->value;
+}
+
+static bool testSpectralNewtonProjectsConstrainedResidual() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
+  using tensorium_mlir::runtime::SpectralEllipticSolveStatus;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::SpectralLinearSolveKind;
+  using tensorium_mlir::runtime::SpectralResidualKernel;
+  using tensorium_mlir::runtime::SpectralResidualProblem;
+  using tensorium_mlir::runtime::assembleSpectralResidual;
+  using tensorium_mlir::runtime::makeTwoPunctureInversionEvenFieldProjector;
+  using tensorium_mlir::runtime::projectSpectralResidual;
+  using tensorium_mlir::runtime::solveSpectralNewton;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(3),
+                      SpectralAxis::chebyshevZeros(4),
+                      SpectralAxis::fourierPeriodic(6));
+  SpectralResidualProblem problem;
+  problem.grid = &grid;
+  problem.kernel = SpectralResidualKernel{
+      "spectral_projected_identity", &spectralProjectedIdentityKernel,
+      "spectral_projected_identity_jvp",
+      &spectralProjectedIdentityJvpKernel};
+  problem.fieldProjector = makeTwoPunctureInversionEvenFieldProjector();
+
+  SpectralEllipticSolveOptions options;
+  options.maxNewtonSteps = 2;
+  options.residualTolerance = 1.0e-12;
+  options.linearSolver = SpectralLinearSolveKind::MatrixFreeGMRES;
+  options.gmresMaxIterations = 8;
+  options.gmresRestart = 4;
+  options.gmresTolerance = 1.0e-13;
+  options.gmresRelativeTolerance = 1.0e-13;
+
+  std::vector<double> values(grid.size(), 0.0);
+  const auto solve = solveSpectralNewton(problem, values, options);
+  double stateError = 0.0;
+  for (double value : values)
+    stateError = std::max(stateError, std::abs(value - 1.0));
+
+  auto rawResidual = assembleSpectralResidual(problem, values);
+  const double rawL2 = rawResidual.l2Norm;
+  projectSpectralResidual(problem, rawResidual);
+  if (solve.status != SpectralEllipticSolveStatus::Converged ||
+      !solve.usedFieldProjector || stateError > 1.0e-11 || rawL2 < 0.1 ||
+      rawResidual.l2Norm > 1.0e-11) {
+    std::cerr << "FAIL: projected spectral Newton status="
+              << static_cast<int>(solve.status) << " state=" << stateError
+              << " raw=" << rawL2
+              << " projected=" << rawResidual.l2Norm << "\n";
+    return false;
+  }
+  return true;
 }
 
 static bool testSpectralLocalReactionDiagonal() {
@@ -7818,6 +7886,8 @@ int main() {
        &testGeneratedHostStorageEulerUpdatePairs},
       {"testSpectralGridManufacturedPoisson",
        &testSpectralGridManufacturedPoisson},
+      {"testSpectralNewtonProjectsConstrainedResidual",
+       &testSpectralNewtonProjectsConstrainedResidual},
       {"testSpectralLocalReactionDiagonal",
        &testSpectralLocalReactionDiagonal},
       {"testSpectralTwoGridTransferPreservesResolvedModes",

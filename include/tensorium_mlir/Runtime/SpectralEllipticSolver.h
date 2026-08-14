@@ -263,6 +263,47 @@ inline void projectSpectralSystemUnknownFields(
   }
 }
 
+// A field projector defines a constrained trial space. Project the residual as
+// well so Newton and GMRES solve P F(Pu) = 0 instead of retaining an
+// incompatible component orthogonal to that space.
+inline void projectSpectralResidual(
+    const SpectralResidualProblem &problem,
+    SpectralResidualAssemblyResult &residual) {
+  if (!spectralFieldProjectorEnabled(problem))
+    return;
+  projectSpectralField(problem, residual.values);
+  residual.l2Norm = spectralVectorL2Norm(residual.values);
+  residual.maxAbs = spectralVectorMaxAbs(residual.values);
+  residual.finite = residual.finite && spectralVectorIsFinite(residual.values);
+}
+
+inline void projectSpectralResidualSystem(
+    const SpectralResidualSystemProblem &system,
+    SpectralResidualSystemAssemblyResult &residual) {
+  const std::size_t pointsPerEquation = residual.pointsPerEquation;
+  if (residual.equationCount != system.equations.size() ||
+      residual.equationResults.size() != system.equations.size() ||
+      residual.values.size() != system.equations.size() * pointsPerEquation) {
+    throw std::runtime_error("spectral system residual projector mismatch");
+  }
+  for (std::size_t equation = 0; equation < system.equations.size();
+       ++equation) {
+    auto block = std::span<double>(residual.values)
+                     .subspan(equation * pointsPerEquation,
+                              pointsPerEquation);
+    projectSpectralField(system.equations[equation].problem, block);
+    auto &equationResidual = residual.equationResults[equation];
+    equationResidual.values.assign(block.begin(), block.end());
+    equationResidual.l2Norm = spectralVectorL2Norm(block);
+    equationResidual.maxAbs = spectralVectorMaxAbs(block);
+    equationResidual.finite =
+        equationResidual.finite && spectralVectorIsFinite(block);
+  }
+  residual.l2Norm = spectralVectorL2Norm(residual.values);
+  residual.maxAbs = spectralVectorMaxAbs(residual.values);
+  residual.finite = residual.finite && spectralVectorIsFinite(residual.values);
+}
+
 inline double spectralChebyshevAxisLength(const SpectralAxis &axis) {
   const std::size_t n = axis.size();
   if (n <= 1)
@@ -1728,14 +1769,20 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
   result.usedPreconditioner =
       preconditioner.kind != SpectralPreconditionerKind::None;
 
+  std::vector<double> projectedRhs(rhs.begin(), rhs.end());
+  projectSpectralField(problem, projectedRhs);
+
   if (options.gmresRestart > 0) {
     auto restarted = solveSpectralRestartedGMRES(
-        n, rhs, options,
+        n, projectedRhs, options,
         [&](const std::vector<double> &direction, std::vector<double> &out) {
           const auto jvp = evaluateSpectralJacobianVectorProduct(
               problem, values, direction, options.jvpOptions);
           out = jvp.values;
-          return jvp.finite && out.size() == n;
+          if (!jvp.finite || out.size() != n)
+            return false;
+          projectSpectralField(problem, out);
+          return spectralVectorIsFinite(out);
         },
         [&](std::vector<double> &direction) {
           if (!applySpectralPreconditioner(
@@ -1749,7 +1796,7 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
     return restarted;
   }
 
-  const double rhsEuclidean = spectralVectorEuclideanNorm(rhs);
+  const double rhsEuclidean = spectralVectorEuclideanNorm(projectedRhs);
   const double rhsL2 =
       rhsEuclidean / std::sqrt(static_cast<double>(std::max<std::size_t>(1, n)));
   const double target = std::max(options.gmresTolerance,
@@ -1766,7 +1813,7 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
 
   std::vector<double> basis((maxIterations + 1) * n, 0.0);
   for (std::size_t i = 0; i < n; ++i)
-    basis[i] = rhs[i] / rhsEuclidean;
+    basis[i] = projectedRhs[i] / rhsEuclidean;
 
   std::vector<double> hessenberg((maxIterations + 1) * maxIterations, 0.0);
   std::vector<double> arnoldiVector(n, 0.0);
@@ -1789,6 +1836,7 @@ inline SpectralGMRESResult solveSpectralGMRESByJVP(
     if (!jvp.finite || jvp.values.size() != n)
       return result;
     arnoldiVector = jvp.values;
+    projectSpectralField(problem, arnoldiVector);
 
     for (std::size_t row = 0; row <= col; ++row) {
       std::span<const double> basisVector(&basis[row * n], n);
@@ -2108,8 +2156,10 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
   result.usedPreconditioner =
       preconditioner.kind != SpectralPreconditionerKind::None;
 
-  const auto rhsUnknownOrder = mapSpectralSystemEquationVectorToUnknownOrder(
+  auto rhsUnknownOrder = mapSpectralSystemEquationVectorToUnknownOrder(
       system, rhs, fieldCount, grid.size());
+  projectSpectralSystemUnknownVector(system, rhsUnknownOrder, fieldCount,
+                                     grid.size());
   if (options.gmresRestart > 0) {
     auto restarted = solveSpectralRestartedGMRES(
         n, rhsUnknownOrder, options,
@@ -2126,6 +2176,8 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
             return false;
           out = mapSpectralSystemEquationVectorToUnknownOrder(
               system, jvp.values, fieldCount, grid.size());
+          projectSpectralSystemUnknownVector(system, out, fieldCount,
+                                             grid.size());
           return out.size() == n && spectralVectorIsFinite(out);
         },
         [&](std::vector<double> &direction) {
@@ -2186,6 +2238,8 @@ inline SpectralGMRESResult solveSpectralSystemGMRESByJVP(
       return result;
     arnoldiVector = mapSpectralSystemEquationVectorToUnknownOrder(
         system, jvp.values, fieldCount, grid.size());
+    projectSpectralSystemUnknownVector(system, arnoldiVector, fieldCount,
+                                       grid.size());
 
     for (std::size_t row = 0; row <= col; ++row) {
       std::span<const double> basisVector(&basis[row * n], n);
@@ -2344,6 +2398,7 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
   projectSpectralField(problem, values);
   result.usedFieldProjector = spectralFieldProjectorEnabled(problem);
   auto residual = assembleSpectralResidual(problem, values);
+  projectSpectralResidual(problem, residual);
   result.initialResidualL2 = residual.l2Norm;
   updateSpectralSolveResidualState(result, residual);
   if (!residual.finite) {
@@ -2413,6 +2468,7 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
         candidate[i] = values[i] + damping * correction[i];
       projectSpectralField(problem, candidate);
       candidateResidual = assembleSpectralResidual(problem, candidate);
+      projectSpectralResidual(problem, candidateResidual);
       if (candidateResidual.finite &&
           (candidateResidual.l2Norm < residual.l2Norm ||
            candidateResidual.l2Norm <= options.residualTolerance ||
@@ -2511,6 +2567,7 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
   projectSpectralSystemUnknownFields(system, unknownFields);
   result.usedFieldProjector = spectralSystemUsesFieldProjector(system);
   auto residual = assembleSpectralResidualSystem(system, unknownFields);
+  projectSpectralResidualSystem(system, residual);
   result.initialResidualL2 = residual.l2Norm;
   updateSpectralSolveResidualState(result, residual);
   if (!residual.finite) {
@@ -2598,6 +2655,7 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       candidateResidual = assembleSpectralResidualSystem(
           system, std::span<const std::vector<double>>(candidate.data(),
                                                        candidate.size()));
+      projectSpectralResidualSystem(system, candidateResidual);
       if (candidateResidual.finite &&
           (candidateResidual.l2Norm < residual.l2Norm ||
            candidateResidual.l2Norm <= options.residualTolerance ||
