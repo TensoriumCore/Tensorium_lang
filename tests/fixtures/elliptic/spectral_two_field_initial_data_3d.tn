@@ -1,0 +1,73 @@
+# Declarative coupled-scalar spectral initial-data regression.
+#
+# Exact solution:
+#   u = x*x + 0.5*y*y
+#   v = 0.25*x*y + 0.1*x
+#
+# Both residuals use the other unknown's Laplacian and the nonlinear
+# contraction grad(u).grad(v). The manufactured coordinate sources make the
+# exact fields solve the coupled system without static runtime bindings.
+field scalar u
+field scalar v
+field scalar Hu
+field scalar Hv
+
+params { alpha, beta, coupling, cross_laplacian, gradient_coupling }
+
+simulation {
+  coordinates = cartesian
+  dimension = 3
+  resolution = [6, 6, 4]
+  time { dt = 1.0 integrator = euler }
+  spatial { scheme = spectral derivative = centered order = 0 }
+}
+
+initial_data CoupledScalarManufactured {
+  spectral {
+    system = CoupledScalarInitialData3D
+    coordinate_map = identity
+    resolution = [6, 6, 4]
+    basis = [chebyshev, chebyshev, fourier]
+    coordinate_parameters = []
+    unknown_map = identity
+    unknown_map_parameters = []
+    field_projector = none
+    reconstruction = none
+
+    parameter alpha = 2.0
+    parameter beta = 3.0
+    parameter coupling = 0.2
+    parameter cross_laplacian = 0.1
+    parameter gradient_coupling = 0.05
+
+    solve {
+      nonlinear = newton
+      linear = gmres
+      tolerance = 1e-10
+      max_iterations = 8
+      linear_tolerance = 1e-12
+      linear_relative_tolerance = 1e-12
+      max_linear_iterations = 512
+      restart = 32
+      preconditioner = mapped_fd_multigrid
+      preconditioner_sweeps = 4
+      jvp_relative_step = 1e-6
+      jvp_absolute_step = 1e-9
+    }
+  }
+}
+
+constraints CoupledScalarInitialData3D {
+  u_exact = x*x + 0.5*y*y
+  v_exact = 0.25*x*y + 0.1*x
+  grad_dot_exact = 0.75*x*y + 0.2*x
+
+  source_u = 0.0 - (3.0 + gradient_coupling*grad_dot_exact + alpha*u_exact + coupling*v_exact)
+  source_v = 0.0 - (3.0*cross_laplacian + gradient_coupling*grad_dot_exact + beta*v_exact + coupling*u_exact)
+
+  Hulocal = laplacian(u) + cross_laplacian*laplacian(v) + gradient_coupling*contract(d_i(u) * d_i(v)) + alpha*u + coupling*v + source_u
+  Hvlocal = laplacian(v) + cross_laplacian*laplacian(u) + gradient_coupling*contract(d_i(v) * d_i(u)) + beta*v + coupling*u + source_v
+
+  residual Hu = Hulocal
+  residual Hv = Hvlocal
+}

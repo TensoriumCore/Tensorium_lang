@@ -60,8 +60,8 @@ if ! grep -q "tensorium_spectral_residual_H" "$HOST_HEADER"; then
   echo "error: expected spectral residual symbol in host header" >&2
   exit 2
 fi
-if ! grep -q "point->aux_values\\[0\\]" "$HOST_HEADER"; then
-  echo "error: expected generated spectral residual to read aux_values[0]" >&2
+if ! grep -q "point->aux_derivatives\\[0\\].value" "$HOST_HEADER"; then
+  echo "error: expected generated spectral residual to read the auxiliary bundle" >&2
   exit 2
 fi
 

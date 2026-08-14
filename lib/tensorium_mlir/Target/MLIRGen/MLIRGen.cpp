@@ -1,6 +1,4 @@
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
-#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
-#include "tensorium_mlir/Target/MLIRGen/MLIRGenHostABI.h"
 #include "MLIRGenExpr.h"
 #include "MLIRGenInitialData.h"
 #include "MLIRGenPipeline.h"
@@ -22,6 +20,8 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumDialect.h"
 #include "tensorium_mlir/Dialect/Tensorium/IR/TensoriumTypes.h"
+#include "tensorium_mlir/Target/MLIRGen/GeneratedKernelABI.h"
+#include "tensorium_mlir/Target/MLIRGen/MLIRGenHostABI.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/LLVMContext.h"
@@ -98,8 +98,7 @@ void appendComma(std::ostringstream &os, bool &first) {
   first = false;
 }
 
-void emitRawFormal(std::ostringstream &os, const HostArgABI &arg,
-                   bool &first) {
+void emitRawFormal(std::ostringstream &os, const HostArgABI &arg, bool &first) {
   const std::string &base = arg.cName;
   if (arg.kind == HostArgKind::F64) {
     appendComma(os, first);
@@ -190,10 +189,9 @@ void emitInitPointWrapper(
     os << makeHostCIdentifier(coord, "coord");
   }
   for (const auto &output : kernel.outputs) {
-    emitDescriptorCallArgs(os, output,
-                           std::to_string(componentCountFor(output,
-                                                            componentCounts)),
-                           first);
+    emitDescriptorCallArgs(
+        os, output, std::to_string(componentCountFor(output, componentCounts)),
+        first);
   }
   os << ");\n}\n";
 }
@@ -223,9 +221,8 @@ void emitInitGridWrapper(
   for (const auto &coord : kernel.coords)
     emitDescriptorCallArgs(os, coord, "n_points", first);
   for (const auto &output : kernel.outputs)
-    emitDescriptorCallArgs(os, output,
-                           sizeExprFor(output, "n_points", componentCounts),
-                           first);
+    emitDescriptorCallArgs(
+        os, output, sizeExprFor(output, "n_points", componentCounts), first);
   os << ");\n}\n";
 }
 
@@ -261,9 +258,8 @@ void emitRhsGridWrapper(
     os << makeHostCIdentifier(param, "param");
   }
   for (const auto &field : kernel.fields)
-    emitDescriptorCallArgs(os, field,
-                           sizeExprFor(field, "n_points", componentCounts),
-                           first);
+    emitDescriptorCallArgs(
+        os, field, sizeExprFor(field, "n_points", componentCounts), first);
   os << ");\n}\n";
 }
 
@@ -289,14 +285,19 @@ void emitSpectralResidualWrapper(std::ostringstream &os,
      << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
      << "    return 0.0;\n";
   if (auxiliaryCount > 0)
-    os << "  if (!point->aux_values)\n"
+    os << "  if (!point->aux_derivatives || point->aux_derivative_count != "
+       << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
        << "    return 0.0;\n";
 
   os << "  return " << kernel.symbolName << "("
      << "point->value, point->d1, point->d2, point->d3, point->d11, "
         "point->d12, point->d13, point->d22, point->d23, point->d33";
-  for (std::size_t i = 0; i < auxiliaryCount; ++i)
-    os << ", point->aux_values[" << i << "]";
+  const char *derivativeNames[] = {"value", "d1",  "d2",  "d3",  "d11",
+                                   "d12",   "d13", "d22", "d23", "d33"};
+  for (std::size_t i = 0; i < auxiliaryCount; ++i) {
+    for (const char *derivative : derivativeNames)
+      os << ", point->aux_derivatives[" << i << "]." << derivative;
+  }
   os << ", point->physical[0], point->physical[1], point->physical[2]";
   for (std::size_t i = 0; i < kernel.params.size(); ++i)
     os << ", params[" << i << "]";
@@ -329,19 +330,29 @@ void emitSpectralResidualJvpWrapper(std::ostringstream &os,
      << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
      << "    return 0.0;\n";
   if (auxiliaryCount > 0)
-    os << "  if (!point->aux_values || !direction->aux_values)\n"
+    os << "  if (!point->aux_derivatives || !direction->aux_derivatives ||\n"
+       << "      point->aux_derivative_count != "
+       << static_cast<std::int64_t>(auxiliaryCount)
+       << " || direction->aux_derivative_count != "
+       << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
        << "    return 0.0;\n";
 
+  const char *derivativeNames[] = {"value", "d1",  "d2",  "d3",  "d11",
+                                   "d12",   "d13", "d22", "d23", "d33"};
   os << "  return " << kernel.symbolName << "("
      << "point->value, point->d1, point->d2, point->d3, point->d11, "
-        "point->d12, point->d13, point->d22, point->d23, point->d33, "
-     << "direction->value, direction->d1, direction->d2, direction->d3, "
+        "point->d12, point->d13, point->d22, point->d23, point->d33";
+  for (std::size_t i = 0; i < auxiliaryCount; ++i) {
+    for (const char *derivative : derivativeNames)
+      os << ", point->aux_derivatives[" << i << "]." << derivative;
+  }
+  os << ", direction->value, direction->d1, direction->d2, direction->d3, "
         "direction->d11, direction->d12, direction->d13, direction->d22, "
         "direction->d23, direction->d33";
-  for (std::size_t i = 0; i < auxiliaryCount; ++i)
-    os << ", point->aux_values[" << i << "]";
-  for (std::size_t i = 0; i < auxiliaryCount; ++i)
-    os << ", direction->aux_values[" << i << "]";
+  for (std::size_t i = 0; i < auxiliaryCount; ++i) {
+    for (const char *derivative : derivativeNames)
+      os << ", direction->aux_derivatives[" << i << "]." << derivative;
+  }
   os << ", point->physical[0], point->physical[1], point->physical[2]";
   for (std::size_t i = 0; i < kernel.params.size(); ++i)
     os << ", params[" << i << "]";
@@ -369,8 +380,10 @@ void emitSpectralResidualGridWrapper(std::ostringstream &os,
     emitScalarFormal(os, "double", param, first);
   for (const char *name : derivativeNames)
     emitBufferFormal(os, name, first);
-  for (std::size_t i = 0; i < auxiliaryCount; ++i)
-    emitBufferFormal(os, kernel.fields[i + 1], first);
+  for (std::size_t i = 0; i < auxiliaryCount; ++i) {
+    for (const char *derivative : derivativeNames)
+      emitBufferFormal(os, kernel.fields[i + 1] + "_" + derivative, first);
+  }
   for (const auto &coord : kernel.coords)
     emitBufferFormal(os, coord, first);
   emitBufferFormal(os, kernel.outputs.front(), first);
@@ -386,21 +399,28 @@ void emitSpectralResidualGridWrapper(std::ostringstream &os,
   }
   for (const char *name : derivativeNames)
     emitDescriptorCallArgs(os, name, "n_points", first);
-  for (std::size_t i = 0; i < auxiliaryCount; ++i)
-    emitDescriptorCallArgs(os, kernel.fields[i + 1], "n_points", first);
+  for (std::size_t i = 0; i < auxiliaryCount; ++i) {
+    for (const char *derivative : derivativeNames) {
+      emitDescriptorCallArgs(os, kernel.fields[i + 1] + "_" + derivative,
+                             "n_points", first);
+    }
+  }
   for (const auto &coord : kernel.coords)
     emitDescriptorCallArgs(os, coord, "n_points", first);
   emitDescriptorCallArgs(os, kernel.outputs.front(), "n_points", first);
   os << ");\n}\n";
 
-  os << "static inline int " << spectralResidualGridEvalNameFor(kernel)
-     << "(\n"
+  os << "static inline int " << spectralResidualGridEvalNameFor(kernel) << "(\n"
      << "    int64_t n_points, const double *params, int64_t param_count,\n"
      << "    const double *value, const double *d1, const double *d2,\n"
      << "    const double *d3, const double *d11, const double *d12,\n"
      << "    const double *d13, const double *d22, const double *d23,\n"
      << "    const double *d33, const double *const *aux_fields,\n"
-     << "    int64_t aux_count, const double *x1, const double *x2,\n"
+     << "    int64_t aux_count,\n"
+     << "    const tensorium_spectral_residual_derivative_fields "
+        "*aux_derivatives,\n"
+     << "    int64_t aux_derivative_count, const double *x1, const double "
+        "*x2,\n"
      << "    const double *x3, double *out, void *user_data) {\n"
      << "  (void)user_data;\n"
      << "  if (n_points < 0)\n"
@@ -411,17 +431,26 @@ void emitSpectralResidualGridWrapper(std::ostringstream &os,
   if (!kernel.params.empty())
     os << "  if (!params)\n"
        << "    return -3;\n";
-  os << "  if (aux_count != "
+  os << "  if (aux_count != " << static_cast<std::int64_t>(auxiliaryCount)
+     << " || aux_derivative_count != "
      << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
      << "    return -4;\n"
      << "  if (!value || !d1 || !d2 || !d3 || !d11 || !d12 || !d13 || "
         "!d22 || !d23 || !d33 || !x1 || !x2 || !x3 || !out)\n"
      << "    return -5;\n";
   if (auxiliaryCount > 0) {
-    os << "  if (!aux_fields)\n"
+    os << "  if (!aux_fields || !aux_derivatives || aux_derivative_count != "
+       << static_cast<std::int64_t>(auxiliaryCount) << ")\n"
        << "    return -6;\n";
     for (std::size_t i = 0; i < auxiliaryCount; ++i)
-      os << "  if (!aux_fields[" << i << "])\n"
+      os << "  if (!aux_fields[" << i << "] || !aux_derivatives[" << i
+         << "].value || !aux_derivatives[" << i << "].d1 || "
+         << "!aux_derivatives[" << i << "].d2 || !aux_derivatives[" << i
+         << "].d3 || !aux_derivatives[" << i << "].d11 || "
+         << "!aux_derivatives[" << i << "].d12 || !aux_derivatives[" << i
+         << "].d13 || !aux_derivatives[" << i << "].d22 || "
+         << "!aux_derivatives[" << i << "].d23 || !aux_derivatives[" << i
+         << "].d33)\n"
          << "    return -7;\n";
   }
   os << "  " << kernel.symbolName << "(";
@@ -445,16 +474,18 @@ void emitSpectralResidualGridWrapper(std::ostringstream &os,
     os << "1";
   }
   for (std::size_t i = 0; i < auxiliaryCount; ++i) {
-    appendComma(os, first);
-    os << "(double *)aux_fields[" << i << "]";
-    appendComma(os, first);
-    os << "(double *)aux_fields[" << i << "]";
-    appendComma(os, first);
-    os << "0";
-    appendComma(os, first);
-    os << "n_points";
-    appendComma(os, first);
-    os << "1";
+    for (const char *derivative : derivativeNames) {
+      appendComma(os, first);
+      os << "(double *)aux_derivatives[" << i << "]." << derivative;
+      appendComma(os, first);
+      os << "(double *)aux_derivatives[" << i << "]." << derivative;
+      appendComma(os, first);
+      os << "0";
+      appendComma(os, first);
+      os << "n_points";
+      appendComma(os, first);
+      os << "1";
+    }
   }
   for (const char *name : {"x1", "x2", "x3"}) {
     appendComma(os, first);
@@ -503,8 +534,7 @@ void emitConvenienceWrapper(
   } else if (kernel.kind ==
              tensorium_mlir::abi::kKindSpectralResidualJvpPoint) {
     emitSpectralResidualJvpWrapper(os, kernel);
-  } else if (kernel.kind ==
-             tensorium_mlir::abi::kKindSpectralResidualGrid) {
+  } else if (kernel.kind == tensorium_mlir::abi::kKindSpectralResidualGrid) {
     emitSpectralResidualGridWrapper(os, kernel);
   }
 }
@@ -606,6 +636,30 @@ void emitRuntimeInvokeTypes(std::ostringstream &os) {
 void emitSpectralResidualTypes(std::ostringstream &os) {
   os << "#ifndef TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H\n"
      << "#define TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H\n\n"
+     << "typedef struct tensorium_spectral_residual_derivatives {\n"
+     << "  double value;\n"
+     << "  double d1;\n"
+     << "  double d2;\n"
+     << "  double d3;\n"
+     << "  double d11;\n"
+     << "  double d12;\n"
+     << "  double d13;\n"
+     << "  double d22;\n"
+     << "  double d23;\n"
+     << "  double d33;\n"
+     << "} tensorium_spectral_residual_derivatives;\n\n"
+     << "typedef struct tensorium_spectral_residual_derivative_fields {\n"
+     << "  const double *value;\n"
+     << "  const double *d1;\n"
+     << "  const double *d2;\n"
+     << "  const double *d3;\n"
+     << "  const double *d11;\n"
+     << "  const double *d12;\n"
+     << "  const double *d13;\n"
+     << "  const double *d22;\n"
+     << "  const double *d23;\n"
+     << "  const double *d33;\n"
+     << "} tensorium_spectral_residual_derivative_fields;\n\n"
      << "typedef struct tensorium_spectral_residual_point {\n"
      << "  int64_t i;\n"
      << "  int64_t j;\n"
@@ -625,6 +679,8 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "  double d33;\n"
      << "  const double *aux_values;\n"
      << "  int64_t aux_count;\n"
+     << "  const tensorium_spectral_residual_derivatives *aux_derivatives;\n"
+     << "  int64_t aux_derivative_count;\n"
      << "} tensorium_spectral_residual_point;\n\n"
      << "typedef double (*tensorium_spectral_residual_kernel_fn)(\n"
      << "    const tensorium_spectral_residual_point *point,\n"
@@ -639,7 +695,11 @@ void emitSpectralResidualTypes(std::ostringstream &os) {
      << "    const double *d3, const double *d11, const double *d12,\n"
      << "    const double *d13, const double *d22, const double *d23,\n"
      << "    const double *d33, const double *const *aux_fields,\n"
-     << "    int64_t aux_count, const double *x1, const double *x2,\n"
+     << "    int64_t aux_count,\n"
+     << "    const tensorium_spectral_residual_derivative_fields "
+        "*aux_derivatives,\n"
+     << "    int64_t aux_derivative_count, const double *x1, const double "
+        "*x2,\n"
      << "    const double *x3, double *out, void *user_data);\n\n"
      << "typedef void (*tensorium_spectral_coordinate_map_fn)(\n"
      << "    const double *logical, double *physical, const double *params,\n"
@@ -757,10 +817,10 @@ void emitRuntimeDescriptors(std::ostringstream &os, const HostModuleABI &abi) {
         os << "  {" << cStringLiteral(kernel.symbolName) << ", "
            << cStringLiteral(buffer.name) << ", "
            << cStringLiteral(buffer.cName) << ", "
-           << static_cast<std::int64_t>(kernelIndex) << ", "
-           << buffer.argIndex << ", " << hostHeaderRoleEnum(buffer.role)
-           << ", " << hostHeaderAccessEnum(buffer.access) << ", "
-           << buffer.up << ", " << buffer.down << ", " << buffer.rank << ", "
+           << static_cast<std::int64_t>(kernelIndex) << ", " << buffer.argIndex
+           << ", " << hostHeaderRoleEnum(buffer.role) << ", "
+           << hostHeaderAccessEnum(buffer.access) << ", " << buffer.up << ", "
+           << buffer.down << ", " << buffer.rank << ", "
            << buffer.componentCount << "}";
       }
     }
@@ -781,14 +841,13 @@ bool isRuntimeInvokableGridKernel(const HostKernelABI &kernel) {
 }
 
 std::string adapterNameFor(const HostKernelABI &kernel) {
-  return "tensorium_invoke_" +
-         makeHostCIdentifier(kernel.symbolName, "kernel");
+  return "tensorium_invoke_" + makeHostCIdentifier(kernel.symbolName, "kernel");
 }
 
 void emitMemrefRawArgs(std::ostringstream &os, llvm::StringRef arrayName,
                        std::int64_t index, bool &first) {
-  for (llvm::StringRef member : {"allocated", "aligned", "offset", "size",
-                                 "stride"}) {
+  for (llvm::StringRef member :
+       {"allocated", "aligned", "offset", "size", "stride"}) {
     appendComma(os, first);
     os << arrayName.str() << "[" << index << "]." << member.str();
   }
@@ -835,8 +894,8 @@ void emitRuntimeInvokeAdapter(std::ostringstream &os,
       kernel.kind == tensorium_mlir::abi::kKindResidualGridScf ||
       kernel.kind == tensorium_mlir::abi::kKindResidualGridAffine ||
       kernel.kind == tensorium_mlir::abi::kKindResidualGridParallel) {
-    for (llvm::StringRef expr : {"grid->nx", "grid->ny", "grid->nz",
-                                 "grid->dx", "grid->dy", "grid->dz"}) {
+    for (llvm::StringRef expr : {"grid->nx", "grid->ny", "grid->nz", "grid->dx",
+                                 "grid->dy", "grid->dz"}) {
       appendComma(os, first);
       os << expr.str();
     }
@@ -898,8 +957,7 @@ void emitSpectralResidualDescriptors(std::ostringstream &os,
       ++count;
   }
 
-  os << "#define TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT " << count
-     << "\n\n";
+  os << "#define TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT " << count << "\n\n";
   os << "static const tensorium_spectral_residual_kernel_desc "
         "tensorium_spectral_residual_kernels["
      << (count == 0 ? 1 : count) << "] = {\n";
@@ -967,13 +1025,13 @@ void emitSpectralResidualGridDescriptors(std::ostringstream &os,
   os << "};\n\n";
 }
 
-std::int64_t spectralResidualKernelDescriptorIndex(
-    const HostModuleABI &abi, llvm::StringRef symbolName, bool gridKernel) {
+std::int64_t spectralResidualKernelDescriptorIndex(const HostModuleABI &abi,
+                                                   llvm::StringRef symbolName,
+                                                   bool gridKernel) {
   std::int64_t index = 0;
   for (const auto &kernel : abi.kernels) {
-    const bool matchesKind =
-        gridKernel ? isSpectralResidualGridKernel(kernel)
-                   : isSpectralResidualKernel(kernel);
+    const bool matchesKind = gridKernel ? isSpectralResidualGridKernel(kernel)
+                                        : isSpectralResidualKernel(kernel);
     if (!matchesKind)
       continue;
     if (kernel.symbolName == symbolName)
@@ -1021,8 +1079,7 @@ void emitDoubleArray(std::ostringstream &os, llvm::StringRef name,
   } else {
     os << std::setprecision(17);
     for (std::size_t i = 0; i < values.size(); ++i) {
-      os << "  " << values[i]
-         << (i + 1 == values.size() ? "\n" : ",\n");
+      os << "  " << values[i] << (i + 1 == values.size() ? "\n" : ",\n");
     }
   }
   os << "};\n\n";
@@ -1032,19 +1089,16 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
                                            const HostModuleABI &abi) {
   const std::size_t count = abi.spectralResidualSystems.size();
   os << "#define TENSORIUM_SPECTRAL_RESIDUAL_STATIC_AUXILIARY -1\n"
-     << "#define TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT " << count
-     << "\n\n";
+     << "#define TENSORIUM_SPECTRAL_RESIDUAL_SYSTEM_COUNT " << count << "\n\n";
 
   for (std::size_t systemIndex = 0; systemIndex < count; ++systemIndex) {
     const auto &system = abi.spectralResidualSystems[systemIndex];
     const std::string prefix =
-        "tensorium_spectral_residual_system_" +
-        std::to_string(systemIndex);
-    emitStringPointerArray(os, prefix + "_unknown_names",
-                           system.unknownNames);
+        "tensorium_spectral_residual_system_" + std::to_string(systemIndex);
+    emitStringPointerArray(os, prefix + "_unknown_names", system.unknownNames);
 
-    for (std::size_t equationIndex = 0;
-         equationIndex < system.equations.size(); ++equationIndex) {
+    for (std::size_t equationIndex = 0; equationIndex < system.equations.size();
+         ++equationIndex) {
       const auto &equation = system.equations[equationIndex];
       const std::string eqPrefix =
           prefix + "_equation_" + std::to_string(equationIndex);
@@ -1057,8 +1111,7 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
 
     os << "static const tensorium_spectral_residual_system_equation_desc "
        << prefix << "_equations["
-       << (system.equations.empty() ? 1 : system.equations.size())
-       << "] = {\n";
+       << (system.equations.empty() ? 1 : system.equations.size()) << "] = {\n";
     if (system.equations.empty()) {
       os << "  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}\n";
     } else {
@@ -1069,28 +1122,24 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
             prefix + "_equation_" + std::to_string(equationIndex);
         const std::int64_t pointIndex = spectralResidualKernelDescriptorIndex(
             abi, equation.pointKernelSymbol, false);
-        const std::int64_t gridIndex = equation.gridKernelSymbol.empty()
-                                           ? -1
-                                           : spectralResidualKernelDescriptorIndex(
-                                                 abi, equation.gridKernelSymbol,
-                                                 true);
+        const std::int64_t gridIndex =
+            equation.gridKernelSymbol.empty()
+                ? -1
+                : spectralResidualKernelDescriptorIndex(
+                      abi, equation.gridKernelSymbol, true);
         os << "  {" << cStringLiteral(equation.residualName) << ", "
            << cStringLiteral(equation.unknownName) << ", "
-           << equation.unknownIndex << ", " << pointIndex << ", "
-           << gridIndex << ", "
-           << (equation.params.empty() ? "0"
-                                       : eqPrefix + "_param_names")
-           << ", " << static_cast<std::int64_t>(equation.params.size())
+           << equation.unknownIndex << ", " << pointIndex << ", " << gridIndex
            << ", "
-           << (equation.auxiliaryNames.empty()
-                   ? "0"
-                   : eqPrefix + "_auxiliary_names")
+           << (equation.params.empty() ? "0" : eqPrefix + "_param_names")
+           << ", " << static_cast<std::int64_t>(equation.params.size()) << ", "
+           << (equation.auxiliaryNames.empty() ? "0"
+                                               : eqPrefix + "_auxiliary_names")
            << ", "
            << (equation.auxiliaryUnknownIndices.empty()
                    ? "0"
                    : eqPrefix + "_auxiliary_unknown_indices")
-           << ", "
-           << static_cast<std::int64_t>(equation.auxiliaryNames.size())
+           << ", " << static_cast<std::int64_t>(equation.auxiliaryNames.size())
            << "}"
            << (equationIndex + 1 == system.equations.size() ? "\n" : ",\n");
       }
@@ -1107,8 +1156,7 @@ void emitSpectralResidualSystemDescriptors(std::ostringstream &os,
     for (std::size_t systemIndex = 0; systemIndex < count; ++systemIndex) {
       const auto &system = abi.spectralResidualSystems[systemIndex];
       const std::string prefix =
-          "tensorium_spectral_residual_system_" +
-          std::to_string(systemIndex);
+          "tensorium_spectral_residual_system_" + std::to_string(systemIndex);
       os << "  {" << cStringLiteral(system.name) << ", "
          << (system.unknownNames.empty() ? "0" : prefix + "_unknown_names")
          << ", " << static_cast<std::int64_t>(system.unknownNames.size())
@@ -1140,8 +1188,7 @@ void emitSpectralInitialDataDescriptor(std::ostringstream &os,
       initialData.coordinateParameters);
   emitDoubleArray(os, "tensorium_spectral_initial_data_unknown_map_parameters",
                   initialData.unknownMapParameters);
-  emitStringPointerArray(os,
-                         "tensorium_spectral_initial_data_parameter_names",
+  emitStringPointerArray(os, "tensorium_spectral_initial_data_parameter_names",
                          initialData.parameterNames);
   emitDoubleArray(os, "tensorium_spectral_initial_data_parameter_values",
                   initialData.parameterValues);
@@ -1162,8 +1209,9 @@ void emitSpectralInitialDataDescriptor(std::ostringstream &os,
      << "  " << static_cast<std::int64_t>(initialData.resolution.size())
      << ",\n"
      << "  "
-     << pointerOrZero(!initialData.coordinateParameters.empty(),
-                      "tensorium_spectral_initial_data_coordinate_parameter_names")
+     << pointerOrZero(
+            !initialData.coordinateParameters.empty(),
+            "tensorium_spectral_initial_data_coordinate_parameter_names")
      << ",\n"
      << "  "
      << static_cast<std::int64_t>(initialData.coordinateParameters.size())
@@ -1223,14 +1271,14 @@ void emitPrinterFlatHelper(std::ostringstream &os) {
      << "        printf(\",\");\n"
      << "      printf(\"%lld\", (long long)idx);\n"
      << "    }\n"
-     << "    printf(\"] = %.17g\\n\", data[component * n_points + point_index]);\n"
+     << "    printf(\"] = %.17g\\n\", data[component * n_points + "
+        "point_index]);\n"
      << "  }\n"
      << "  printf(\"}\\n\");\n"
      << "}\n\n";
 }
 
-void emitPrintRequest(
-    std::ostringstream &os, const HostPrintABI &print) {
+void emitPrintRequest(std::ostringstream &os, const HostPrintABI &print) {
   const int rank = print.rank;
   const std::string label = cStringLiteral(print.label);
   const std::string field = makeHostCIdentifier(print.fieldName, "field");
@@ -1247,8 +1295,8 @@ void emitPrintRequest(
           "tensorium_dim; ++tensorium_print_i) {\n"
        << "    if (tensorium_print_i != 0)\n"
        << "      printf(\", \");\n"
-       << "    printf(\"%.17g\", "
-       << field << "[tensorium_print_i * n_points + point_index]);\n"
+       << "    printf(\"%.17g\", " << field
+       << "[tensorium_print_i * n_points + point_index]);\n"
        << "  }\n"
        << "  printf(\"]\\n\");\n";
     return;
@@ -1265,8 +1313,8 @@ void emitPrintRequest(
        << "        printf(\", \");\n"
        << "      const int64_t tensorium_component = "
           "tensorium_print_i * tensorium_dim + tensorium_print_j;\n"
-       << "      printf(\"%.17g\", "
-       << field << "[tensorium_component * n_points + point_index]);\n"
+       << "      printf(\"%.17g\", " << field
+       << "[tensorium_component * n_points + point_index]);\n"
        << "    }\n"
        << "    printf(tensorium_print_i + 1 == tensorium_dim ? \"]\\n\" : "
           "\"],\\n\");\n"
@@ -1292,7 +1340,8 @@ void emitPrintRequestHelper(std::ostringstream &os, const HostModuleABI &abi) {
   os << ") {\n"
      << "  const int64_t tensorium_dim = " << abi.dimension << ";\n"
      << "  if (point_index < 0 || point_index >= n_points) {\n"
-     << "    fprintf(stderr, \"tensorium print point_index out of range\\n\");\n"
+     << "    fprintf(stderr, \"tensorium print point_index out of "
+        "range\\n\");\n"
      << "    return;\n"
      << "  }\n";
   for (const auto &print : abi.prints)
@@ -1327,8 +1376,7 @@ std::string renderHostHeader(const HostModuleABI &abi) {
   emitSpectralResidualTypes(os);
   emitRuntimeDescriptors(os, abi);
 
-  os
-     << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
+  os << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
 
   for (const auto &kernel : abi.kernels)
     emitRawPrototype(os, kernel);
@@ -1360,8 +1408,7 @@ std::string renderHostHeader(const tensorium::backend::ModuleIR &module,
 }
 
 bool emitLoweredLLVMIR(mlir::ModuleOp moduleOp, mlir::MLIRContext &ctx,
-                       const MLIRGenOptions &opts,
-                       std::string *llvmIRText) {
+                       const MLIRGenOptions &opts, std::string *llvmIRText) {
   if (!lowerModuleToLLVM(moduleOp, ctx, opts)) {
     llvm::errs() << "LLVM lowering pipeline failed\n";
     return false;
@@ -1411,7 +1458,8 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 
   mlir::OpBuilder b(&ctx);
   auto loc = b.getUnknownLoc();
-  auto moduleOp = mlir::OwningOpRef<mlir::ModuleOp>(mlir::ModuleOp::create(loc));
+  auto moduleOp =
+      mlir::OwningOpRef<mlir::ModuleOp>(mlir::ModuleOp::create(loc));
 
   const auto fields = extractFields(module);
   llvm::SmallVector<mlir::Type, 8> allArgTypes;
@@ -1434,14 +1482,18 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
     return b.getFunctionType(types, {});
   };
 
-  auto initFunc = mlir::func::FuncOp::create(
-      loc, tensorium_mlir::abi::kSymbolInit, buildTypeFromIndices(initArgIndices));
-  auto rhsFunc = mlir::func::FuncOp::create(
-      loc, tensorium_mlir::abi::kSymbolRhs, buildTypeFromIndices(rhsArgIndices));
-  auto entryFunc = mlir::func::FuncOp::create(
-      loc, tensorium_mlir::abi::kSymbolEntry, b.getFunctionType(allArgTypes, {}));
+  auto initFunc =
+      mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolInit,
+                                 buildTypeFromIndices(initArgIndices));
+  auto rhsFunc =
+      mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolRhs,
+                                 buildTypeFromIndices(rhsArgIndices));
+  auto entryFunc =
+      mlir::func::FuncOp::create(loc, tensorium_mlir::abi::kSymbolEntry,
+                                 b.getFunctionType(allArgTypes, {}));
 
-  auto mapFieldArgs = [&](mlir::Block *block, const std::vector<unsigned> &indices) {
+  auto mapFieldArgs = [&](mlir::Block *block,
+                          const std::vector<unsigned> &indices) {
     llvm::DenseMap<llvm::StringRef, mlir::Value> fieldArg;
     for (unsigned i = 0; i < indices.size(); ++i)
       fieldArg[fields[indices[i]].name] = block->getArgument(i);
@@ -1457,13 +1509,13 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   };
 
   auto setCommonABIAttrs = [&](mlir::func::FuncOp fn, llvm::StringRef kind) {
-    fn->setAttr(tensorium_mlir::abi::kAttrABIVersion,
-                b.getI64IntegerAttr(
-                    tensorium_mlir::abi::kGeneratedKernelABIVersion));
+    fn->setAttr(
+        tensorium_mlir::abi::kAttrABIVersion,
+        b.getI64IntegerAttr(tensorium_mlir::abi::kGeneratedKernelABIVersion));
     fn->setAttr(tensorium_mlir::abi::kAttrABIKind, b.getStringAttr(kind));
-    fn->setAttr(tensorium_mlir::abi::kAttrMemoryLayout,
-                b.getStringAttr(
-                    tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
+    fn->setAttr(
+        tensorium_mlir::abi::kAttrMemoryLayout,
+        b.getStringAttr(tensorium_mlir::abi::kMemLayoutSoAComponentMajor));
     fn->setAttr(tensorium_mlir::abi::kAttrMemrefABI,
                 b.getStringAttr(tensorium_mlir::abi::kMemrefABI1DStridedF64));
   };
@@ -1505,10 +1557,10 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
   for (unsigned idx : rhsArgIndices)
     rhsCallArgs.push_back(entryBlock->getArgument(idx));
 
-  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolInit, mlir::TypeRange{},
-                             initCallArgs);
-  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolRhs, mlir::TypeRange{},
-                             rhsCallArgs);
+  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolInit,
+                               mlir::TypeRange{}, initCallArgs);
+  b.create<mlir::func::CallOp>(loc, tensorium_mlir::abi::kSymbolRhs,
+                               mlir::TypeRange{}, rhsCallArgs);
   b.create<mlir::func::ReturnOp>(loc);
 
   moduleOp->getOperation()->setAttr(
@@ -1545,12 +1597,11 @@ buildMLIRModule(const tensorium::backend::ModuleIR &module,
 
   mlir::PassManager pm(&ctx);
   if (pipelineOpts.mlirPrintIRAfterFailure) {
-    pm.enableIRPrinting(
-        [](mlir::Pass *, mlir::Operation *) { return false; },
-        [](mlir::Pass *, mlir::Operation *) { return true; },
-        /*printModuleScope=*/true,
-        /*printAfterOnlyOnChange=*/false,
-        /*printAfterOnlyOnFailure=*/true);
+    pm.enableIRPrinting([](mlir::Pass *, mlir::Operation *) { return false; },
+                        [](mlir::Pass *, mlir::Operation *) { return true; },
+                        /*printModuleScope=*/true,
+                        /*printAfterOnlyOnChange=*/false,
+                        /*printAfterOnlyOnFailure=*/true);
   }
   if (pipelineOpts.mlirPassTiming) {
     llvm::errs() << "[Tensorium] pass timing: Tensorium MLIR pipeline\n";
@@ -1622,8 +1673,7 @@ bool emitHostHeader(const tensorium::backend::ModuleIR &module,
 
 bool emitLLVMIRAndHostHeader(const tensorium::backend::ModuleIR &module,
                              const MLIRGenOptions &opts,
-                             std::string *llvmIRText,
-                             std::string *headerText) {
+                             std::string *llvmIRText, std::string *headerText) {
   mlir::MLIRContext ctx;
   mlir::DialectRegistry registry;
   mlir::registerAllToLLVMIRTranslations(registry);

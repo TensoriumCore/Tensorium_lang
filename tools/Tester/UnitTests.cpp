@@ -1,5 +1,12 @@
-#include "tensorium/Backend/BackendBuilder.hpp"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Operation.h"
 #include "tensorium/API/Compiler.hpp"
+#include "tensorium/Backend/BackendBuilder.hpp"
 #include "tensorium/Core/IndexSet.h"
 #include "tensorium/Lex/Lexer.hpp"
 #include "tensorium/Parse/Parser.hpp"
@@ -23,19 +30,12 @@
 #include "tensorium_mlir/Target/MLIRGen/MLIRGen.h"
 #include "tensorium_mlir/Target/MLIRGen/MLIRGenHostABI.h"
 #include "tensorium_mlir/Target/MLIRGen/RhsEvaluator.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Operation.h"
 
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <functional>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -111,19 +111,17 @@ static bool testMLIRGenOptimizationPassOptions() {
     std::cerr << "FAIL: post-MLIR pass options were not applied\n";
     return false;
   }
-  if (opts.dx != 0.25 || opts.order != 4 ||
-      opts.dissipationStrength != 0.05 || !opts.mlirDisableThreading) {
+  if (opts.dx != 0.25 || opts.order != 4 || opts.dissipationStrength != 0.05 ||
+      !opts.mlirDisableThreading) {
     std::cerr << "FAIL: numeric/diagnostic pass options were not applied\n";
     return false;
   }
   return true;
 }
 
-static ::mlir::OwningOpRef<::mlir::ModuleOp>
-buildMLIRModuleFromSourceWithOpts(const std::string &source,
-                                  CompilationMode mode,
-                                  ::mlir::MLIRContext &ctx,
-                                  const tensorium_mlir::MLIRGenOptions &opts) {
+static ::mlir::OwningOpRef<::mlir::ModuleOp> buildMLIRModuleFromSourceWithOpts(
+    const std::string &source, CompilationMode mode, ::mlir::MLIRContext &ctx,
+    const tensorium_mlir::MLIRGenOptions &opts) {
   backend::ModuleIR mod = buildModuleFromSource(source, mode);
   validation::canonicalizeDifferentialIR(mod);
   validation::canonicalizeEinsteinIR(mod);
@@ -197,8 +195,8 @@ struct InitEvalContext {
   tensorium_mlir::InitEvalDescriptor desc;
 };
 
-static void setupSinglePointInitContext(InitEvalContext &ctx, double M, double r,
-                                        double theta, double phi) {
+static void setupSinglePointInitContext(InitEvalContext &ctx, double M,
+                                        double r, double theta, double phi) {
   ctx.r[0] = r;
   ctx.theta[0] = theta;
   ctx.phi[0] = phi;
@@ -231,7 +229,8 @@ static void setupSinglePointInitContext(InitEvalContext &ctx, double M, double r
   ctx.desc.outputs.gammaU = ctx.buffers.gammaUPtrs;
 }
 
-static std::string formatMatrix3x3(const std::array<std::array<double, 1>, 9> &m) {
+static std::string
+formatMatrix3x3(const std::array<std::array<double, 1>, 9> &m) {
   std::ostringstream os;
   os << "[[" << m[0][0] << ", " << m[1][0] << ", " << m[2][0] << "], "
      << "[" << m[3][0] << ", " << m[4][0] << ", " << m[5][0] << "], "
@@ -242,10 +241,10 @@ static std::string formatMatrix3x3(const std::array<std::array<double, 1>, 9> &m
 static std::string
 formatMatrix4x4(const std::array<std::array<double, 1>, 16> &m) {
   std::ostringstream os;
-  os << "[[" << m[0][0] << ", " << m[1][0] << ", " << m[2][0] << ", "
-     << m[3][0] << "], "
-     << "[" << m[4][0] << ", " << m[5][0] << ", " << m[6][0] << ", "
-     << m[7][0] << "], "
+  os << "[[" << m[0][0] << ", " << m[1][0] << ", " << m[2][0] << ", " << m[3][0]
+     << "], "
+     << "[" << m[4][0] << ", " << m[5][0] << ", " << m[6][0] << ", " << m[7][0]
+     << "], "
      << "[" << m[8][0] << ", " << m[9][0] << ", " << m[10][0] << ", "
      << m[11][0] << "], "
      << "[" << m[12][0] << ", " << m[13][0] << ", " << m[14][0] << ", "
@@ -253,7 +252,8 @@ formatMatrix4x4(const std::array<std::array<double, 1>, 16> &m) {
   return os.str();
 }
 
-static std::string formatVector3(const std::array<std::array<double, 1>, 3> &v) {
+static std::string
+formatVector3(const std::array<std::array<double, 1>, 3> &v) {
   std::ostringstream os;
   os << "[" << v[0][0] << ", " << v[1][0] << ", " << v[2][0] << "]";
   return os.str();
@@ -265,10 +265,10 @@ struct EvalPoint3 {
   double phi = 0.0;
 };
 
-static bool valueDependsOnImpl(
-    ::mlir::Value root,
-    const std::function<bool(::mlir::Operation *)> &predicate,
-    std::unordered_set<::mlir::Operation *> &visited) {
+static bool
+valueDependsOnImpl(::mlir::Value root,
+                   const std::function<bool(::mlir::Operation *)> &predicate,
+                   std::unordered_set<::mlir::Operation *> &visited) {
   ::mlir::Operation *def = root.getDefiningOp();
   if (!def)
     return false;
@@ -283,9 +283,9 @@ static bool valueDependsOnImpl(
   return false;
 }
 
-static bool valueDependsOn(
-    ::mlir::Value root,
-    const std::function<bool(::mlir::Operation *)> &predicate) {
+static bool
+valueDependsOn(::mlir::Value root,
+               const std::function<bool(::mlir::Operation *)> &predicate) {
   std::unordered_set<::mlir::Operation *> visited;
   return valueDependsOnImpl(root, predicate, visited);
 }
@@ -307,8 +307,7 @@ static std::string joinStringArrayAttr(::mlir::ArrayAttr arr) {
   return out;
 }
 
-static std::vector<std::string>
-parseStringArrayAttr(::mlir::ArrayAttr arr) {
+static std::vector<std::string> parseStringArrayAttr(::mlir::ArrayAttr arr) {
   std::vector<std::string> out;
   if (!arr)
     return out;
@@ -347,7 +346,8 @@ static bool isDynamicF64Memref(::mlir::Type type) {
          memTy.getElementType().isF64();
 }
 
-static std::optional<int64_t> getConstantIndexValueForTest(::mlir::Value value) {
+static std::optional<int64_t>
+getConstantIndexValueForTest(::mlir::Value value) {
   if (auto indexOp = value.getDefiningOp<::mlir::arith::ConstantIndexOp>())
     return indexOp.value();
   if (auto constOp = value.getDefiningOp<::mlir::arith::ConstantOp>()) {
@@ -369,10 +369,11 @@ static std::optional<double> getConstantF64ValueForTest(::mlir::Value value) {
   return std::nullopt;
 }
 
-static bool collectInitPointConstantStores(
-    ::mlir::func::FuncOp initPoint, unsigned firstOutputArg,
-    std::array<double, 1> &alpha, std::array<double, 9> &gamma,
-    std::array<double, 9> &gammaU) {
+static bool collectInitPointConstantStores(::mlir::func::FuncOp initPoint,
+                                           unsigned firstOutputArg,
+                                           std::array<double, 1> &alpha,
+                                           std::array<double, 9> &gamma,
+                                           std::array<double, 9> &gammaU) {
   std::array<bool, 1> alphaSeen{};
   std::array<bool, 9> gammaSeen{};
   std::array<bool, 9> gammaUSeen{};
@@ -453,13 +454,12 @@ static bool verifyCommonGeneratedABIAttrs(::mlir::func::FuncOp fn,
       tensorium_mlir::abi::kAttrABIVersion);
   if (!version ||
       version.getInt() != tensorium_mlir::abi::kGeneratedKernelABIVersion) {
-    error = std::string("invalid ABI version on ") +
-            fn.getSymName().str();
+    error = std::string("invalid ABI version on ") + fn.getSymName().str();
     return false;
   }
 
-  auto kind = fn->getAttrOfType<::mlir::StringAttr>(
-      tensorium_mlir::abi::kAttrABIKind);
+  auto kind =
+      fn->getAttrOfType<::mlir::StringAttr>(tensorium_mlir::abi::kAttrABIKind);
   if (!kind || kind.getValue() != expectedKind) {
     error = std::string("invalid ABI kind on ") + fn.getSymName().str();
     return false;
@@ -467,10 +467,10 @@ static bool verifyCommonGeneratedABIAttrs(::mlir::func::FuncOp fn,
 
   auto memLayout = fn->getAttrOfType<::mlir::StringAttr>(
       tensorium_mlir::abi::kAttrMemoryLayout);
-  if (!memLayout ||
-      memLayout.getValue() != tensorium_mlir::abi::kMemLayoutSoAComponentMajor) {
-    error = std::string("invalid memory layout attr on ") +
-            fn.getSymName().str();
+  if (!memLayout || memLayout.getValue() !=
+                        tensorium_mlir::abi::kMemLayoutSoAComponentMajor) {
+    error =
+        std::string("invalid memory layout attr on ") + fn.getSymName().str();
     return false;
   }
 
@@ -478,8 +478,7 @@ static bool verifyCommonGeneratedABIAttrs(::mlir::func::FuncOp fn,
       tensorium_mlir::abi::kAttrMemrefABI);
   if (!memrefABI ||
       memrefABI.getValue() != tensorium_mlir::abi::kMemrefABI1DStridedF64) {
-    error = std::string("invalid memref ABI attr on ") +
-            fn.getSymName().str();
+    error = std::string("invalid memref ABI attr on ") + fn.getSymName().str();
     return false;
   }
 
@@ -491,8 +490,7 @@ static std::string trimCopy(const std::string &s) {
   while (begin < s.size() && std::isspace(static_cast<unsigned char>(s[begin])))
     ++begin;
   std::size_t end = s.size();
-  while (end > begin &&
-         std::isspace(static_cast<unsigned char>(s[end - 1])))
+  while (end > begin && std::isspace(static_cast<unsigned char>(s[end - 1])))
     --end;
   return s.substr(begin, end - begin);
 }
@@ -518,10 +516,8 @@ static bool llvmFunctionArgTypeTokens(const std::string &llvmIR,
   std::size_t start = 0;
   while (start < args.size()) {
     std::size_t comma = args.find(',', start);
-    std::string piece =
-        trimCopy(args.substr(start, comma == std::string::npos
-                                       ? std::string::npos
-                                       : comma - start));
+    std::string piece = trimCopy(args.substr(
+        start, comma == std::string::npos ? std::string::npos : comma - start));
     if (!piece.empty()) {
       std::size_t space = piece.find(' ');
       typesOut.push_back(piece.substr(0, space));
@@ -558,13 +554,12 @@ collectRhsTensoriumSignature(::mlir::ModuleOp module) {
              (ref.getIndices() ? joinStringArrayAttr(*ref.getIndices()) : "-");
       key += "|src=" + typeShapeKey(ref.getSource().getType());
     } else if (auto ctr = llvm::dyn_cast<tensorium::mlir::ContractOp>(&op)) {
-      key += "|sum=" +
-             joinStringArrayAttr(ctr->getAttrOfType<::mlir::ArrayAttr>(
-                 "sum_indices"));
+      key +=
+          "|sum=" + joinStringArrayAttr(
+                        ctr->getAttrOfType<::mlir::ArrayAttr>("sum_indices"));
     } else if (auto deriv = llvm::dyn_cast<tensorium::mlir::DerivOp>(&op)) {
-      key += "|idx=" + deriv->getAttrOfType<::mlir::StringAttr>("index")
-                          .getValue()
-                          .str();
+      key += "|idx=" +
+             deriv->getAttrOfType<::mlir::StringAttr>("index").getValue().str();
     } else if (auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op)) {
       key += "|lhs=" + joinStringArrayAttr(dt.getIndices());
       key += "|rhs=" + typeShapeKey(dt.getRhs().getType());
@@ -667,8 +662,8 @@ static std::string exprCanonicalKey(const backend::ExprIR *expr) {
   }
   case ExprIR::Kind::Divergence: {
     auto *div = static_cast<const backend::DivergenceIR *>(expr);
-    return "div(" + div->contractedIndex + ";" + exprCanonicalKey(div->in.get()) +
-           ")";
+    return "div(" + div->contractedIndex + ";" +
+           exprCanonicalKey(div->in.get()) + ")";
   }
   }
   return "?";
@@ -946,7 +941,8 @@ static bool testIRTensorTypeMappingForExternCall() {
     return false;
   }
   if (!checkCall(conEq, 3, 0, 3, 0)) {
-    std::cerr << "FAIL: contravariant extern tensor signature mapping mismatch\n";
+    std::cerr
+        << "FAIL: contravariant extern tensor signature mapping mismatch\n";
     return false;
   }
 
@@ -1009,7 +1005,8 @@ static bool testIRCanonicalDivergenceFromFixture() {
 
   IRStats stats;
   collectExprStats(rhs, stats);
-  if (stats.divergences != 0 || stats.contractions == 0 || stats.covariant == 0) {
+  if (stats.divergences != 0 || stats.contractions == 0 ||
+      stats.covariant == 0) {
     std::cerr << "FAIL: expected divergence eliminated into contraction + "
                  "covariant derivative\n";
     return false;
@@ -1018,8 +1015,9 @@ static bool testIRCanonicalDivergenceFromFixture() {
 }
 
 static bool testIRCanonicalTraceFromFixture() {
-  backend::ModuleIR mod = buildModuleFromFile(
-      "tests/ir/canonical/03_trace_from_contract.tn", CompilationMode::Symbolic);
+  backend::ModuleIR mod =
+      buildModuleFromFile("tests/ir/canonical/03_trace_from_contract.tn",
+                          CompilationMode::Symbolic);
   validation::canonicalizeDifferentialIR(mod);
   validation::canonicalizeEinsteinIR(mod);
 
@@ -1028,8 +1026,8 @@ static bool testIRCanonicalTraceFromFixture() {
 
   const auto *rhs = mod.evolutions[0].equations[0].rhs.get();
   if (!rhs || rhs->kind != backend::ExprIR::Kind::Contraction) {
-    std::cerr
-        << "FAIL: expected trace/contract forms to canonicalize to contraction\n";
+    std::cerr << "FAIL: expected trace/contract forms to canonicalize to "
+                 "contraction\n";
     return false;
   }
 
@@ -1056,10 +1054,11 @@ static bool testIRCanonicalEinsteinRenameInsert() {
   };
 
   auto lhs = std::make_unique<backend::TensorProductIR>(makeVar("A", {"j"}),
-                                                         makeVar("B", {"j"}));
-  auto product = std::make_unique<backend::TensorProductIR>(std::move(lhs),
-                                                             makeVar("C", {"j"}));
-  auto contraction = std::make_unique<backend::ContractionIR>(std::move(product));
+                                                        makeVar("B", {"j"}));
+  auto product = std::make_unique<backend::TensorProductIR>(
+      std::move(lhs), makeVar("C", {"j"}));
+  auto contraction =
+      std::make_unique<backend::ContractionIR>(std::move(product));
   contraction->summedIndices = {"j"};
   eq.rhs = std::move(contraction);
   evo.equations.push_back(std::move(eq));
@@ -1082,8 +1081,8 @@ static bool testIRCanonicalEinsteinRenameInsert() {
   std::vector<backend::ExprIR::Kind> kinds;
   collectExprKinds(rhs, kinds);
   if (llvm::find(kinds, backend::ExprIR::Kind::IndexRename) != kinds.end()) {
-    std::cerr
-        << "FAIL: canonical Einstein form should eliminate residual index_rename nodes\n";
+    std::cerr << "FAIL: canonical Einstein form should eliminate residual "
+                 "index_rename nodes\n";
     return false;
   }
   return true;
@@ -1103,7 +1102,8 @@ static bool testIRVerifierRejectsUncanonicalizedGradient() {
 
   auto verify = validation::verifyIR(mod);
   if (verify.ok()) {
-    std::cerr << "FAIL: verifier should reject uncanonicalized gradient nodes\n";
+    std::cerr
+        << "FAIL: verifier should reject uncanonicalized gradient nodes\n";
     return false;
   }
 
@@ -1193,24 +1193,24 @@ static bool testEinsteinCanonicalEquivalence() {
     }
 
     ::mlir::MLIRContext ctxA;
-    auto mlirA = buildMLIRModuleFromFileWithOpts(pair.first,
-                                                 CompilationMode::Symbolic,
-                                                 ctxA, opts);
+    auto mlirA = buildMLIRModuleFromFileWithOpts(
+        pair.first, CompilationMode::Symbolic, ctxA, opts);
     ::mlir::MLIRContext ctxB;
-    auto mlirB = buildMLIRModuleFromFileWithOpts(pair.second,
-                                                 CompilationMode::Symbolic,
-                                                 ctxB, opts);
+    auto mlirB = buildMLIRModuleFromFileWithOpts(
+        pair.second, CompilationMode::Symbolic, ctxB, opts);
 
     auto sigA = collectRhsTensoriumSignature(*mlirA);
     auto sigB = collectRhsTensoriumSignature(*mlirB);
     if (sigA.empty() || sigB.empty()) {
-      std::cerr << "FAIL(" << pair.first << "," << pair.second
-                << "): missing tensorium_rhs signature for canonical comparison\n";
+      std::cerr
+          << "FAIL(" << pair.first << "," << pair.second
+          << "): missing tensorium_rhs signature for canonical comparison\n";
       return false;
     }
     if (sigA != sigB) {
       std::cerr << "FAIL(" << pair.first << "," << pair.second
-                << "): equivalent Einstein forms produced different normalized MLIR\n";
+                << "): equivalent Einstein forms produced different normalized "
+                   "MLIR\n";
       return false;
     }
   }
@@ -1230,7 +1230,8 @@ static bool verifyInitRhsLayout(::mlir::ModuleOp module, InitRhsLayout &layout,
                                 std::string &error) {
   layout.initFunc = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
   layout.rhsFunc = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
-  layout.entryFunc = module.lookupSymbol<::mlir::func::FuncOp>("tensorium_entry");
+  layout.entryFunc =
+      module.lookupSymbol<::mlir::func::FuncOp>("tensorium_entry");
   if (!layout.initFunc || !layout.rhsFunc || !layout.entryFunc) {
     error = "missing tensorium_init/tensorium_rhs/tensorium_entry";
     return false;
@@ -1270,7 +1271,8 @@ static bool verifyInitRhsLayout(::mlir::ModuleOp module, InitRhsLayout &layout,
     initHasAssign |= llvm::isa<tensorium::mlir::AssignOp>(&op);
     initHasDtAssign |= llvm::isa<tensorium::mlir::DtAssignOp>(&op);
   }
-  if (!initHasMetric || !initHasDecompose || !initHasAssign || initHasDtAssign) {
+  if (!initHasMetric || !initHasDecompose || !initHasAssign ||
+      initHasDtAssign) {
     error = "tensorium_init placement invariant failed";
     return false;
   }
@@ -1306,11 +1308,13 @@ static bool testSchwarzschildMLIRVerification() {
   }
 
   if (layout.initFunc.getNumArguments() != 3) {
-    std::cerr << "FAIL: expected tensorium_init signature to have 3 arguments for Schwarzschild fixture\n";
+    std::cerr << "FAIL: expected tensorium_init signature to have 3 arguments "
+                 "for Schwarzschild fixture\n";
     return false;
   }
   if (layout.rhsFunc.getNumArguments() != 6) {
-    std::cerr << "FAIL: expected tensorium_rhs signature to have 6 arguments for Schwarzschild fixture\n";
+    std::cerr << "FAIL: expected tensorium_rhs signature to have 6 arguments "
+                 "for Schwarzschild fixture\n";
     return false;
   }
   if (layout.initCall.getNumOperands() != layout.initFunc.getNumArguments()) {
@@ -1376,7 +1380,8 @@ static bool testSchwarzschildMLIRVerification() {
   for (::mlir::Operation &op : layout.initFunc.getBody().front()) {
     if (auto metric = llvm::dyn_cast<tensorium::mlir::Metric4Op>(&op))
       metricOp = metric;
-    if (auto decomp = llvm::dyn_cast<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
+    if (auto decomp =
+            llvm::dyn_cast<tensorium::mlir::Decompose3P1FromMetricOp>(&op))
       decomposeOp = decomp;
     if (auto init = llvm::dyn_cast<tensorium::mlir::Init3P1Op>(&op))
       init3p1Op = init;
@@ -1455,21 +1460,24 @@ static bool testSchwarzschildMLIRVerification() {
   }
 
   if (!metricOp || !decomposeOp || !init3p1Op) {
-    std::cerr << "FAIL: expected metric4 + decompose3p1_from_metric + init3p1 in tensorium_init\n";
+    std::cerr << "FAIL: expected metric4 + decompose3p1_from_metric + init3p1 "
+                 "in tensorium_init\n";
     return false;
   }
   if (initAssignCount != 3 || initAssignedEntryValues.size() != 3) {
-    std::cerr << "FAIL: tensorium_init must bind alpha/gamma/gammaU via tensorium.assign\n";
+    std::cerr << "FAIL: tensorium_init must bind alpha/gamma/gammaU via "
+                 "tensorium.assign\n";
     return false;
   }
   for (::mlir::Value v : initAssignedEntryValues) {
     if (llvm::find(rhsReadEntryValues, v) == rhsReadEntryValues.end()) {
-      std::cerr << "FAIL: RHS does not read one of the fields assigned in init\n";
+      std::cerr
+          << "FAIL: RHS does not read one of the fields assigned in init\n";
       return false;
     }
   }
-  if (!rhsDtTargetsValid || rhsDtAssignCount != 2 || rhsScalarDtAssignCount != 1 ||
-      rhsTensorDtAssignCount != 1) {
+  if (!rhsDtTargetsValid || rhsDtAssignCount != 2 ||
+      rhsScalarDtAssignCount != 1 || rhsTensorDtAssignCount != 1) {
     std::cerr << "FAIL: tensorium_rhs dt_assign must target only H and K\n";
     return false;
   }
@@ -1478,7 +1486,8 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
   if (decomposeOp->getNumOperands() != 1) {
-    std::cerr << "FAIL: decompose3p1_from_metric must take exactly one metric operand\n";
+    std::cerr << "FAIL: decompose3p1_from_metric must take exactly one metric "
+                 "operand\n";
     return false;
   }
   if (decomposeOp.getMetric4() != metricOp.getMetric()) {
@@ -1493,11 +1502,13 @@ static bool testSchwarzschildMLIRVerification() {
       init3p1Op.getBetaIn() != decomposeOp.getBeta() ||
       init3p1Op.getGammaIn() != decomposeOp.getGamma() ||
       init3p1Op.getGammaUIn() != decomposeOp.getGammaU()) {
-    std::cerr << "FAIL: init3p1 inputs must come from decompose3p1_from_metric outputs\n";
+    std::cerr << "FAIL: init3p1 inputs must come from decompose3p1_from_metric "
+                 "outputs\n";
     return false;
   }
   if (!hasParamM || !hasCoordR || !hasCoordTheta || !hasSin) {
-    std::cerr << "FAIL: expected param/coord/sin ops for Schwarzschild metric\n";
+    std::cerr
+        << "FAIL: expected param/coord/sin ops for Schwarzschild metric\n";
     return false;
   }
 
@@ -1532,11 +1543,10 @@ static bool testSchwarzschildMLIRVerification() {
     std::cerr << "FAIL: expected 2*M multiplication in Schwarzschild factor\n";
     return false;
   }
-  const bool hasConst2ParamM =
-      (isConstValue(twoMMul.getLhs(), 2.0) &&
-       isParamNamedValue(twoMMul.getRhs(), "M")) ||
-      (isConstValue(twoMMul.getRhs(), 2.0) &&
-       isParamNamedValue(twoMMul.getLhs(), "M"));
+  const bool hasConst2ParamM = (isConstValue(twoMMul.getLhs(), 2.0) &&
+                                isParamNamedValue(twoMMul.getRhs(), "M")) ||
+                               (isConstValue(twoMMul.getRhs(), 2.0) &&
+                                isParamNamedValue(twoMMul.getLhs(), "M"));
   if (!hasConst2ParamM) {
     std::cerr << "FAIL: expected factor 2*M in Schwarzschild factor\n";
     return false;
@@ -1549,9 +1559,10 @@ static bool testSchwarzschildMLIRVerification() {
     auto mul = div.getLhs().getDefiningOp<tensorium::mlir::MulOp>();
     if (!mul)
       continue;
-    const bool match =
-        (isConstValue(mul.getLhs(), 2.0) && isParamNamedValue(mul.getRhs(), "M")) ||
-        (isConstValue(mul.getRhs(), 2.0) && isParamNamedValue(mul.getLhs(), "M"));
+    const bool match = (isConstValue(mul.getLhs(), 2.0) &&
+                        isParamNamedValue(mul.getRhs(), "M")) ||
+                       (isConstValue(mul.getRhs(), 2.0) &&
+                        isParamNamedValue(mul.getLhs(), "M"));
     if (match)
       ++twoMrCount;
   }
@@ -1561,9 +1572,10 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
 
-  if (!valueDependsOn(g33, [](::mlir::Operation *op) {
-        return llvm::isa<tensorium::mlir::SinOp>(op);
-      }) ||
+  if (!valueDependsOn(g33,
+                      [](::mlir::Operation *op) {
+                        return llvm::isa<tensorium::mlir::SinOp>(op);
+                      }) ||
       !valueDependsOn(g33, [](::mlir::Operation *op) {
         auto coord = llvm::dyn_cast<tensorium::mlir::CoordOp>(op);
         return coord && coord.getName() == "theta";
@@ -1602,7 +1614,8 @@ static bool testSchwarzschildMLIRVerification() {
     auto ref = llvm::dyn_cast<tensorium::mlir::RefOp>(&op);
     if (!ref)
       continue;
-    auto srcTy = llvm::dyn_cast<tensorium::mlir::FieldType>(ref.getSource().getType());
+    auto srcTy =
+        llvm::dyn_cast<tensorium::mlir::FieldType>(ref.getSource().getType());
     if (!srcTy)
       continue;
     auto idx = ref.getIndices();
@@ -1639,11 +1652,13 @@ static bool testSchwarzschildMLIRVerification() {
     return false;
   }
   if (!gammaUFromInitAssignedFeedsContract) {
-    std::cerr << "FAIL: contract must consume gammaU loaded from init-assigned field\n";
+    std::cerr << "FAIL: contract must consume gammaU loaded from init-assigned "
+                 "field\n";
     return false;
   }
   if (gammaUContractUsesNonInitSource) {
-    std::cerr << "FAIL: contract must not consume gammaU from non-init source\n";
+    std::cerr
+        << "FAIL: contract must not consume gammaU from non-init source\n";
     return false;
   }
 
@@ -1657,7 +1672,8 @@ static bool testSchwarzschildMLIRVerification() {
       alphaRef = mul.getLhs();
   }
   if (!alphaRef) {
-    std::cerr << "FAIL: expected alpha scalar ref multiplied with gamma in tensorium_rhs\n";
+    std::cerr << "FAIL: expected alpha scalar ref multiplied with gamma in "
+                 "tensorium_rhs\n";
     return false;
   }
 
@@ -1685,7 +1701,8 @@ struct InitNormCounts {
   int sinTheta = 0;
 };
 
-static InitNormCounts countInitNormalizationPatterns(::mlir::func::FuncOp initFunc) {
+static InitNormCounts
+countInitNormalizationPatterns(::mlir::func::FuncOp initFunc) {
   InitNormCounts counts;
   for (::mlir::Operation &op : initFunc.getBody().front()) {
     if (auto div = llvm::dyn_cast<tensorium::mlir::DivOp>(&op)) {
@@ -1694,11 +1711,10 @@ static InitNormCounts countInitNormalizationPatterns(::mlir::func::FuncOp initFu
       auto mul = div.getLhs().getDefiningOp<tensorium::mlir::MulOp>();
       if (!mul)
         continue;
-      const bool twoMr =
-          (isConstValue(mul.getLhs(), 2.0) &&
-           isParamNamedValue(mul.getRhs(), "M")) ||
-          (isConstValue(mul.getRhs(), 2.0) &&
-           isParamNamedValue(mul.getLhs(), "M"));
+      const bool twoMr = (isConstValue(mul.getLhs(), 2.0) &&
+                          isParamNamedValue(mul.getRhs(), "M")) ||
+                         (isConstValue(mul.getRhs(), 2.0) &&
+                          isParamNamedValue(mul.getLhs(), "M"));
       if (twoMr)
         ++counts.twoMrDiv;
     }
@@ -1735,8 +1751,8 @@ static bool testMLIRNormalizationPasses() {
   InitRhsLayout rawLayout;
   std::string rawErr;
   if (!verifyInitRhsLayout(*rawModule, rawLayout, rawErr)) {
-    std::cerr << "FAIL: raw MLIR layout invalid before normalization: " << rawErr
-              << "\n";
+    std::cerr << "FAIL: raw MLIR layout invalid before normalization: "
+              << rawErr << "\n";
     return false;
   }
 
@@ -1748,7 +1764,8 @@ static bool testMLIRNormalizationPasses() {
   }
 
   InitNormCounts rawCounts = countInitNormalizationPatterns(rawLayout.initFunc);
-  InitNormCounts normCounts = countInitNormalizationPatterns(normLayout.initFunc);
+  InitNormCounts normCounts =
+      countInitNormalizationPatterns(normLayout.initFunc);
 
   if (normCounts.twoMrDiv != 1) {
     std::cerr << "FAIL: expected normalized init to keep one 2*M/r, got "
@@ -1803,8 +1820,8 @@ static bool testSchwarzschildInitNumericPoint() {
             << " M=" << M << " r=" << r << " theta=" << theta << "\n"
             << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
             << " expected=[[" << (-f) << ", 0, 0, 0], [0, " << (1.0 / f)
-            << ", 0, 0], [0, 0, " << (r * r) << ", 0], [0, 0, 0, "
-            << (r * r) << "]]\n"
+            << ", 0, 0], [0, 0, " << (r * r) << ", 0], [0, 0, 0, " << (r * r)
+            << "]]\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=" << alphaExpected << "\n"
             << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
@@ -1844,9 +1861,9 @@ static bool testSchwarzschildInitMetricLoweringPass() {
   opts.enableMetricLoweringPass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
-      opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   auto initFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init");
   if (!initFunc) {
@@ -1865,16 +1882,19 @@ static bool testSchwarzschildInitMetricLoweringPass() {
         llvm::isa<tensorium::mlir::Decompose3P1FromMetricOp>(&op) ? 1 : 0;
     init3p1Ops += llvm::isa<tensorium::mlir::Init3P1Op>(&op) ? 1 : 0;
     buildGammaOps += llvm::isa<tensorium::mlir::BuildCovTensor2Op>(&op) ? 1 : 0;
-    buildGammaUOps += llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op) ? 1 : 0;
+    buildGammaUOps +=
+        llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op) ? 1 : 0;
   }
 
   if (metricOps != 0 || decomposeOps != 0 || init3p1Ops != 0) {
-    std::cerr << "FAIL: metric lowering pass must remove metric4/decompose/init3p1 "
-                 "from tensorium_init\n";
+    std::cerr
+        << "FAIL: metric lowering pass must remove metric4/decompose/init3p1 "
+           "from tensorium_init\n";
     return false;
   }
   if (buildGammaOps == 0 || buildGammaUOps == 0) {
-    std::cerr << "FAIL: metric lowering pass must materialize gamma/gammaU builders\n";
+    std::cerr << "FAIL: metric lowering pass must materialize gamma/gammaU "
+                 "builders\n";
     return false;
   }
 
@@ -1913,13 +1933,15 @@ static bool testSchwarzschildInitPointStdLowering() {
   opts.enableInitStdLoweringPass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
-      opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
-  auto initPoint = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_point");
+  auto initPoint =
+      module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_point");
   if (!initPoint) {
-    std::cerr << "FAIL: missing tensorium_init_point after init-to-std lowering\n";
+    std::cerr
+        << "FAIL: missing tensorium_init_point after init-to-std lowering\n";
     return false;
   }
 
@@ -1931,8 +1953,7 @@ static bool testSchwarzschildInitPointStdLowering() {
 
   for (unsigned i = 0; i < 4; ++i) {
     if (!initPoint.getArgument(i).getType().isF64()) {
-      std::cerr << "FAIL: tensorium_init_point arg " << i
-                << " must be f64\n";
+      std::cerr << "FAIL: tensorium_init_point arg " << i << " must be f64\n";
       return false;
     }
   }
@@ -1954,15 +1975,17 @@ static bool testSchwarzschildInitPointStdLowering() {
   bool hasMemrefStore = false;
   for (::mlir::Operation &op : initPoint.getBody().front()) {
     if (op.getName().getDialectNamespace() == "tensorium") {
-      std::cerr << "FAIL: tensorium_init_point must not keep tensorium ops, found "
-                << op.getName().getStringRef().str() << "\n";
+      std::cerr
+          << "FAIL: tensorium_init_point must not keep tensorium ops, found "
+          << op.getName().getStringRef().str() << "\n";
       return false;
     }
     if (op.getName().getStringRef() == "memref.store")
       hasMemrefStore = true;
   }
   if (!hasMemrefStore) {
-    std::cerr << "FAIL: tensorium_init_point must contain memref.store writes\n";
+    std::cerr
+        << "FAIL: tensorium_init_point must contain memref.store writes\n";
     return false;
   }
 
@@ -1977,14 +2000,15 @@ static bool testSchwarzschildInitGridScfLowering() {
   opts.enableInitGridScfPass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
-      opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   auto initGrid =
       module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_grid_scf");
   if (!initGrid) {
-    std::cerr << "FAIL: missing tensorium_init_grid_scf after SCF init lowering\n";
+    std::cerr
+        << "FAIL: missing tensorium_init_grid_scf after SCF init lowering\n";
     return false;
   }
   if (initGrid.getNumArguments() != 7) {
@@ -2001,7 +2025,8 @@ static bool testSchwarzschildInitGridScfLowering() {
   auto checkDynMemRef = [&](unsigned argIndex) {
     auto memTy = llvm::dyn_cast<::mlir::MemRefType>(
         initGrid.getArgument(argIndex).getType());
-    if (!memTy || memTy.getRank() != 1 || memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
+    if (!memTy || memTy.getRank() != 1 ||
+        memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
         !memTy.getElementType().isF64()) {
       std::cerr << "FAIL: tensorium_init_grid_scf arg " << argIndex
                 << " must be memref<?xf64>\n";
@@ -2032,8 +2057,9 @@ static bool testSchwarzschildInitGridScfLowering() {
     }
   });
   if (hasTensoriumOp) {
-    std::cerr << "FAIL: tensorium_init_grid_scf must not keep tensorium ops, found "
-              << tensoriumOpName << "\n";
+    std::cerr
+        << "FAIL: tensorium_init_grid_scf must not keep tensorium ops, found "
+        << tensoriumOpName << "\n";
     return false;
   }
 
@@ -2042,7 +2068,8 @@ static bool testSchwarzschildInitGridScfLowering() {
     return false;
   }
   if (!callsInitPoint) {
-    std::cerr << "FAIL: tensorium_init_grid_scf must call tensorium_init_point\n";
+    std::cerr
+        << "FAIL: tensorium_init_grid_scf must call tensorium_init_point\n";
     return false;
   }
   return true;
@@ -2056,14 +2083,15 @@ static bool testSchwarzschildInitGridAffineLowering() {
   opts.enableInitGridAffinePass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
-      opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   auto initGrid =
       module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_grid_affine");
   if (!initGrid) {
-    std::cerr << "FAIL: missing tensorium_init_grid_affine after affine init lowering\n";
+    std::cerr << "FAIL: missing tensorium_init_grid_affine after affine init "
+                 "lowering\n";
     return false;
   }
   if (initGrid.getNumArguments() != 7) {
@@ -2109,7 +2137,8 @@ static bool testSchwarzschildInitGridAffineLowering() {
     }
   });
   if (hasTensoriumOp) {
-    std::cerr << "FAIL: tensorium_init_grid_affine must not keep tensorium ops, found "
+    std::cerr << "FAIL: tensorium_init_grid_affine must not keep tensorium "
+                 "ops, found "
               << tensoriumOpName << "\n";
     return false;
   }
@@ -2130,20 +2159,22 @@ static bool testSchwarzschildRhsGridScfLowering() {
   opts.enableStencilLoweringPass = false;
   opts.enableRhsGridScfPass = true;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
-      opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   auto rhsGrid =
       module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_scf");
   if (!rhsGrid) {
-    std::cerr << "FAIL: missing tensorium_rhs_grid_scf after rhs SCF lowering\n";
+    std::cerr
+        << "FAIL: missing tensorium_rhs_grid_scf after rhs SCF lowering\n";
     return false;
   }
 
   auto rhs = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
   if (!rhs) {
-    std::cerr << "FAIL: missing source tensorium_rhs for rhs SCF lowering test\n";
+    std::cerr
+        << "FAIL: missing source tensorium_rhs for rhs SCF lowering test\n";
     return false;
   }
 
@@ -2163,13 +2194,13 @@ static bool testSchwarzschildRhsGridScfLowering() {
   }
   for (unsigned i = 3; i < 6; ++i) {
     if (!rhsGrid.getArgument(i).getType().isF64()) {
-      std::cerr << "FAIL: tensorium_rhs_grid_scf arg " << i
-                << " must be f64\n";
+      std::cerr << "FAIL: tensorium_rhs_grid_scf arg " << i << " must be f64\n";
       return false;
     }
   }
   for (unsigned i = 6; i < expectedArgs; ++i) {
-    auto memTy = llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(i).getType());
+    auto memTy =
+        llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(i).getType());
     if (!memTy || memTy.getRank() != 1 ||
         memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
         !memTy.getElementType().isF64()) {
@@ -2202,8 +2233,9 @@ static bool testSchwarzschildRhsGridScfLowering() {
     return false;
   }
   if (hasTensoriumOp) {
-    std::cerr << "FAIL: tensorium_rhs_grid_scf must not contain tensorium ops, found "
-              << tensoriumOpName << "\n";
+    std::cerr
+        << "FAIL: tensorium_rhs_grid_scf must not contain tensorium ops, found "
+        << tensoriumOpName << "\n";
     return false;
   }
 
@@ -2320,7 +2352,8 @@ evolution CoordInRhs {
   auto rhsGrid =
       module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_scf");
   if (!rhsGrid) {
-    std::cerr << "FAIL: missing tensorium_rhs_grid_scf for coord lowering test\n";
+    std::cerr
+        << "FAIL: missing tensorium_rhs_grid_scf for coord lowering test\n";
     return false;
   }
 
@@ -2331,7 +2364,8 @@ evolution CoordInRhs {
     return false;
   }
 
-  auto memTy = llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(6).getType());
+  auto memTy =
+      llvm::dyn_cast<::mlir::MemRefType>(rhsGrid.getArgument(6).getType());
   if (!memTy || memTy.getRank() != 1 ||
       memTy.getShape()[0] != ::mlir::ShapedType::kDynamic ||
       !memTy.getElementType().isF64()) {
@@ -2362,11 +2396,13 @@ evolution CoordInRhs {
     return false;
   }
   if (!hasIndexToFloat) {
-    std::cerr << "FAIL: rhs-grid-scf must cast loop index to float for coord op\n";
+    std::cerr
+        << "FAIL: rhs-grid-scf must cast loop index to float for coord op\n";
     return false;
   }
   if (!spacingArgUsed) {
-    std::cerr << "FAIL: rhs-grid-scf must use spacing argument when lowering coord op\n";
+    std::cerr << "FAIL: rhs-grid-scf must use spacing argument when lowering "
+                 "coord op\n";
     return false;
   }
 
@@ -2445,7 +2481,8 @@ evolution ParallelSmoke {
 }
 )";
 
-  backend::ModuleIR mod = buildModuleFromSource(source, CompilationMode::Executable);
+  backend::ModuleIR mod =
+      buildModuleFromSource(source, CompilationMode::Executable);
   std::string llvmIR;
   if (!tensorium_mlir::emitLLVMIR(mod, opts, &llvmIR)) {
     std::cerr << "FAIL: emitLLVMIR failed for rhs_grid_parallel\n";
@@ -2470,15 +2507,15 @@ static bool testSchwarzschildRhsGridAffineLowering() {
   opts.enableStencilLoweringPass = false;
   opts.enableRhsGridAffinePass = true;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
-      opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   auto rhsGrid =
       module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_affine");
   if (!rhsGrid) {
-    std::cerr
-        << "FAIL: missing tensorium_rhs_grid_affine after rhs affine lowering\n";
+    std::cerr << "FAIL: missing tensorium_rhs_grid_affine after rhs affine "
+                 "lowering\n";
     return false;
   }
 
@@ -2545,9 +2582,9 @@ static bool testSchwarzschildRhsGridAffineLowering() {
     return false;
   }
   if (hasTensoriumOp) {
-    std::cerr
-        << "FAIL: tensorium_rhs_grid_affine must not contain tensorium ops, found "
-        << tensoriumOpName << "\n";
+    std::cerr << "FAIL: tensorium_rhs_grid_affine must not contain tensorium "
+                 "ops, found "
+              << tensoriumOpName << "\n";
     return false;
   }
 
@@ -2563,9 +2600,9 @@ static bool testGeneratedKernelABIMetadata() {
   opts.enableRhsGridAffinePass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
-      opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   auto modVersion = module->getOperation()->getAttrOfType<::mlir::IntegerAttr>(
       tensorium_mlir::abi::kAttrABIVersion);
@@ -2576,8 +2613,8 @@ static bool testGeneratedKernelABIMetadata() {
   }
   auto modLayout = module->getOperation()->getAttrOfType<::mlir::StringAttr>(
       tensorium_mlir::abi::kAttrMemoryLayout);
-  if (!modLayout ||
-      modLayout.getValue() != tensorium_mlir::abi::kMemLayoutSoAComponentMajor) {
+  if (!modLayout || modLayout.getValue() !=
+                        tensorium_mlir::abi::kMemLayoutSoAComponentMajor) {
     std::cerr << "FAIL: module missing generated memory layout attr\n";
     return false;
   }
@@ -2607,18 +2644,14 @@ static bool testGeneratedKernelABIMetadata() {
                                      abiErr) ||
       !verifyCommonGeneratedABIAttrs(rhs, tensorium_mlir::abi::kKindRhsSource,
                                      abiErr) ||
-      !verifyCommonGeneratedABIAttrs(entry,
-                                     tensorium_mlir::abi::kKindEntrySource,
-                                     abiErr) ||
-      !verifyCommonGeneratedABIAttrs(initPoint,
-                                     tensorium_mlir::abi::kKindInitPoint,
-                                     abiErr) ||
-      !verifyCommonGeneratedABIAttrs(initGrid,
-                                     tensorium_mlir::abi::kKindInitGridAffine,
-                                     abiErr) ||
-      !verifyCommonGeneratedABIAttrs(rhsGrid,
-                                     tensorium_mlir::abi::kKindRhsGridAffine,
-                                     abiErr)) {
+      !verifyCommonGeneratedABIAttrs(
+          entry, tensorium_mlir::abi::kKindEntrySource, abiErr) ||
+      !verifyCommonGeneratedABIAttrs(
+          initPoint, tensorium_mlir::abi::kKindInitPoint, abiErr) ||
+      !verifyCommonGeneratedABIAttrs(
+          initGrid, tensorium_mlir::abi::kKindInitGridAffine, abiErr) ||
+      !verifyCommonGeneratedABIAttrs(
+          rhsGrid, tensorium_mlir::abi::kKindRhsGridAffine, abiErr)) {
     std::cerr << "FAIL: " << abiErr << "\n";
     return false;
   }
@@ -2628,48 +2661,51 @@ static bool testGeneratedKernelABIMetadata() {
     return got == expected;
   };
 
-  auto initPointParams = parseStringArrayAttr(
-      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+  auto initPointParams =
+      parseStringArrayAttr(initPoint->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrParamNames));
-  auto initPointCoords = parseStringArrayAttr(
-      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+  auto initPointCoords =
+      parseStringArrayAttr(initPoint->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrCoordNames));
-  auto initPointOutputs = parseStringArrayAttr(
-      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+  auto initPointOutputs =
+      parseStringArrayAttr(initPoint->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrOutputNames));
-  auto initPointWrites = parseI64ArrayAttr(
-      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+  auto initPointWrites =
+      parseI64ArrayAttr(initPoint->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrWriteArgIndices));
   if (!expectEqVec(initPointParams, {"M"}) ||
       !expectEqVec(initPointCoords, {"r", "theta", "phi"}) ||
       !expectEqVec(initPointOutputs, {"alpha", "gamma", "gammaU"}) ||
       initPointWrites != std::vector<int64_t>({4, 5, 6})) {
-    std::cerr << "FAIL: init_point ABI metadata does not match expected ABI v1\n";
+    std::cerr
+        << "FAIL: init_point ABI metadata does not match expected ABI v1\n";
     return false;
   }
 
-  auto initGridOutputs = parseStringArrayAttr(
-      initGrid->getAttrOfType<::mlir::ArrayAttr>(
+  auto initGridOutputs =
+      parseStringArrayAttr(initGrid->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrOutputNames));
-  auto initGridWrites = parseI64ArrayAttr(
-      initGrid->getAttrOfType<::mlir::ArrayAttr>(
+  auto initGridWrites =
+      parseI64ArrayAttr(initGrid->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrWriteArgIndices));
   if (!expectEqVec(initGridOutputs, {"alpha", "gamma", "gammaU"}) ||
       initGridWrites != std::vector<int64_t>({4, 5, 6})) {
-    std::cerr << "FAIL: init_grid_affine ABI metadata does not match expected ABI v1\n";
+    std::cerr << "FAIL: init_grid_affine ABI metadata does not match expected "
+                 "ABI v1\n";
     return false;
   }
 
-  auto rhsFieldNames = parseStringArrayAttr(
-      rhs->getAttrOfType<::mlir::ArrayAttr>(tensorium_mlir::abi::kAttrFieldNames));
-  auto rhsGridFieldNames = parseStringArrayAttr(
-      rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+  auto rhsFieldNames =
+      parseStringArrayAttr(rhs->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrFieldNames));
-  auto rhsGridOutputs = parseStringArrayAttr(
-      rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+  auto rhsGridFieldNames =
+      parseStringArrayAttr(rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+          tensorium_mlir::abi::kAttrFieldNames));
+  auto rhsGridOutputs =
+      parseStringArrayAttr(rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrOutputNames));
-  auto rhsGridWrites = parseI64ArrayAttr(
-      rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
+  auto rhsGridWrites =
+      parseI64ArrayAttr(rhsGrid->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrWriteArgIndices));
   if (!expectEqVec(rhsFieldNames,
                    {"alpha", "phi", "H", "gamma", "gammaU", "K"})) {
@@ -2695,9 +2731,9 @@ static bool testSpatialOffdiagNoParamABI() {
   opts.enableRhsGridAffinePass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/spatial_offdiag_3d.tn", CompilationMode::Executable,
-      ctx, opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/spatial_offdiag_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   auto initPoint = module->lookupSymbol<::mlir::func::FuncOp>(
       tensorium_mlir::abi::kSymbolInitPoint);
@@ -2711,21 +2747,17 @@ static bool testSpatialOffdiagNoParamABI() {
   }
 
   std::string abiErr;
-  if (!verifyCommonGeneratedABIAttrs(initPoint,
-                                     tensorium_mlir::abi::kKindInitPoint,
-                                     abiErr) ||
-      !verifyCommonGeneratedABIAttrs(initGrid,
-                                     tensorium_mlir::abi::kKindInitGridAffine,
-                                     abiErr) ||
-      !verifyCommonGeneratedABIAttrs(rhsGrid,
-                                     tensorium_mlir::abi::kKindRhsGridAffine,
-                                     abiErr)) {
+  if (!verifyCommonGeneratedABIAttrs(
+          initPoint, tensorium_mlir::abi::kKindInitPoint, abiErr) ||
+      !verifyCommonGeneratedABIAttrs(
+          initGrid, tensorium_mlir::abi::kKindInitGridAffine, abiErr) ||
+      !verifyCommonGeneratedABIAttrs(
+          rhsGrid, tensorium_mlir::abi::kKindRhsGridAffine, abiErr)) {
     std::cerr << "FAIL: " << abiErr << "\n";
     return false;
   }
 
-  auto expectNoParams = [](const ::mlir::func::FuncOp fn,
-                           const char *label) {
+  auto expectNoParams = [](const ::mlir::func::FuncOp fn, const char *label) {
     auto params = parseStringArrayAttr(fn->getAttrOfType<::mlir::ArrayAttr>(
         tensorium_mlir::abi::kAttrParamNames));
     if (!params.empty()) {
@@ -2741,8 +2773,8 @@ static bool testSpatialOffdiagNoParamABI() {
     return false;
   }
 
-  auto initInternalParams = parseStringArrayAttr(
-      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+  auto initInternalParams =
+      parseStringArrayAttr(initPoint->getAttrOfType<::mlir::ArrayAttr>(
           "tensorium.init.param_names"));
   if (!initInternalParams.empty()) {
     std::cerr << "FAIL: tensorium.init.param_names must stay empty\n";
@@ -2781,11 +2813,11 @@ static bool testSpatialOffdiagNoParamABI() {
     }
   }
 
-  auto initPointWrites = parseI64ArrayAttr(
-      initPoint->getAttrOfType<::mlir::ArrayAttr>(
+  auto initPointWrites =
+      parseI64ArrayAttr(initPoint->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrWriteArgIndices));
-  auto initGridWrites = parseI64ArrayAttr(
-      initGrid->getAttrOfType<::mlir::ArrayAttr>(
+  auto initGridWrites =
+      parseI64ArrayAttr(initGrid->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrWriteArgIndices));
   if (initPointWrites != std::vector<int64_t>({3, 4, 5}) ||
       initGridWrites != std::vector<int64_t>({3, 4, 5})) {
@@ -2803,9 +2835,9 @@ static bool testSpatialOffdiagGeneratedSplit3p1Constants() {
   opts.enableInitStdLoweringPass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/spatial_offdiag_3d.tn", CompilationMode::Executable,
-      ctx, opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/spatial_offdiag_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
   auto initPoint = module->lookupSymbol<::mlir::func::FuncOp>(
       tensorium_mlir::abi::kSymbolInitPoint);
   if (!initPoint) {
@@ -2821,14 +2853,10 @@ static bool testSpatialOffdiagGeneratedSplit3p1Constants() {
     return false;
   }
 
-  const std::array<double, 9> gammaExpected = {
-      2.0, 1.0, 0.0,
-      1.0, 3.0, 0.0,
-      0.0, 0.0, 4.0};
-  const std::array<double, 9> gammaUExpected = {
-      0.6, -0.2, 0.0,
-      -0.2, 0.4, 0.0,
-      0.0, 0.0, 0.25};
+  const std::array<double, 9> gammaExpected = {2.0, 1.0, 0.0, 1.0, 3.0,
+                                               0.0, 0.0, 0.0, 4.0};
+  const std::array<double, 9> gammaUExpected = {0.6, -0.2, 0.0, -0.2, 0.4,
+                                                0.0, 0.0,  0.0, 0.25};
 
   if (!almostEqual(alpha[0], 1.0)) {
     std::cerr << "FAIL: generated spatial alpha constant mismatch\n";
@@ -2842,8 +2870,7 @@ static bool testSpatialOffdiagGeneratedSplit3p1Constants() {
       return false;
     }
   }
-  if (!almostEqual(gamma[1], gamma[3]) ||
-      !almostEqual(gammaU[1], gammaU[3])) {
+  if (!almostEqual(gamma[1], gamma[3]) || !almostEqual(gammaU[1], gammaU[3])) {
     std::cerr << "FAIL: enforce_symmetry lost off-diagonal components\n";
     return false;
   }
@@ -2859,9 +2886,9 @@ static bool testSpatialOffdiagInitGridAffineNoLoopAlloc() {
   opts.enableInitGridAffinePass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/spatial_offdiag_3d.tn", CompilationMode::Executable,
-      ctx, opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/spatial_offdiag_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
   auto initGrid = module->lookupSymbol<::mlir::func::FuncOp>(
       tensorium_mlir::abi::kSymbolInitGridAffine);
   if (!initGrid) {
@@ -2878,7 +2905,8 @@ static bool testSpatialOffdiagInitGridAffineNoLoopAlloc() {
     hasAlloc |= llvm::isa<::mlir::memref::AllocOp>(op);
     hasDealloc |= llvm::isa<::mlir::memref::DeallocOp>(op);
     if (auto call = llvm::dyn_cast<::mlir::func::CallOp>(op))
-      callsInitPoint |= (call.getCallee() == tensorium_mlir::abi::kSymbolInitPoint);
+      callsInitPoint |=
+          (call.getCallee() == tensorium_mlir::abi::kSymbolInitPoint);
   });
 
   if (!hasAffineFor) {
@@ -2910,9 +2938,9 @@ static bool testInitGridScfScratchAllocOutsideLoop() {
   opts.enableInitGridScfPass = true;
   opts.enableStencilLoweringPass = false;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable,
-      ctx, opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
   auto initGrid = module->lookupSymbol<::mlir::func::FuncOp>(
       tensorium_mlir::abi::kSymbolInitGridScf);
   if (!initGrid) {
@@ -2959,9 +2987,9 @@ static bool testSpatialOffdiagRhsCompactHessianAffineLowering() {
   opts.enableStencilLoweringPass = false;
   opts.enableRhsGridAffinePass = true;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/spatial_offdiag_3d.tn", CompilationMode::Executable,
-      ctx, opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/spatial_offdiag_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
   auto rhsGrid = module->lookupSymbol<::mlir::func::FuncOp>(
       tensorium_mlir::abi::kSymbolRhsGridAffine);
   if (!rhsGrid) {
@@ -3000,19 +3028,18 @@ static bool testSpatialOffdiagRhsCompactHessianAffineLowering() {
       hasDzDzDenom |= isArgSquare(mul, 5);
       auto lhsConst = getConstantF64ValueForTest(mul.getLhs());
       auto rhsConst = getConstantF64ValueForTest(mul.getRhs());
-      hasMixedFourFactor |=
-          (lhsConst && almostEqual(*lhsConst, 4.0)) ||
-          (rhsConst && almostEqual(*rhsConst, 4.0));
+      hasMixedFourFactor |= (lhsConst && almostEqual(*lhsConst, 4.0)) ||
+                            (rhsConst && almostEqual(*rhsConst, 4.0));
     }
   });
 
   if (affineLoopCount < 3 || radiusOneLowerBounds < 3 ||
       hasRadiusTwoLowerBound) {
-    std::cerr << "FAIL: spatial Hessian affine loops must use radius 1 bounds\n";
+    std::cerr
+        << "FAIL: spatial Hessian affine loops must use radius 1 bounds\n";
     return false;
   }
-  if (!hasDxDxDenom || !hasDyDyDenom || !hasDzDzDenom ||
-      !hasMixedFourFactor) {
+  if (!hasDxDxDenom || !hasDyDyDenom || !hasDzDzDenom || !hasMixedFourFactor) {
     std::cerr << "FAIL: spatial Hessian lowering did not expose compact "
                  "diagonal and centered mixed denominators\n";
     return false;
@@ -3035,14 +3062,14 @@ static bool testLoweredGridLLVMABISignature() {
   opts.enableStripSourceFuncsPass = true;
   opts.enableStencilLoweringPass = false;
 
-  backend::ModuleIR mod =
-      buildModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
-                          CompilationMode::Executable);
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable);
   validation::canonicalizeDifferentialIR(mod);
   validation::canonicalizeEinsteinIR(mod);
   auto verify = validation::verifyIR(mod);
   if (!verify.ok()) {
-    std::cerr << "FAIL: IR verification failed before ABI LLVM signature test\n";
+    std::cerr
+        << "FAIL: IR verification failed before ABI LLVM signature test\n";
     return false;
   }
 
@@ -3068,8 +3095,8 @@ static bool testLoweredGridLLVMABISignature() {
   };
 
   std::vector<std::string> initPointTypes;
-  if (!llvmFunctionArgTypeTokens(
-          llvmIR, tensorium_mlir::abi::kSymbolInitPoint, initPointTypes)) {
+  if (!llvmFunctionArgTypeTokens(llvmIR, tensorium_mlir::abi::kSymbolInitPoint,
+                                 initPointTypes)) {
     std::cerr << "FAIL: missing LLVM signature for tensorium_init_point\n";
     return false;
   }
@@ -3084,12 +3111,14 @@ static bool testLoweredGridLLVMABISignature() {
   std::vector<std::string> initGridTypes;
   if (!llvmFunctionArgTypeTokens(
           llvmIR, tensorium_mlir::abi::kSymbolInitGridAffine, initGridTypes)) {
-    std::cerr << "FAIL: missing LLVM signature for tensorium_init_grid_affine\n";
+    std::cerr
+        << "FAIL: missing LLVM signature for tensorium_init_grid_affine\n";
     return false;
   }
   if (initGridTypes.size() != 31 || initGridTypes[0] != "double" ||
       !checkMemrefGroups(initGridTypes, 1, 6)) {
-    std::cerr << "FAIL: tensorium_init_grid_affine LLVM ABI signature mismatch\n";
+    std::cerr
+        << "FAIL: tensorium_init_grid_affine LLVM ABI signature mismatch\n";
     return false;
   }
 
@@ -3103,7 +3132,8 @@ static bool testLoweredGridLLVMABISignature() {
       rhsGridTypes[1] != "i64" || rhsGridTypes[2] != "i64" ||
       rhsGridTypes[3] != "double" || rhsGridTypes[4] != "double" ||
       rhsGridTypes[5] != "double" || !checkMemrefGroups(rhsGridTypes, 6, 6)) {
-    std::cerr << "FAIL: tensorium_rhs_grid_affine LLVM ABI signature mismatch\n";
+    std::cerr
+        << "FAIL: tensorium_rhs_grid_affine LLVM ABI signature mismatch\n";
     return false;
   }
 
@@ -3119,23 +3149,28 @@ static bool testStripSourceFuncsAfterGridLowering() {
   opts.enableRhsGridAffinePass = true;
   opts.enableStripSourceFuncsPass = true;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable, ctx,
-      opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/schwarzschild_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init") ||
       module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs") ||
       module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry")) {
-    std::cerr << "FAIL: strip-source-funcs must remove tensorium_init/rhs/entry\n";
+    std::cerr
+        << "FAIL: strip-source-funcs must remove tensorium_init/rhs/entry\n";
     return false;
   }
 
-  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_init_grid_affine")) {
-    std::cerr << "FAIL: missing tensorium_init_grid_affine after strip-source-funcs\n";
+  if (!module->lookupSymbol<::mlir::func::FuncOp>(
+          "tensorium_init_grid_affine")) {
+    std::cerr << "FAIL: missing tensorium_init_grid_affine after "
+                 "strip-source-funcs\n";
     return false;
   }
-  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_affine")) {
-    std::cerr << "FAIL: missing tensorium_rhs_grid_affine after strip-source-funcs\n";
+  if (!module->lookupSymbol<::mlir::func::FuncOp>(
+          "tensorium_rhs_grid_affine")) {
+    std::cerr
+        << "FAIL: missing tensorium_rhs_grid_affine after strip-source-funcs\n";
     return false;
   }
 
@@ -3148,7 +3183,8 @@ static bool testStripSourceFuncsAfterGridLowering() {
     }
   });
   if (hasTensoriumOp) {
-    std::cerr << "FAIL: strip-source-funcs module must not contain tensorium ops, found "
+    std::cerr << "FAIL: strip-source-funcs module must not contain tensorium "
+                 "ops, found "
               << tensoriumOpName << "\n";
     return false;
   }
@@ -3162,12 +3198,13 @@ static bool testStripSourceFuncsRhsOnly() {
   opts.enableRhsGridAffinePass = true;
   opts.enableStripSourceFuncsPass = true;
 
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/covariant_rank1_3d.tn", CompilationMode::Executable,
-      ctx, opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/covariant_rank1_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs")) {
-    std::cerr << "FAIL: rhs-only strip-source-funcs must remove tensorium_rhs\n";
+    std::cerr
+        << "FAIL: rhs-only strip-source-funcs must remove tensorium_rhs\n";
     return false;
   }
   if (module->lookupSymbol<::mlir::func::FuncOp>("tensorium_entry")) {
@@ -3175,9 +3212,10 @@ static bool testStripSourceFuncsRhsOnly() {
         << "FAIL: rhs-only strip-source-funcs must remove tensorium_entry\n";
     return false;
   }
-  if (!module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs_grid_affine")) {
-    std::cerr
-        << "FAIL: rhs-only strip-source-funcs missing tensorium_rhs_grid_affine\n";
+  if (!module->lookupSymbol<::mlir::func::FuncOp>(
+          "tensorium_rhs_grid_affine")) {
+    std::cerr << "FAIL: rhs-only strip-source-funcs missing "
+                 "tensorium_rhs_grid_affine\n";
     return false;
   }
   return true;
@@ -3192,9 +3230,8 @@ static bool testLoweredGridModuleLLVMIREmission() {
   opts.enableStripSourceFuncsPass = true;
   opts.enableStencilLoweringPass = false;
 
-  backend::ModuleIR mod =
-      buildModuleFromFile("tests/fixtures/gr/schwarzschild_3d.tn",
-                          CompilationMode::Executable);
+  backend::ModuleIR mod = buildModuleFromFile(
+      "tests/fixtures/gr/schwarzschild_3d.tn", CompilationMode::Executable);
   validation::canonicalizeDifferentialIR(mod);
   validation::canonicalizeEinsteinIR(mod);
   auto verify = validation::verifyIR(mod);
@@ -3220,7 +3257,8 @@ static bool testLoweredGridModuleLLVMIREmission() {
   if (llvmIR.find("@tensorium_entry") != std::string::npos ||
       llvmIR.find("@tensorium_init(") != std::string::npos ||
       llvmIR.find("@tensorium_rhs(") != std::string::npos) {
-    std::cerr << "FAIL: LLVM IR should not expose source tensorium_init/rhs/entry symbols\n";
+    std::cerr << "FAIL: LLVM IR should not expose source "
+                 "tensorium_init/rhs/entry symbols\n";
     return false;
   }
 
@@ -3279,8 +3317,7 @@ static bool testLoweredGridHostHeaderEmission() {
                  "descriptor tables\n";
     return false;
   }
-  if (header.find("TENSORIUM_HOST_KERNEL_ADAPTER_COUNT") ==
-          std::string::npos ||
+  if (header.find("TENSORIUM_HOST_KERNEL_ADAPTER_COUNT") == std::string::npos ||
       header.find("tensorium_host_kernel_adapters") == std::string::npos ||
       header.find("tensorium_invoke_tensorium_rhs_grid_affine") ==
           std::string::npos) {
@@ -3400,7 +3437,8 @@ constraints IdentityResidual {
           std::vector<std::string>({"chebyshev", "chebyshev", "fourier"}) ||
       initialData.coordinateParameters != std::vector<std::string>({"b"}) ||
       initialData.unknownMap != "linear_boundary" ||
-      initialData.unknownMapParameters != std::vector<double>({0.0, 1.0, 1.0}) ||
+      initialData.unknownMapParameters !=
+          std::vector<double>({0.0, 1.0, 1.0}) ||
       initialData.fieldProjector != "two_puncture_inversion_even" ||
       initialData.reconstruction != "two_puncture_bssn" ||
       initialData.parameters.size() != 15 ||
@@ -3418,16 +3456,15 @@ constraints IdentityResidual {
   options.enableStripSourceFuncsPass = true;
   std::string header;
   if (!tensorium_mlir::emitHostHeader(mod, options, &header)) {
-    std::cerr << "FAIL: QC0 spectral initial_data host header emission failed\n";
+    std::cerr
+        << "FAIL: QC0 spectral initial_data host header emission failed\n";
     return false;
   }
   if (header.find("#define TENSORIUM_SPECTRAL_INITIAL_DATA_COUNT 1") ==
           std::string::npos ||
-      header.find("tensorium_spectral_initial_data[1]") ==
-          std::string::npos ||
+      header.find("tensorium_spectral_initial_data[1]") == std::string::npos ||
       header.find("\"two_puncture_bssn\"") == std::string::npos ||
-      header.find("\"mapped_fd_multigrid\"") ==
-          std::string::npos ||
+      header.find("\"mapped_fd_multigrid\"") == std::string::npos ||
       header.find("0.33319174979999999") == std::string::npos) {
     std::cerr << "FAIL: generated host header lacks declarative QC0 metadata\n";
     return false;
@@ -3499,11 +3536,10 @@ static bool testLoweredGridHostABIDescriptor() {
   const auto *gammaField = findHostFieldABI(abi, "gamma");
   const auto *gammaUField = findHostFieldABI(abi, "gammaU");
   const auto *ricciField = findHostFieldABI(abi, "Ricci");
-  if (!gammaField || !gammaUField || !ricciField ||
-      gammaField->up != 0 || gammaField->down != 2 ||
-      gammaField->rank != 2 || gammaField->componentCount != 9 ||
-      gammaUField->up != 2 || gammaUField->down != 0 ||
-      ricciField->up != 0 || ricciField->down != 2) {
+  if (!gammaField || !gammaUField || !ricciField || gammaField->up != 0 ||
+      gammaField->down != 2 || gammaField->rank != 2 ||
+      gammaField->componentCount != 9 || gammaUField->up != 2 ||
+      gammaUField->down != 0 || ricciField->up != 0 || ricciField->down != 2) {
     std::cerr << "FAIL: host ABI field descriptors mismatch\n";
     return false;
   }
@@ -3563,8 +3599,7 @@ static bool testLoweredGridHostABIDescriptor() {
   }
   if (rCoord->argIndex != 1 ||
       rCoord->access != tensorium_mlir::HostArgAccess::Read ||
-      rCoord->componentCount != 1 ||
-      initGamma->argIndex != 5 ||
+      rCoord->componentCount != 1 || initGamma->argIndex != 5 ||
       initGamma->access != tensorium_mlir::HostArgAccess::Write ||
       initGamma->componentCount != 9) {
     std::cerr << "FAIL: init-grid host ABI buffer contract mismatch\n";
@@ -3588,7 +3623,7 @@ static bool testLoweredGridHostABIDescriptor() {
   }
 
   if (abi.printFields !=
-      std::vector<std::string>({"alpha", "gamma", "Ricci"}) ||
+          std::vector<std::string>({"alpha", "gamma", "Ricci"}) ||
       abi.prints.size() != 3 || abi.prints[0].label != "alpha" ||
       abi.prints[0].rank != 0 || abi.prints[1].label != "gamma[i,j]" ||
       abi.prints[1].rank != 2 || abi.prints[2].label != "Ricci[i,j]" ||
@@ -3645,8 +3680,9 @@ static bool testHostFieldStoragePlanDeduplicatesBuffers() {
   std::int64_t expectedScalars = 0;
   for (const auto &kernel : abi.kernels) {
     for (const auto &buffer : kernel.buffers) {
-      if (uniqueKeys.insert(
-              tensorium_mlir::runtime::HostFieldStorage::storageKey(buffer))
+      if (uniqueKeys
+              .insert(
+                  tensorium_mlir::runtime::HostFieldStorage::storageKey(buffer))
               .second)
         expectedScalars +=
             tensorium_mlir::requiredBufferScalars(buffer, storage.nPoints());
@@ -3666,8 +3702,8 @@ static bool testHostFieldStoragePlanDeduplicatesBuffers() {
   const auto *DAtilde = storage.findBuffer("field:DAtilde");
   const auto *hamiltonian = storage.findBuffer("field:Hamiltonian");
   const auto *momentum = storage.findBuffer("field:Momentum");
-  if (!alpha || !gammatilde || !atil || !dAtilde || !DAtilde ||
-      !hamiltonian || !momentum) {
+  if (!alpha || !gammatilde || !atil || !dAtilde || !DAtilde || !hamiltonian ||
+      !momentum) {
     std::cerr << "FAIL: host storage missing expected complete BSSN buffers\n";
     return false;
   }
@@ -3701,8 +3737,7 @@ static bool testHostFieldStoragePlanDeduplicatesBuffers() {
     const auto &buffer = storage.buffers()[binding.storageIndex];
     if (ref.aligned != storage.data(binding.storageIndex) ||
         ref.allocated != storage.data(binding.storageIndex) ||
-        ref.offset != 0 || ref.size != buffer.scalarCount ||
-        ref.stride != 1) {
+        ref.offset != 0 || ref.size != buffer.scalarCount || ref.stride != 1) {
       std::cerr << "FAIL: RHS storage binding memref descriptor mismatch\n";
       return false;
     }
@@ -3711,16 +3746,16 @@ static bool testHostFieldStoragePlanDeduplicatesBuffers() {
   return true;
 }
 
-static int testGeneratedHostInvokeAdapter(
-    const double *params, std::int64_t paramCount,
-    const tensorium_memref1d_f64 *buffers, std::int64_t bufferCount,
-    const tensorium_host_grid_desc *grid) {
+static int
+testGeneratedHostInvokeAdapter(const double *params, std::int64_t paramCount,
+                               const tensorium_memref1d_f64 *buffers,
+                               std::int64_t bufferCount,
+                               const tensorium_host_grid_desc *grid) {
   if (!params || !buffers || !grid)
     return -1;
   if (paramCount != 2 || bufferCount != 3)
     return -2;
-  if (grid->nx != 5 || grid->ny != 5 || grid->nz != 5 ||
-      grid->n_points != 125)
+  if (grid->nx != 5 || grid->ny != 5 || grid->nz != 5 || grid->n_points != 125)
     return -3;
   if (buffers[0].size != 9 * grid->n_points ||
       buffers[2].size != 9 * grid->n_points)
@@ -3737,11 +3772,9 @@ static int testGeneratedHostOneIterationAdapter(
     return -1;
   if (paramCount != 1 || bufferCount != 2)
     return -2;
-  if (grid->nx != 3 || grid->ny != 1 || grid->nz != 1 ||
-      grid->n_points != 3)
+  if (grid->nx != 3 || grid->ny != 1 || grid->nz != 1 || grid->n_points != 3)
     return -3;
-  if (buffers[0].size != grid->n_points ||
-      buffers[1].size != grid->n_points)
+  if (buffers[0].size != grid->n_points || buffers[1].size != grid->n_points)
     return -4;
   for (std::int64_t p = 0; p < grid->n_points; ++p)
     buffers[1].aligned[p] = params[0] + buffers[0].aligned[p];
@@ -3763,11 +3796,11 @@ static bool testGeneratedHostStorageConsumesDescriptorTables() {
        TENSORIUM_HOST_BUFFER_ROLE_COORDINATE, TENSORIUM_HOST_ARG_ACCESS_READ, 0,
        0, 0, 1},
       {"tensorium_init_grid_affine", "alpha", "alpha", 0, 3,
-       TENSORIUM_HOST_BUFFER_ROLE_OUTPUT, TENSORIUM_HOST_ARG_ACCESS_WRITE, 0,
-       0, 0, 1},
+       TENSORIUM_HOST_BUFFER_ROLE_OUTPUT, TENSORIUM_HOST_ARG_ACCESS_WRITE, 0, 0,
+       0, 1},
       {"tensorium_init_grid_affine", "gamma", "gamma", 0, 4,
-       TENSORIUM_HOST_BUFFER_ROLE_OUTPUT, TENSORIUM_HOST_ARG_ACCESS_WRITE, 0,
-       2, 2, 9},
+       TENSORIUM_HOST_BUFFER_ROLE_OUTPUT, TENSORIUM_HOST_ARG_ACCESS_WRITE, 0, 2,
+       2, 9},
       {"tensorium_rhs_grid_affine", "gamma", "gamma", 1, 6,
        TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_READ, 0, 2,
        2, 9},
@@ -3802,8 +3835,8 @@ static bool testGeneratedHostStorageConsumesDescriptorTables() {
   }
 
   const auto *rhsPlan = storage.findKernelPlan("tensorium_rhs_grid_affine");
-  if (!rhsPlan || rhsPlan->stencilRadius != 1 ||
-      rhsPlan->buffers.size() != 3 || rhsPlan->buffers[0].argIndex != 6) {
+  if (!rhsPlan || rhsPlan->stencilRadius != 1 || rhsPlan->buffers.size() != 3 ||
+      rhsPlan->buffers[0].argIndex != 6) {
     std::cerr << "FAIL: generated host storage RHS binding plan mismatch\n";
     return false;
   }
@@ -3811,8 +3844,7 @@ static bool testGeneratedHostStorageConsumesDescriptorTables() {
   auto ref = storage.memref(rhsPlan->buffers[0]);
   if (ref.allocated != storage.data(rhsPlan->buffers[0].storageIndex) ||
       ref.aligned != storage.data(rhsPlan->buffers[0].storageIndex) ||
-      ref.offset != 0 || ref.size != 9 * storage.nPoints() ||
-      ref.stride != 1) {
+      ref.offset != 0 || ref.size != 9 * storage.nPoints() || ref.stride != 1) {
     std::cerr << "FAIL: generated host storage memref binding mismatch\n";
     return false;
   }
@@ -3870,13 +3902,12 @@ static bool testGeneratedHostStorageRunsOneEulerIteration() {
   const tensorium_host_kernel_adapter_desc adapter = {
       "tensorium_rhs_grid_affine", &testGeneratedHostOneIterationAdapter};
   const double params[] = {2.0};
-  storage.invoke(adapter, std::span<const double>(params, 1),
-                 {1.0, 1.0, 1.0});
+  storage.invoke(adapter, std::span<const double>(params, 1), {1.0, 1.0, 1.0});
   storage.applyEulerUpdate(updates, 0.25);
 
   const double *dphi = storage.data("field:dphi");
-  if (dphi[0] != 3.0 || dphi[1] != 4.0 || dphi[2] != 6.0 ||
-      phi[0] != 1.75 || phi[1] != 3.0 || phi[2] != 5.5) {
+  if (dphi[0] != 3.0 || dphi[1] != 4.0 || dphi[2] != 6.0 || phi[0] != 1.75 ||
+      phi[1] != 3.0 || phi[2] != 5.5) {
     std::cerr << "FAIL: generated host one-step Euler result mismatch\n";
     return false;
   }
@@ -3895,8 +3926,8 @@ static bool testGeneratedHostStorageEulerUpdatePairs() {
       {"runtime_step", "dV", "dV", 0, 3, TENSORIUM_HOST_BUFFER_ROLE_FIELD,
        TENSORIUM_HOST_ARG_ACCESS_WRITE, 1, 0, 1, 3},
       {"runtime_step", "Atilde", "Atilde", 0, 4,
-       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_READWRITE,
-       0, 2, 2, 9},
+       TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_READWRITE, 0,
+       2, 2, 9},
       {"runtime_step", "DAtilde", "DAtilde", 0, 5,
        TENSORIUM_HOST_BUFFER_ROLE_FIELD, TENSORIUM_HOST_ARG_ACCESS_WRITE, 1, 2,
        3, 27},
@@ -3935,8 +3966,7 @@ static bool testGeneratedHostStorageEulerUpdatePairs() {
   bool sawV = false;
   for (const auto &update : updates) {
     sawPhi |= update.stateKey == "field:phi" &&
-              update.derivativeKey == "field:dphi" &&
-              update.scalarCount == 2;
+              update.derivativeKey == "field:dphi" && update.scalarCount == 2;
     sawV |= update.stateKey == "field:V" &&
             update.derivativeKey == "field:dV" && update.scalarCount == 6;
   }
@@ -3946,8 +3976,8 @@ static bool testGeneratedHostStorageEulerUpdatePairs() {
   }
 
   storage.applyEulerUpdate(updates, 0.5);
-  if (phi[0] != 1.125 || phi[1] != 1.75 || v[0] != 10.5 ||
-      v[5] != 18.0 || atilde[0] != 7.0) {
+  if (phi[0] != 1.125 || phi[1] != 1.75 || v[0] != 10.5 || v[5] != 18.0 ||
+      atilde[0] != 7.0) {
     std::cerr << "FAIL: generated host Euler update value mismatch\n";
     return false;
   }
@@ -3970,7 +4000,7 @@ static bool testCompilerApiCompileFileToLLVMIR() {
   std::string llvmIR;
   try {
     llvmIR = tensorium::api::compileFileToLLVMIR("tests/01_scalar_minimal.tn",
-                                                  compileOpts, mlirOpts);
+                                                 compileOpts, mlirOpts);
   } catch (const std::exception &ex) {
     std::cerr << "FAIL: compiler API compileFileToLLVMIR threw: " << ex.what()
               << "\n";
@@ -4034,8 +4064,8 @@ static bool testSchwarzschildInitThetaZeroNoNaN() {
   setupSinglePointInitContext(evalCtx, 1.0, 10.0, 0.0, 0.0);
   auto result = tensorium_mlir::evaluateTensoriumInit(*module, evalCtx.desc);
   if (!result.ok) {
-    std::cerr << "FAIL: init evaluator failed at theta=0: "
-              << result.message << "\n";
+    std::cerr << "FAIL: init evaluator failed at theta=0: " << result.message
+              << "\n";
     return false;
   }
 
@@ -4103,8 +4133,9 @@ static bool testSchwarzschildInitHorizonIEEE() {
 
 static bool testReissnerNordstromInitNumericPoint() {
   ::mlir::MLIRContext ctx;
-  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/reissner_nordstrom_3d.tn",
-                                        CompilationMode::Executable, ctx);
+  auto module =
+      buildMLIRModuleFromFile("tests/fixtures/gr/reissner_nordstrom_3d.tn",
+                              CompilationMode::Executable, ctx);
 
   InitEvalContext evalCtx;
   const double M = 1.0;
@@ -4124,12 +4155,12 @@ static bool testReissnerNordstromInitNumericPoint() {
   const double f = 1.0 - 2.0 * M / r + (Q * Q) / (r * r);
   std::cout << std::setprecision(17)
             << "[numeric] Reissner-Nordstrom reference point"
-            << " M=" << M << " Q=" << Q << " r=" << r
-            << " theta=" << theta << "\n"
+            << " M=" << M << " Q=" << Q << " r=" << r << " theta=" << theta
+            << "\n"
             << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
             << " expected=[[" << (-f) << ", 0, 0, 0], [0, " << (1.0 / f)
-            << ", 0, 0], [0, 0, " << (r * r) << ", 0], [0, 0, 0, "
-            << (r * r) << "]]\n"
+            << ", 0, 0], [0, 0, " << (r * r) << ", 0], [0, 0, 0, " << (r * r)
+            << "]]\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=" << std::sqrt(f) << "\n"
             << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
@@ -4154,8 +4185,9 @@ static bool testReissnerNordstromInitNumericPoint() {
 
 static bool testSpatialOffdiagInitNumericPoint() {
   ::mlir::MLIRContext ctx;
-  auto module = buildMLIRModuleFromFile("tests/fixtures/gr/spatial_offdiag_3d.tn",
-                                        CompilationMode::Executable, ctx);
+  auto module =
+      buildMLIRModuleFromFile("tests/fixtures/gr/spatial_offdiag_3d.tn",
+                              CompilationMode::Executable, ctx);
 
   InitEvalContext evalCtx;
   setupSinglePointInitContext(evalCtx, 1.0, 0.0, 0.0, 0.0);
@@ -4167,25 +4199,19 @@ static bool testSpatialOffdiagInitNumericPoint() {
     return false;
   }
 
-  const double gammaExpected[9] = {
-      2.0, 1.0, 0.0,
-      1.0, 3.0, 0.0,
-      0.0, 0.0, 4.0};
-  const double gammaUExpected[9] = {
-      0.6, -0.2, 0.0,
-      -0.2, 0.4, 0.0,
-      0.0, 0.0, 0.25};
+  const double gammaExpected[9] = {2.0, 1.0, 0.0, 1.0, 3.0, 0.0, 0.0, 0.0, 4.0};
+  const double gammaUExpected[9] = {0.6, -0.2, 0.0, -0.2, 0.4,
+                                    0.0, 0.0,  0.0, 0.25};
 
-  std::cout << std::setprecision(17)
-            << "[numeric] Spatial offdiag reference point\n"
-            << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
-            << " expected=[[-1, 0, 0, 0], [0, 2, 1, 0], [0, 1, 3, 0], [0, 0, 0, 4]]\n"
-            << "  alpha       got=" << evalCtx.buffers.alpha[0]
-            << " expected=1\n"
-            << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
-            << " expected=[[2, 1, 0], [1, 3, 0], [0, 0, 4]]\n"
-            << "  GammaU^ij   got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
-            << " expected=[[0.6, -0.2, 0], [-0.2, 0.4, 0], [0, 0, 0.25]]\n";
+  std::cout
+      << std::setprecision(17) << "[numeric] Spatial offdiag reference point\n"
+      << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
+      << " expected=[[-1, 0, 0, 0], [0, 2, 1, 0], [0, 1, 3, 0], [0, 0, 0, 4]]\n"
+      << "  alpha       got=" << evalCtx.buffers.alpha[0] << " expected=1\n"
+      << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
+      << " expected=[[2, 1, 0], [1, 3, 0], [0, 0, 4]]\n"
+      << "  GammaU^ij   got=" << formatMatrix3x3(evalCtx.buffers.gammaU)
+      << " expected=[[0.6, -0.2, 0], [-0.2, 0.4, 0], [0, 0, 0.25]]\n";
 
   if (!almostEqual(evalCtx.buffers.alpha[0], 1.0)) {
     std::cerr << "FAIL: spatial offdiag alpha mismatch\n";
@@ -4233,15 +4259,13 @@ static bool testKerrLikeInitNumericPoint() {
   const double betaDot = betaPhi * (gammaUPhPhi * betaPhi);
   const double alphaExpected = std::sqrt(f + betaDot);
 
-  std::cout << std::setprecision(17)
-            << "[numeric] Kerr-like reference point"
-            << " M=" << M << " a=" << a << " r=" << r
-            << " theta=" << theta << "\n"
+  std::cout << std::setprecision(17) << "[numeric] Kerr-like reference point"
+            << " M=" << M << " a=" << a << " r=" << r << " theta=" << theta
+            << "\n"
             << "  g_uv        got=" << formatMatrix4x4(evalCtx.buffers.metric4)
-            << " expected=[[" << (-f) << ", 0, 0, " << betaPhi
-            << "], [0, " << (1.0 / f) << ", 0, 0], [0, 0, " << (r * r)
-            << ", 0], [" << betaPhi << ", 0, 0, " << (r * r * sin2)
-            << "]]\n"
+            << " expected=[[" << (-f) << ", 0, 0, " << betaPhi << "], [0, "
+            << (1.0 / f) << ", 0, 0], [0, 0, " << (r * r) << ", 0], ["
+            << betaPhi << ", 0, 0, " << (r * r * sin2) << "]]\n"
             << "  alpha       got=" << evalCtx.buffers.alpha[0]
             << " expected=" << alphaExpected << "\n"
             << "  Gamma_ij    got=" << formatMatrix3x3(evalCtx.buffers.gamma)
@@ -4286,7 +4310,8 @@ static bool testKerrLikeReconstructMetricPoint() {
   }
 
   const double alpha = evalCtx.buffers.alpha[0];
-  const double beta[3] = {evalCtx.buffers.beta[0][0], evalCtx.buffers.beta[1][0],
+  const double beta[3] = {evalCtx.buffers.beta[0][0],
+                          evalCtx.buffers.beta[1][0],
                           evalCtx.buffers.beta[2][0]};
 
   double betaUpper[3] = {0.0, 0.0, 0.0};
@@ -4301,7 +4326,8 @@ static bool testKerrLikeReconstructMetricPoint() {
   const double g0Recon[3] = {beta[0], beta[1], beta[2]};
 
   const double g00In = evalCtx.buffers.metric4[0][0];
-  const double g0In[3] = {evalCtx.buffers.metric4[1][0], evalCtx.buffers.metric4[2][0],
+  const double g0In[3] = {evalCtx.buffers.metric4[1][0],
+                          evalCtx.buffers.metric4[2][0],
                           evalCtx.buffers.metric4[3][0]};
   const unsigned spatialMap[9] = {5, 6, 7, 9, 10, 11, 13, 14, 15};
 
@@ -4340,9 +4366,12 @@ static bool testKerrLikeReconstructMetricPoint() {
   }
 
   // Keep symmetry in check on g_ti/g_it for the same evaluated metric point.
-  if (!almostEqual(evalCtx.buffers.metric4[1][0], evalCtx.buffers.metric4[4][0]) ||
-      !almostEqual(evalCtx.buffers.metric4[2][0], evalCtx.buffers.metric4[8][0]) ||
-      !almostEqual(evalCtx.buffers.metric4[3][0], evalCtx.buffers.metric4[12][0])) {
+  if (!almostEqual(evalCtx.buffers.metric4[1][0],
+                   evalCtx.buffers.metric4[4][0]) ||
+      !almostEqual(evalCtx.buffers.metric4[2][0],
+                   evalCtx.buffers.metric4[8][0]) ||
+      !almostEqual(evalCtx.buffers.metric4[3][0],
+                   evalCtx.buffers.metric4[12][0])) {
     std::cerr << "FAIL: metric4 symmetry mismatch on time-space components\n";
     return false;
   }
@@ -4362,7 +4391,8 @@ static bool testKerrLikeHasNonZeroBetaPhi() {
   InitEvalContext evalShift;
   setupSinglePointInitContext(evalShift, M, r, theta, 0.0);
   evalShift.desc.params["a"] = 0.3;
-  auto shiftedRes = tensorium_mlir::evaluateTensoriumInit(*module, evalShift.desc);
+  auto shiftedRes =
+      tensorium_mlir::evaluateTensoriumInit(*module, evalShift.desc);
   if (!shiftedRes.ok) {
     std::cerr << "FAIL: Kerr-like beta sanity (a=0.3) failed: "
               << shiftedRes.message << "\n";
@@ -4383,12 +4413,11 @@ static bool testKerrLikeHasNonZeroBetaPhi() {
   const double betaPhiShift = evalShift.buffers.beta[2][0];
   const double betaPhiNoShift = evalNoShift.buffers.beta[2][0];
 
-  std::cout << std::setprecision(17)
-            << "[numeric] Kerr-like beta sanity\n"
+  std::cout << std::setprecision(17) << "[numeric] Kerr-like beta sanity\n"
             << "  beta_i (a=0.3) got=" << formatVector3(evalShift.buffers.beta)
             << "\n"
-            << "  beta_i (a=0.0) got=" << formatVector3(evalNoShift.buffers.beta)
-            << "\n";
+            << "  beta_i (a=0.0) got="
+            << formatVector3(evalNoShift.buffers.beta) << "\n";
 
   if (!(std::abs(betaPhiShift) > 1e-12)) {
     std::cerr << "FAIL: expected non-zero beta_phi for a=0.3\n";
@@ -4456,14 +4485,18 @@ static bool testHartleThorneSlowRotationFixtureMLIRStructure() {
     return false;
   }
 
-  if (!valueDependsOn(comps[3], [](::mlir::Operation *op) {
-        auto param = llvm::dyn_cast<tensorium::mlir::ParamOp>(op);
-        return param && param.getName() == "omega";
-      }) ||
-      !valueDependsOn(comps[3], [](::mlir::Operation *op) {
-        auto coord = llvm::dyn_cast<tensorium::mlir::CoordOp>(op);
-        return coord && coord.getName() == "r";
-      }) ||
+  if (!valueDependsOn(comps[3],
+                      [](::mlir::Operation *op) {
+                        auto param =
+                            llvm::dyn_cast<tensorium::mlir::ParamOp>(op);
+                        return param && param.getName() == "omega";
+                      }) ||
+      !valueDependsOn(comps[3],
+                      [](::mlir::Operation *op) {
+                        auto coord =
+                            llvm::dyn_cast<tensorium::mlir::CoordOp>(op);
+                        return coord && coord.getName() == "r";
+                      }) ||
       !valueDependsOn(comps[3], [](::mlir::Operation *op) {
         return llvm::isa<tensorium::mlir::SinOp>(op);
       })) {
@@ -4524,8 +4557,7 @@ static bool testHartleThorneSlowRotationRadialEquationGR() {
   }
 
   for (std::size_t i = 0; i + 1 < radii.size(); ++i) {
-    const double leftFlux =
-        hartleThorneSlowRotationRadialFluxGR(radii[i], J);
+    const double leftFlux = hartleThorneSlowRotationRadialFluxGR(radii[i], J);
     const double rightFlux =
         hartleThorneSlowRotationRadialFluxGR(radii[i + 1], J);
     const double fdRadialEq =
@@ -4555,7 +4587,8 @@ static bool testSchwarzschildChristoffelNumericPoint() {
     return false;
   }
   if (rhsFunc.getNumArguments() != 3) {
-    std::cerr << "FAIL: expected @tensorium_rhs(gamma,gammaU,dtGamma) signature\n";
+    std::cerr
+        << "FAIL: expected @tensorium_rhs(gamma,gammaU,dtGamma) signature\n";
     return false;
   }
 
@@ -4594,10 +4627,12 @@ static bool testSchwarzschildChristoffelNumericPoint() {
   }
 
   for (std::size_t ir = 0; ir < nr; ++ir) {
-    const double r = r0 + (static_cast<double>(ir) - static_cast<double>(center)) * dr;
+    const double r =
+        r0 + (static_cast<double>(ir) - static_cast<double>(center)) * dr;
     for (std::size_t it = 0; it < nt; ++it) {
       const double theta =
-          theta0 + (static_cast<double>(it) - static_cast<double>(center)) * dtheta;
+          theta0 +
+          (static_cast<double>(it) - static_cast<double>(center)) * dtheta;
       const double sinTheta = std::sin(theta);
       const double sin2 = sinTheta * sinTheta;
       const double f = 1.0 - 2.0 * M / r;
@@ -4695,9 +4730,9 @@ static bool testCovariantDerivativeRankOneNumericPoint() {
   ::mlir::MLIRContext ctx;
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableStencilLoweringPass = false;
-  auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/covariant_rank1_3d.tn", CompilationMode::Executable,
-      ctx, opts);
+  auto module =
+      buildMLIRModuleFromFileWithOpts("tests/fixtures/gr/covariant_rank1_3d.tn",
+                                      CompilationMode::Executable, ctx, opts);
 
   auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
   if (!rhsFunc) {
@@ -4788,7 +4823,8 @@ static bool testCovariantDerivativeRankOneNumericPoint() {
   desc.grid.spacing = {1.0, 1.0, 1.0};
   desc.point = {center, center, center};
   desc.args.resize(5);
-  desc.args[0].components.assign(christoffelPtrs.begin(), christoffelPtrs.end());
+  desc.args[0].components.assign(christoffelPtrs.begin(),
+                                 christoffelPtrs.end());
   desc.args[1].components.assign(covectorVPtrs.begin(), covectorVPtrs.end());
   desc.args[2].components.assign(vectorWPtrs.begin(), vectorWPtrs.end());
   desc.args[3].components.assign(outNablaVPtrs.begin(), outNablaVPtrs.end());
@@ -4806,8 +4842,7 @@ static bool testCovariantDerivativeRankOneNumericPoint() {
   const double expectedNablaV_01 = -2.0; // -Gamma^m_{0 1} V_m = -2*1
   const double expectedNablaW_01 = 18.0; // +Gamma^0_{1 m} W^m = +3*6
 
-  std::cout << std::setprecision(17)
-            << "[numeric] Covariant rank-1 point\n"
+  std::cout << std::setprecision(17) << "[numeric] Covariant rank-1 point\n"
             << "  nabla_j(V_i) component [0,1] got=" << nablaV_01
             << " expected=" << expectedNablaV_01 << "\n"
             << "  nabla_j(W^i) component [0,1] got=" << nablaW_01
@@ -4848,8 +4883,9 @@ static bool testNablaMetricPathVarianceMatrix() {
     }
 
     if (stats.covariant != 0) {
-      std::cerr << "FAIL(" << fixture
-                << "): nabla sugar must be expanded (no covariant nodes remain)\n";
+      std::cerr
+          << "FAIL(" << fixture
+          << "): nabla sugar must be expanded (no covariant nodes remain)\n";
       return false;
     }
   }
@@ -4989,8 +5025,8 @@ static bool testCovariantDerivativeAllCasesNumericPoint() {
   tensorium_mlir::MLIRGenOptions opts = makeExecutablePipelineOpts();
   opts.enableStencilLoweringPass = false;
   auto module = buildMLIRModuleFromFileWithOpts(
-      "tests/fixtures/gr/covariant_all_cases_3d.tn", CompilationMode::Executable,
-      ctx, opts);
+      "tests/fixtures/gr/covariant_all_cases_3d.tn",
+      CompilationMode::Executable, ctx, opts);
 
   auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
   if (!rhsFunc) {
@@ -4999,9 +5035,10 @@ static bool testCovariantDerivativeAllCasesNumericPoint() {
   }
   const unsigned rhsArgCount = rhsFunc.getNumArguments();
   if (rhsArgCount != 7 && rhsArgCount != 8) {
-    std::cerr << "FAIL: expected @tensorium_rhs with 7 or 8 field arguments for "
-                 "all-cases covariant test, got "
-              << rhsArgCount << "\n";
+    std::cerr
+        << "FAIL: expected @tensorium_rhs with 7 or 8 field arguments for "
+           "all-cases covariant test, got "
+        << rhsArgCount << "\n";
     return false;
   }
 
@@ -5089,17 +5126,22 @@ static bool testCovariantDerivativeAllCasesNumericPoint() {
   desc.point = {center, center, center};
   desc.args.resize(rhsArgCount);
   unsigned arg = 0;
-  desc.args[arg++].components.assign(christoffelPtrs.begin(), christoffelPtrs.end());
+  desc.args[arg++].components.assign(christoffelPtrs.begin(),
+                                     christoffelPtrs.end());
   if (rhsArgCount == 8) {
     desc.args[arg++].components.assign(inverseMetricPtrs.begin(),
                                        inverseMetricPtrs.end());
   }
-  desc.args[arg++].components.assign(covectorVPtrs.begin(), covectorVPtrs.end());
+  desc.args[arg++].components.assign(covectorVPtrs.begin(),
+                                     covectorVPtrs.end());
   desc.args[arg++].components.assign(vectorWPtrs.begin(), vectorWPtrs.end());
   desc.args[arg++].components.assign(mixedAPtrs.begin(), mixedAPtrs.end());
-  desc.args[arg++].components.assign(outNablaVPtrs.begin(), outNablaVPtrs.end());
-  desc.args[arg++].components.assign(outNablaWPtrs.begin(), outNablaWPtrs.end());
-  desc.args[arg++].components.assign(outNablaAPtrs.begin(), outNablaAPtrs.end());
+  desc.args[arg++].components.assign(outNablaVPtrs.begin(),
+                                     outNablaVPtrs.end());
+  desc.args[arg++].components.assign(outNablaWPtrs.begin(),
+                                     outNablaWPtrs.end());
+  desc.args[arg++].components.assign(outNablaAPtrs.begin(),
+                                     outNablaAPtrs.end());
 
   auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
   if (!evalRes.ok) {
@@ -5144,7 +5186,8 @@ static bool testContravariantDerivativeAllCasesNumericPoint() {
 
   auto rhsFunc = module->lookupSymbol<::mlir::func::FuncOp>("tensorium_rhs");
   if (!rhsFunc) {
-    std::cerr << "FAIL: missing @tensorium_rhs for all-cases contravariant test\n";
+    std::cerr
+        << "FAIL: missing @tensorium_rhs for all-cases contravariant test\n";
     return false;
   }
   if (rhsFunc.getNumArguments() != 8) {
@@ -5232,15 +5275,19 @@ static bool testContravariantDerivativeAllCasesNumericPoint() {
   desc.grid.spacing = {1.0, 1.0, 1.0};
   desc.point = {center, center, center};
   desc.args.resize(8);
-  desc.args[0].components.assign(christoffelPtrs.begin(), christoffelPtrs.end());
+  desc.args[0].components.assign(christoffelPtrs.begin(),
+                                 christoffelPtrs.end());
   desc.args[1].components.assign(inverseMetricPtrs.begin(),
                                  inverseMetricPtrs.end());
   desc.args[2].components.assign(covectorVPtrs.begin(), covectorVPtrs.end());
   desc.args[3].components.assign(vectorWPtrs.begin(), vectorWPtrs.end());
   desc.args[4].components.assign(mixedAPtrs.begin(), mixedAPtrs.end());
-  desc.args[5].components.assign(outNablaUpVPtrs.begin(), outNablaUpVPtrs.end());
-  desc.args[6].components.assign(outNablaUpWPtrs.begin(), outNablaUpWPtrs.end());
-  desc.args[7].components.assign(outNablaUpAPtrs.begin(), outNablaUpAPtrs.end());
+  desc.args[5].components.assign(outNablaUpVPtrs.begin(),
+                                 outNablaUpVPtrs.end());
+  desc.args[6].components.assign(outNablaUpWPtrs.begin(),
+                                 outNablaUpWPtrs.end());
+  desc.args[7].components.assign(outNablaUpAPtrs.begin(),
+                                 outNablaUpAPtrs.end());
 
   auto evalRes = tensorium_mlir::evaluateTensoriumRHS(*module, desc);
   if (!evalRes.ok) {
@@ -5354,7 +5401,8 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     contractCount += llvm::isa<tensorium::mlir::ContractOp>(&op) ? 1 : 0;
     einsumCount += llvm::isa<tensorium::mlir::EinsumOp>(&op) ? 1 : 0;
     rhsBuildsLocalGammaU |= llvm::isa<tensorium::mlir::BuildConTensor2Op>(&op);
-    hasChristoffelMagicOp |= (op.getName().getStringRef() == "tensorium.christoffel");
+    hasChristoffelMagicOp |=
+        (op.getName().getStringRef() == "tensorium.christoffel");
 
     if (auto dt = llvm::dyn_cast<tensorium::mlir::DtAssignOp>(&op)) {
       ++dtAssignCount;
@@ -5404,7 +5452,8 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     return false;
   }
   if (!gammaUFromInitAssignedFeedsContract || gammaUContractUsesNonInitSource) {
-    std::cerr << "FAIL: Christoffel contraction must consume init-assigned gammaU field\n";
+    std::cerr << "FAIL: Christoffel contraction must consume init-assigned "
+                 "gammaU field\n";
     return false;
   }
   if (addCount < 1 || subCount < 1 || mulCount < 2 || dtAssignCount != 1) {
@@ -5412,7 +5461,8 @@ static bool testSchwarzschildChristoffelMLIRStructure() {
     return false;
   }
   if (contractCount == 0 && einsumCount == 0) {
-    std::cerr << "FAIL: Christoffel MLIR must include contract or einsum contraction ops\n";
+    std::cerr << "FAIL: Christoffel MLIR must include contract or einsum "
+                 "contraction ops\n";
     return false;
   }
 
@@ -5427,8 +5477,9 @@ static bool testInitRhsInvariantRejectsMetricInRhs() {
   InitRhsLayout layout;
   std::string err;
   if (!verifyInitRhsLayout(*module, layout, err)) {
-    std::cerr << "FAIL: baseline layout must be valid before negative mutation: "
-              << err << "\n";
+    std::cerr
+        << "FAIL: baseline layout must be valid before negative mutation: "
+        << err << "\n";
     return false;
   }
 
@@ -5440,7 +5491,8 @@ static bool testInitRhsInvariantRejectsMetricInRhs() {
     }
   }
   if (!metricInInit) {
-    std::cerr << "FAIL: could not locate metric4 op for negative invariant test\n";
+    std::cerr
+        << "FAIL: could not locate metric4 op for negative invariant test\n";
     return false;
   }
 
@@ -5450,7 +5502,8 @@ static bool testInitRhsInvariantRejectsMetricInRhs() {
   InitRhsLayout mutatedLayout;
   std::string mutatedErr;
   if (verifyInitRhsLayout(*module, mutatedLayout, mutatedErr)) {
-    std::cerr << "FAIL: expected invariant checker to reject metric4 inside tensorium_rhs\n";
+    std::cerr << "FAIL: expected invariant checker to reject metric4 inside "
+                 "tensorium_rhs\n";
     return false;
   }
   return true;
@@ -5507,9 +5560,9 @@ static bool testSpectralGridManufacturedPoisson() {
   return true;
 }
 
-static double spectralCubicReactionKernel(
-    const tensorium_spectral_residual_point *point, const double *,
-    std::int64_t, void *) {
+static double
+spectralCubicReactionKernel(const tensorium_spectral_residual_point *point,
+                            const double *, std::int64_t, void *) {
   return point->d11 + point->d22 + point->d33 + 2.0 * point->value +
          0.5 * point->value * point->value * point->value;
 }
@@ -5522,9 +5575,9 @@ static double spectralCubicReactionJvpKernel(
          (2.0 + 1.5 * point->value * point->value) * direction->value;
 }
 
-static double spectralProjectedIdentityKernel(
-    const tensorium_spectral_residual_point *point, const double *,
-    std::int64_t, void *) {
+static double
+spectralProjectedIdentityKernel(const tensorium_spectral_residual_point *point,
+                                const double *, std::int64_t, void *) {
   return point->value - 1.0 + point->logical[1];
 }
 
@@ -5536,6 +5589,10 @@ static double spectralProjectedIdentityJvpKernel(
 }
 
 static bool testSpectralNewtonProjectsConstrainedResidual() {
+  using tensorium_mlir::runtime::assembleSpectralResidual;
+  using tensorium_mlir::runtime::makeTwoPunctureInversionEvenFieldProjector;
+  using tensorium_mlir::runtime::projectSpectralResidual;
+  using tensorium_mlir::runtime::solveSpectralNewton;
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
   using tensorium_mlir::runtime::SpectralEllipticSolveStatus;
@@ -5543,10 +5600,6 @@ static bool testSpectralNewtonProjectsConstrainedResidual() {
   using tensorium_mlir::runtime::SpectralLinearSolveKind;
   using tensorium_mlir::runtime::SpectralResidualKernel;
   using tensorium_mlir::runtime::SpectralResidualProblem;
-  using tensorium_mlir::runtime::assembleSpectralResidual;
-  using tensorium_mlir::runtime::makeTwoPunctureInversionEvenFieldProjector;
-  using tensorium_mlir::runtime::projectSpectralResidual;
-  using tensorium_mlir::runtime::solveSpectralNewton;
 
   SpectralGrid3D grid(SpectralAxis::chebyshevZeros(3),
                       SpectralAxis::chebyshevZeros(4),
@@ -5555,8 +5608,7 @@ static bool testSpectralNewtonProjectsConstrainedResidual() {
   problem.grid = &grid;
   problem.kernel = SpectralResidualKernel{
       "spectral_projected_identity", &spectralProjectedIdentityKernel,
-      "spectral_projected_identity_jvp",
-      &spectralProjectedIdentityJvpKernel};
+      "spectral_projected_identity_jvp", &spectralProjectedIdentityJvpKernel};
   problem.fieldProjector = makeTwoPunctureInversionEvenFieldProjector();
 
   SpectralEllipticSolveOptions options;
@@ -5582,28 +5634,27 @@ static bool testSpectralNewtonProjectsConstrainedResidual() {
       rawResidual.l2Norm > 1.0e-11) {
     std::cerr << "FAIL: projected spectral Newton status="
               << static_cast<int>(solve.status) << " state=" << stateError
-              << " raw=" << rawL2
-              << " projected=" << rawResidual.l2Norm << "\n";
+              << " raw=" << rawL2 << " projected=" << rawResidual.l2Norm
+              << "\n";
     return false;
   }
   return true;
 }
 
 static bool testTwoPunctureDerivativeProjectorEnforcesParity() {
+  using tensorium_mlir::runtime::makeTwoPunctureInversionEvenFieldProjector;
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralDerivatives3D;
   using tensorium_mlir::runtime::SpectralGrid3D;
-  using tensorium_mlir::runtime::makeTwoPunctureInversionEvenFieldProjector;
 
   SpectralGrid3D grid(SpectralAxis::chebyshevZeros(3),
                       SpectralAxis::chebyshevZeros(4),
                       SpectralAxis::fourierPeriodic(6));
   SpectralDerivatives3D derivatives;
   std::array<std::vector<double> *, 10> components{
-      &derivatives.value, &derivatives.d1,  &derivatives.d2,
-      &derivatives.d3,    &derivatives.d11, &derivatives.d12,
-      &derivatives.d13,   &derivatives.d22, &derivatives.d23,
-      &derivatives.d33};
+      &derivatives.value, &derivatives.d1,  &derivatives.d2,  &derivatives.d3,
+      &derivatives.d11,   &derivatives.d12, &derivatives.d13, &derivatives.d22,
+      &derivatives.d23,   &derivatives.d33};
   for (std::size_t component = 0; component < components.size(); ++component) {
     components[component]->resize(grid.size());
     for (std::size_t p = 0; p < grid.size(); ++p) {
@@ -5619,8 +5670,8 @@ static bool testTwoPunctureDerivativeProjectorEnforcesParity() {
   }
   projector.projectDerivatives(&grid, &derivatives, projector.userData);
 
-  const std::array<bool, 10> even{true, true, false, true, true,
-                                  false, true, true, false, true};
+  const std::array<bool, 10> even{true,  true, false, true,  true,
+                                  false, true, true,  false, true};
   double parityError = 0.0;
   for (std::size_t component = 0; component < components.size(); ++component) {
     for (std::size_t k = 0; k < grid.n3(); ++k) {
@@ -5631,9 +5682,9 @@ static bool testTwoPunctureDerivativeProjectorEnforcesParity() {
           const double value = (*components[component])[grid.index(i, j, k)];
           const double image =
               (*components[component])[grid.index(i, reflectedJ, rotatedK)];
-          parityError = std::max(
-              parityError,
-              std::abs(value - (even[component] ? image : -image)));
+          parityError =
+              std::max(parityError,
+                       std::abs(value - (even[component] ? image : -image)));
         }
       }
     }
@@ -5649,10 +5700,9 @@ static bool testTwoPunctureDerivativeProjectorEnforcesParity() {
       &onceProjected.d33};
   for (std::size_t component = 0; component < components.size(); ++component) {
     for (std::size_t p = 0; p < grid.size(); ++p) {
-      idempotenceError =
-          std::max(idempotenceError,
-                   std::abs((*components[component])[p] -
-                            (*projectedComponents[component])[p]));
+      idempotenceError = std::max(
+          idempotenceError, std::abs((*components[component])[p] -
+                                     (*projectedComponents[component])[p]));
     }
   }
 
@@ -5665,14 +5715,15 @@ static bool testTwoPunctureDerivativeProjectorEnforcesParity() {
 }
 
 static bool testSpectralLocalReactionDiagonal() {
+  using tensorium_mlir::runtime::
+      buildSpectralMappedFiniteDifferenceLaplacianShift;
+  using tensorium_mlir::runtime::estimateSpectralLocalReactionDiagonal;
+  using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralGrid3D;
   using tensorium_mlir::runtime::SpectralJacobianVectorProductOptions;
   using tensorium_mlir::runtime::SpectralResidualKernel;
   using tensorium_mlir::runtime::SpectralResidualProblem;
-  using tensorium_mlir::runtime::buildSpectralMappedFiniteDifferenceLaplacianShift;
-  using tensorium_mlir::runtime::estimateSpectralLocalReactionDiagonal;
-  using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
 
   SpectralGrid3D grid(SpectralAxis::chebyshevZeros(5),
                       SpectralAxis::chebyshevZeros(4),
@@ -5695,8 +5746,8 @@ static bool testSpectralLocalReactionDiagonal() {
   jvpOptions.absoluteStep = 1.0e-8;
   const auto reaction =
       estimateSpectralLocalReactionDiagonal(problem, state, jvpOptions);
-  const auto baseMatrix = buildSpectralMappedFiniteDifferenceLaplacianShift(
-      problem, 0.0, 1.0e-12);
+  const auto baseMatrix =
+      buildSpectralMappedFiniteDifferenceLaplacianShift(problem, 0.0, 1.0e-12);
   const auto awareMatrix = buildSpectralMappedFiniteDifferenceLaplacianShift(
       problem, 0.0, 1.0e-12, reaction);
 
@@ -5711,13 +5762,11 @@ static bool testSpectralLocalReactionDiagonal() {
         const double expected =
             (2.0 + 1.5 * physicalValue * physicalValue) * weight;
         estimateError =
-            std::max(estimateError,
-                     std::abs(reaction[point.index] - expected));
-        insertionError = std::max(
-            insertionError,
-            std::abs((awareMatrix.diagonal[point.index] -
-                      baseMatrix.diagonal[point.index]) -
-                     expected));
+            std::max(estimateError, std::abs(reaction[point.index] - expected));
+        insertionError = std::max(insertionError,
+                                  std::abs((awareMatrix.diagonal[point.index] -
+                                            baseMatrix.diagonal[point.index]) -
+                                           expected));
       }
     }
   }
@@ -5730,12 +5779,12 @@ static bool testSpectralLocalReactionDiagonal() {
 }
 
 static bool testSpectralTwoGridTransferPreservesResolvedModes() {
-  using tensorium_mlir::runtime::SpectralAxis;
-  using tensorium_mlir::runtime::SpectralGrid3D;
   using tensorium_mlir::runtime::buildSpectralTensorGridTransfer;
   using tensorium_mlir::runtime::makeSpectralMultigridCoarseGrid;
   using tensorium_mlir::runtime::prolongSpectralField;
   using tensorium_mlir::runtime::restrictSpectralField;
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
 
   SpectralGrid3D fine(SpectralAxis::chebyshevZeros(9),
                       SpectralAxis::chebyshevZeros(8),
@@ -5763,10 +5812,9 @@ static bool testSpectralTwoGridTransferPreservesResolvedModes() {
     for (std::size_t j = 0; j < coarse.n2(); ++j) {
       for (std::size_t i = 0; i < coarse.n1(); ++i) {
         const auto point = coarse.point(i, j, k);
-        restrictionError =
-            std::max(restrictionError,
-                     std::abs(coarseValues[point.index] -
-                              field(point.x1, point.x2, point.x3)));
+        restrictionError = std::max(
+            restrictionError, std::abs(coarseValues[point.index] -
+                                       field(point.x1, point.x2, point.x3)));
       }
     }
   }
@@ -5774,8 +5822,8 @@ static bool testSpectralTwoGridTransferPreservesResolvedModes() {
   const auto prolonged = prolongSpectralField(transfer, coarseValues);
   double roundTripError = 0.0;
   for (std::size_t point = 0; point < fine.size(); ++point)
-    roundTripError =
-        std::max(roundTripError, std::abs(prolonged[point] - fineValues[point]));
+    roundTripError = std::max(roundTripError,
+                              std::abs(prolonged[point] - fineValues[point]));
 
   if (coarse.n1() != 5 || coarse.n2() != 4 || coarse.n3() != 6 ||
       restrictionError > 2.0e-12 || roundTripError > 3.0e-12) {
@@ -5789,16 +5837,16 @@ static bool testSpectralTwoGridTransferPreservesResolvedModes() {
 }
 
 static bool testSpectralMappedMultigridReducesSparseResidual() {
+  using tensorium_mlir::runtime::applySpectralPreconditioner;
+  using tensorium_mlir::runtime::applySpectralSparseMatrix;
+  using tensorium_mlir::runtime::buildSpectralScalarPreconditioner;
+  using tensorium_mlir::runtime::solveSpectralRestartedGMRES;
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
   using tensorium_mlir::runtime::SpectralGrid3D;
   using tensorium_mlir::runtime::SpectralLinearPreconditioner;
   using tensorium_mlir::runtime::SpectralPreconditionerKind;
   using tensorium_mlir::runtime::SpectralResidualProblem;
-  using tensorium_mlir::runtime::applySpectralPreconditioner;
-  using tensorium_mlir::runtime::applySpectralSparseMatrix;
-  using tensorium_mlir::runtime::buildSpectralScalarPreconditioner;
-  using tensorium_mlir::runtime::solveSpectralRestartedGMRES;
   using tensorium_mlir::runtime::spectralSparseResidual;
   using tensorium_mlir::runtime::spectralVectorEuclideanNorm;
 
@@ -5833,9 +5881,8 @@ static bool testSpectralMappedMultigridReducesSparseResidual() {
     for (std::size_t j = 0; j < grid.n2(); ++j) {
       for (std::size_t i = 0; i < grid.n1(); ++i) {
         const auto point = grid.point(i, j, k);
-        exact[point.index] =
-            0.7 + 0.1 * point.x1 + 0.08 * point.x2 * point.x2 +
-            0.04 * std::cos(point.x3);
+        exact[point.index] = 0.7 + 0.1 * point.x1 + 0.08 * point.x2 * point.x2 +
+                             0.04 * std::cos(point.x3);
       }
     }
   }
@@ -5889,18 +5936,18 @@ static bool testSpectralMappedMultigridReducesSparseResidual() {
 }
 
 static bool testTwoPunctureMappedMultigridReducesSparseResidual() {
-  using tensorium_mlir::runtime::SpectralAxis;
-  using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
-  using tensorium_mlir::runtime::SpectralGrid3D;
-  using tensorium_mlir::runtime::SpectralLinearPreconditioner;
-  using tensorium_mlir::runtime::SpectralPreconditionerKind;
-  using tensorium_mlir::runtime::SpectralResidualProblem;
   using tensorium_mlir::runtime::applySpectralPreconditioner;
   using tensorium_mlir::runtime::applySpectralSparseMatrix;
   using tensorium_mlir::runtime::buildSpectralScalarPreconditioner;
   using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
   using tensorium_mlir::runtime::makeTwoPunctureCoordinateMap;
   using tensorium_mlir::runtime::makeTwoPunctureDerivativeMap;
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::SpectralLinearPreconditioner;
+  using tensorium_mlir::runtime::SpectralPreconditionerKind;
+  using tensorium_mlir::runtime::SpectralResidualProblem;
   using tensorium_mlir::runtime::spectralSparseResidual;
   using tensorium_mlir::runtime::spectralVectorEuclideanNorm;
 
@@ -5942,9 +5989,9 @@ static bool testTwoPunctureMappedMultigridReducesSparseResidual() {
     for (std::size_t j = 0; j < grid.n2(); ++j) {
       for (std::size_t i = 0; i < grid.n1(); ++i) {
         const auto point = grid.point(i, j, k);
-        exact[point.index] =
-            0.1 + 0.02 * point.x1 + 0.015 * point.x2 * point.x2 +
-            0.01 * std::cos(point.x3);
+        exact[point.index] = 0.1 + 0.02 * point.x1 +
+                             0.015 * point.x2 * point.x2 +
+                             0.01 * std::cos(point.x3);
       }
     }
   }
@@ -5974,8 +6021,8 @@ static bool testTwoPunctureMappedMultigridReducesSparseResidual() {
 }
 
 static bool testSpectralFlexibleGMRESStoresPreconditionedBasis() {
-  using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
   using tensorium_mlir::runtime::solveSpectralRestartedGMRES;
+  using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
 
   SpectralEllipticSolveOptions options;
   options.gmresMaxIterations = 2;
@@ -6038,8 +6085,7 @@ static bool testSpectralAxisBufferedDerivativeReuse() {
       if (axis.basis == SpectralBasis::FourierPeriodic) {
         values[i] = std::sin(3.0 * x) + 0.25 * std::cos(2.0 * x);
         expectedFirst[i] = 3.0 * std::cos(3.0 * x) - 0.5 * std::sin(2.0 * x);
-        expectedSecond[i] =
-            -9.0 * std::sin(3.0 * x) - std::cos(2.0 * x);
+        expectedSecond[i] = -9.0 * std::sin(3.0 * x) - std::cos(2.0 * x);
       } else {
         values[i] = x * x * x * x - 0.5 * x * x + 0.25 * x;
         expectedFirst[i] = 4.0 * x * x * x - x + 0.25;
@@ -6063,10 +6109,8 @@ static bool testSpectralAxisBufferedDerivativeReuse() {
     return maxError;
   };
 
-  const double chebyshevError =
-      checkAxis(SpectralAxis::chebyshevZeros(10));
-  const double fourierError =
-      checkAxis(SpectralAxis::fourierPeriodic(16));
+  const double chebyshevError = checkAxis(SpectralAxis::chebyshevZeros(10));
+  const double fourierError = checkAxis(SpectralAxis::fourierPeriodic(16));
   if (chebyshevError > 2.0e-11 || fourierError > 2.0e-11) {
     std::cerr << "FAIL: buffered spectral derivative errors Chebyshev="
               << chebyshevError << " Fourier=" << fourierError << "\n";
@@ -6084,8 +6128,7 @@ static bool testSpectralGridTensorProductInterpolation() {
                       SpectralAxis::fourierPeriodic(10));
   const auto function = [](double A, double B, double phi) {
     return 0.4 + A * A * A - 0.3 * A * B + 0.2 * B * B * B * B +
-           (0.1 + 0.05 * A) * std::cos(2.0 * phi) -
-           0.07 * B * std::sin(phi);
+           (0.1 + 0.05 * A) * std::cos(2.0 * phi) - 0.07 * B * std::sin(phi);
   };
   std::vector<double> values(grid.size(), 0.0);
   for (std::size_t k = 0; k < grid.n3(); ++k) {
@@ -6161,8 +6204,8 @@ static bool testSpectralDerivativeBundleAnalyticMixedTerms() {
     }
   }
 
-  if (maxD12Err > 2e-11 || maxD13Err > 2e-10 ||
-      maxD23Err > 2e-10 || maxLapErr > 2e-10) {
+  if (maxD12Err > 2e-11 || maxD13Err > 2e-10 || maxD23Err > 2e-10 ||
+      maxLapErr > 2e-10) {
     std::cerr << "FAIL: spectral derivative bundle errors d12=" << maxD12Err
               << " d13=" << maxD13Err << " d23=" << maxD23Err
               << " lap=" << maxLapErr << "\n";
@@ -6192,8 +6235,8 @@ static bool testSpectralPointwisePoissonResidualIsAnalyticallyZero() {
   }
 
   const auto derivs = grid.derivatives(values);
-  const auto residual = grid.evaluateScalarResidual(
-      derivs, [](const auto &point, const auto &u) {
+  const auto residual =
+      grid.evaluateScalarResidual(derivs, [](const auto &point, const auto &u) {
         const double source =
             -(24.0 * point.x1 + 2.0 - std::cos(2.0 * point.x3));
         return u.laplacian() + source;
@@ -6204,8 +6247,8 @@ static bool testSpectralPointwisePoissonResidualIsAnalyticallyZero() {
     maxResidual = std::max(maxResidual, std::abs(value));
 
   if (maxResidual > 3e-10) {
-    std::cerr << "FAIL: spectral pointwise Poisson residual max="
-              << maxResidual << "\n";
+    std::cerr << "FAIL: spectral pointwise Poisson residual max=" << maxResidual
+              << "\n";
     return false;
   }
   return true;
@@ -6233,8 +6276,8 @@ static bool testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero() {
   }
 
   const auto derivs = grid.derivatives(values);
-  const auto residual = grid.evaluateScalarResidual(
-      derivs, [](const auto &, const auto &u) {
+  const auto residual =
+      grid.evaluateScalarResidual(derivs, [](const auto &, const auto &u) {
         const double psiTotal = 1.0 + u.value;
         const double psi7 = std::pow(psiTotal, 7.0);
         const double a2 = -8.0 * u.laplacian() * psi7;
@@ -6246,8 +6289,8 @@ static bool testSpectralPointwiseHamiltonianToyResidualIsAnalyticallyZero() {
     maxResidual = std::max(maxResidual, std::abs(value));
 
   if (maxResidual > 3e-12) {
-    std::cerr << "FAIL: spectral Hamiltonian toy residual max="
-              << maxResidual << "\n";
+    std::cerr << "FAIL: spectral Hamiltonian toy residual max=" << maxResidual
+              << "\n";
     return false;
   }
   return true;
@@ -6270,9 +6313,9 @@ static bool testTwoPunctureCoordinateMapGeometry() {
       std::abs(positive.rho - negative.rho) > 2.0e-14 ||
       cylindricalError > 2.0e-14) {
     std::cerr << "FAIL: two-puncture coordinate symmetry error x="
-              << std::abs(positive.x + negative.x) << " rho="
-              << std::abs(positive.rho - negative.rho) << " cylindrical="
-              << cylindricalError << "\n";
+              << std::abs(positive.x + negative.x)
+              << " rho=" << std::abs(positive.rho - negative.rho)
+              << " cylindrical=" << cylindricalError << "\n";
     return false;
   }
 
@@ -6280,8 +6323,7 @@ static bool testTwoPunctureCoordinateMapGeometry() {
       mapTwoPunctureCoordinates(-1.0 + 1.0e-9, -1.0 + 1.0e-9, phi, b);
   const auto leftPuncture =
       mapTwoPunctureCoordinates(-1.0 + 1.0e-9, 1.0 - 1.0e-9, phi, b);
-  const auto farPoint =
-      mapTwoPunctureCoordinates(1.0 - 1.0e-7, 0.0, phi, b);
+  const auto farPoint = mapTwoPunctureCoordinates(1.0 - 1.0e-7, 0.0, phi, b);
   if (std::abs(rightPuncture.x - b) > 4.0e-9 ||
       std::abs(leftPuncture.x + b) > 4.0e-9 ||
       std::abs(rightPuncture.rho) > 4.0e-9 ||
@@ -6305,13 +6347,10 @@ static bool testTwoPunctureAdmDiagnostics() {
   const std::array<double, 3> spin1 = {0.01, 0.02, 0.03};
   const std::array<double, 3> spin2 = {-0.01, 0.01, 0.04};
   const auto diagnostics = makeTwoPunctureAdmDiagnostics(
-      b, bareMass1, bareMass2, vInfinity, momentum1, momentum2, spin1,
-      spin2);
+      b, bareMass1, bareMass2, vInfinity, momentum1, momentum2, spin1, spin2);
 
-  const double expectedEnergy =
-      bareMass1 + bareMass2 - 4.0 * b * vInfinity;
-  const double expectedAngularZ =
-      spin1[2] + spin2[2] + 2.0 * b * momentum1[1];
+  const double expectedEnergy = bareMass1 + bareMass2 - 4.0 * b * vInfinity;
+  const double expectedAngularZ = spin1[2] + spin2[2] + 2.0 * b * momentum1[1];
   if (std::abs(diagnostics.energy - expectedEnergy) > 1.0e-15 ||
       std::abs(diagnostics.linearMomentum[0]) > 1.0e-15 ||
       std::abs(diagnostics.linearMomentum[1]) > 1.0e-15 ||
@@ -6326,11 +6365,11 @@ static bool testTwoPunctureAdmDiagnostics() {
 }
 
 static bool testTwoPunctureMappedSpectralDerivatives() {
-  using tensorium_mlir::runtime::SpectralAxis;
-  using tensorium_mlir::runtime::SpectralGrid3D;
   using tensorium_mlir::runtime::applySpectralDerivativeMap;
   using tensorium_mlir::runtime::makeTwoPunctureDerivativeMap;
   using tensorium_mlir::runtime::mapTwoPunctureCoordinates;
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
 
   SpectralGrid3D grid(SpectralAxis::chebyshevZeros(9),
                       SpectralAxis::chebyshevZeros(8),
@@ -6340,9 +6379,8 @@ static bool testTwoPunctureMappedSpectralDerivatives() {
   std::vector<double> values(grid.size(), 0.0);
 
   const auto logicalFunction = [](double A, double B, double phi) {
-    return A * A + 0.3 * A * B + 0.2 * B * B +
-           0.1 * std::cos(2.0 * phi) + 0.15 * A * std::sin(phi) +
-           0.07 * B * std::cos(phi);
+    return A * A + 0.3 * A * B + 0.2 * B * B + 0.1 * std::cos(2.0 * phi) +
+           0.15 * A * std::sin(phi) + 0.07 * B * std::cos(phi);
   };
 
   for (std::size_t k = 0; k < grid.n3(); ++k) {
@@ -6355,9 +6393,9 @@ static bool testTwoPunctureMappedSpectralDerivatives() {
     }
   }
 
-  const auto physicalDerivatives = applySpectralDerivativeMap(
-      grid, grid.derivatives(values), makeTwoPunctureDerivativeMap(),
-      mapParams);
+  const auto physicalDerivatives =
+      applySpectralDerivativeMap(grid, grid.derivatives(values),
+                                 makeTwoPunctureDerivativeMap(), mapParams);
   double maxGradientError = 0.0;
   double maxHessianError = 0.0;
   double maxLaplacianError = 0.0;
@@ -6368,25 +6406,22 @@ static bool testTwoPunctureMappedSpectralDerivatives() {
         const auto logical = grid.point(i, j, k);
         if (std::abs(logical.x1) > 0.65 || std::abs(logical.x2) > 0.65)
           continue;
-        const auto physical = mapTwoPunctureCoordinates(
-            logical.x1, logical.x2, logical.x3, b);
+        const auto physical =
+            mapTwoPunctureCoordinates(logical.x1, logical.x2, logical.x3, b);
         const std::array<double, 3> xyz = {physical.x, physical.y, physical.z};
         const auto evaluatePhysical = [&](const std::array<double, 3> &q) {
           const double rho = std::hypot(q[1], q[2]);
           const std::complex<double> C =
               std::acosh(std::complex<double>(q[0], rho) / b);
           const double inverseA = 2.0 * std::tanh(0.5 * C.real()) - 1.0;
-          const double inverseB =
-              std::tan(0.5 *
-                       (C.imag() -
-                        0.5 * tensorium_mlir::runtime::kSpectralPi));
+          const double inverseB = std::tan(
+              0.5 * (C.imag() - 0.5 * tensorium_mlir::runtime::kSpectralPi));
           const double inversePhi = std::atan2(q[2], q[1]);
           return logicalFunction(inverseA, inverseB, inversePhi);
         };
-        const double h = 5.0e-5 *
-                         (1.0 + std::sqrt(xyz[0] * xyz[0] +
-                                          xyz[1] * xyz[1] +
-                                          xyz[2] * xyz[2]));
+        const double h =
+            5.0e-5 * (1.0 + std::sqrt(xyz[0] * xyz[0] + xyz[1] * xyz[1] +
+                                      xyz[2] * xyz[2]));
         const double center = evaluatePhysical(xyz);
         std::array<double, 3> numericalGradient{};
         std::array<double, 3> numericalDiagonal{};
@@ -6398,8 +6433,7 @@ static bool testTwoPunctureMappedSpectralDerivatives() {
           const double fPlus = evaluatePhysical(plus);
           const double fMinus = evaluatePhysical(minus);
           numericalGradient[d] = (fPlus - fMinus) / (2.0 * h);
-          numericalDiagonal[d] =
-              (fPlus - 2.0 * center + fMinus) / (h * h);
+          numericalDiagonal[d] = (fPlus - 2.0 * center + fMinus) / (h * h);
         }
         std::array<double, 3> numericalMixed{};
         const std::array<std::array<std::size_t, 2>, 3> pairs = {
@@ -6441,16 +6475,13 @@ static bool testTwoPunctureMappedSpectralDerivatives() {
           maxHessianError =
               std::max(maxHessianError,
                        std::abs(computedDiagonal[d] - numericalDiagonal[d]));
-          maxHessianError =
-              std::max(maxHessianError,
-                       std::abs(computedMixed[d] - numericalMixed[d]));
+          maxHessianError = std::max(
+              maxHessianError, std::abs(computedMixed[d] - numericalMixed[d]));
         }
-        const double computedLaplacian = computedDiagonal[0] +
-                                         computedDiagonal[1] +
-                                         computedDiagonal[2];
-        const double numericalLaplacian = numericalDiagonal[0] +
-                                          numericalDiagonal[1] +
-                                          numericalDiagonal[2];
+        const double computedLaplacian =
+            computedDiagonal[0] + computedDiagonal[1] + computedDiagonal[2];
+        const double numericalLaplacian =
+            numericalDiagonal[0] + numericalDiagonal[1] + numericalDiagonal[2];
         maxLaplacianError =
             std::max(maxLaplacianError,
                      std::abs(computedLaplacian - numericalLaplacian));
@@ -6470,72 +6501,83 @@ static bool testTwoPunctureMappedSpectralDerivatives() {
 }
 
 static bool testLinearBoundaryFactorUnknownMapProductRule() {
-  using tensorium_mlir::runtime::SpectralPointDerivatives3D;
   using tensorium_mlir::runtime::linearBoundaryFactorUnknownMap;
+  using tensorium_mlir::runtime::SpectralPointDerivatives3D;
 
   const double logical[3] = {0.25, -0.4, 0.7};
   const double params[3] = {0.0, 1.0, 1.0};
-  const SpectralPointDerivatives3D solver{
-      2.0, 3.0,  5.0,  7.0,  11.0,
-      13.0, 17.0, 19.0, 23.0, 29.0};
+  const SpectralPointDerivatives3D solver{2.0,  3.0,  5.0,  7.0,  11.0,
+                                          13.0, 17.0, 19.0, 23.0, 29.0};
   SpectralPointDerivatives3D physical;
   linearBoundaryFactorUnknownMap(logical, &solver, &physical, params, 3,
                                  nullptr);
 
   const SpectralPointDerivatives3D expected{
-      -1.5, -0.25, -3.75, -5.25, -2.25,
-      -4.75, -5.75, -14.25, -17.25, -21.75};
+      -1.5, -0.25, -3.75, -5.25, -2.25, -4.75, -5.75, -14.25, -17.25, -21.75};
   const std::array<double, 10> actualValues = {
-      physical.value, physical.d1,  physical.d2,  physical.d3,
-      physical.d11,  physical.d12, physical.d13, physical.d22,
-      physical.d23,  physical.d33};
+      physical.value, physical.d1,  physical.d2,  physical.d3,  physical.d11,
+      physical.d12,   physical.d13, physical.d22, physical.d23, physical.d33};
   const std::array<double, 10> expectedValues = {
-      expected.value, expected.d1,  expected.d2,  expected.d3,
-      expected.d11,  expected.d12, expected.d13, expected.d22,
-      expected.d23,  expected.d33};
+      expected.value, expected.d1,  expected.d2,  expected.d3,  expected.d11,
+      expected.d12,   expected.d13, expected.d22, expected.d23, expected.d33};
   double maxError = 0.0;
   for (std::size_t i = 0; i < actualValues.size(); ++i)
-    maxError = std::max(maxError,
-                        std::abs(actualValues[i] - expectedValues[i]));
+    maxError =
+        std::max(maxError, std::abs(actualValues[i] - expectedValues[i]));
   if (maxError > 1.0e-14) {
-    std::cerr << "FAIL: linear boundary-factor product-rule error="
-              << maxError << "\n";
+    std::cerr << "FAIL: linear boundary-factor product-rule error=" << maxError
+              << "\n";
     return false;
   }
   return true;
 }
 
-static double mappedUnknownValueKernel(
-    const tensorium_spectral_residual_point *point, const double *,
-    std::int64_t, void *) {
+static double
+mappedUnknownValueKernel(const tensorium_spectral_residual_point *point,
+                         const double *, std::int64_t, void *) {
   return point->value;
 }
 
-static double mappedAuxiliaryValueKernel(
-    const tensorium_spectral_residual_point *point, const double *,
-    std::int64_t, void *) {
-  return point->aux_count == 1 ? point->aux_values[0]
-                               : std::numeric_limits<double>::quiet_NaN();
+static double
+mappedAuxiliaryDerivativeKernel(const tensorium_spectral_residual_point *point,
+                                const double *, std::int64_t, void *) {
+  if (point->aux_count != 1 || point->aux_derivative_count != 1 ||
+      !point->aux_derivatives)
+    return std::numeric_limits<double>::quiet_NaN();
+  const auto &u = point->aux_derivatives[0];
+  return u.value + 2.0 * u.d1 + 3.0 * u.d2 + 5.0 * u.d3 + 7.0 * u.d11 +
+         11.0 * u.d12 + 13.0 * u.d13 + 17.0 * u.d22 + 19.0 * u.d23 +
+         23.0 * u.d33;
 }
 
-static bool testSpectralSystemAuxiliaryUsesMappedUnknownValue() {
-  using tensorium_mlir::runtime::SpectralAxis;
+static bool testSpectralSystemAuxiliaryUsesMappedUnknownDerivatives() {
+  using tensorium_mlir::runtime::assembleSpectralResidualSystem;
+  using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
   using tensorium_mlir::runtime::SpectralAuxiliaryUnknownIndex;
+  using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralGrid3D;
   using tensorium_mlir::runtime::SpectralResidualKernel;
   using tensorium_mlir::runtime::SpectralResidualProblem;
   using tensorium_mlir::runtime::SpectralResidualSystemEquation;
   using tensorium_mlir::runtime::SpectralResidualSystemProblem;
-  using tensorium_mlir::runtime::assembleSpectralResidualSystem;
-  using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
 
   SpectralGrid3D grid(SpectralAxis::chebyshevZeros(3),
                       SpectralAxis::chebyshevZeros(3),
                       SpectralAxis::fourierPeriodic(4));
   const std::array<double, 3> mapParams = {0.0, 1.0, 1.0};
-  const std::array<std::vector<double>, 2> unknowns = {
-      std::vector<double>(grid.size(), 2.0),
+  std::array<std::vector<double>, 2> unknowns = {
+      std::vector<double>(grid.size(), 0.0),
       std::vector<double>(grid.size(), 0.0)};
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    const double z = grid.axis(2).points[k];
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      const double y = grid.axis(1).points[j];
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const double x = grid.axis(0).points[i];
+        unknowns[0][grid.index(i, j, k)] = 2.0 + x + y * y + std::cos(z);
+      }
+    }
+  }
   const std::array<std::vector<double>, 1> auxiliaryPlaceholder = {
       std::vector<double>(grid.size(), 0.0)};
   const std::array<SpectralAuxiliaryUnknownIndex, 1> auxiliaryMap = {0};
@@ -6550,7 +6592,7 @@ static bool testSpectralSystemAuxiliaryUsesMappedUnknownValue() {
   SpectralResidualProblem auxiliaryProblem;
   auxiliaryProblem.grid = &grid;
   auxiliaryProblem.kernel =
-      SpectralResidualKernel{"mapped_aux", &mappedAuxiliaryValueKernel};
+      SpectralResidualKernel{"mapped_aux", &mappedAuxiliaryDerivativeKernel};
   auxiliaryProblem.auxiliaryFields = auxiliaryPlaceholder;
 
   const std::array<SpectralResidualSystemEquation, 2> equations = {
@@ -6565,18 +6607,34 @@ static bool testSpectralSystemAuxiliaryUsesMappedUnknownValue() {
     for (std::size_t j = 0; j < grid.n2(); ++j) {
       for (std::size_t i = 0; i < grid.n1(); ++i) {
         const auto point = grid.point(i, j, k);
-        const double expected = 2.0 * (point.x1 - 1.0);
+        const double x = point.x1;
+        const double y = point.x2;
+        const double z = point.x3;
+        const double solverValue = 2.0 + x + y * y + std::cos(z);
+        const double factor = x - 1.0;
+        const double value = factor * solverValue;
+        const double d1 = solverValue + factor;
+        const double d2 = factor * 2.0 * y;
+        const double d3 = -factor * std::sin(z);
+        const double d11 = 2.0;
+        const double d12 = 2.0 * y;
+        const double d13 = -std::sin(z);
+        const double d22 = 2.0 * factor;
+        const double d23 = 0.0;
+        const double d33 = -factor * std::cos(z);
+        const double expectedDerivatives =
+            value + 2.0 * d1 + 3.0 * d2 + 5.0 * d3 + 7.0 * d11 + 11.0 * d12 +
+            13.0 * d13 + 17.0 * d22 + 19.0 * d23 + 23.0 * d33;
         maxError =
-            std::max(maxError,
-                     std::abs(residual.values[point.index] - expected));
+            std::max(maxError, std::abs(residual.values[point.index] - value));
         maxError = std::max(
-            maxError,
-            std::abs(residual.values[grid.size() + point.index] - expected));
+            maxError, std::abs(residual.values[grid.size() + point.index] -
+                               expectedDerivatives));
       }
     }
   }
   if (!residual.finite || maxError > 2.0e-13) {
-    std::cerr << "FAIL: mapped auxiliary unknown value error=" << maxError
+    std::cerr << "FAIL: mapped auxiliary unknown derivative error=" << maxError
               << "\n";
     return false;
   }
@@ -6628,12 +6686,12 @@ static bool testCoupledNonlinearRadialConstraintSolve() {
       solution.iterations > 8) {
     std::cerr << "FAIL: coupled radial Newton solve did not converge "
                  "iteratively; iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
-  if (solution.unknowns.size() != 2 ||
-      !solution.unknowns.count("psi") || !solution.unknowns.count("w")) {
+  if (solution.unknowns.size() != 2 || !solution.unknowns.count("psi") ||
+      !solution.unknowns.count("w")) {
     std::cerr << "FAIL: coupled radial solution is missing an unknown\n";
     return false;
   }
@@ -6648,8 +6706,7 @@ static bool testCoupledNonlinearRadialConstraintSolve() {
       maxError = std::max(maxError, std::abs(value - 1.0));
   }
   if (maxError > 1.0e-9) {
-    std::cerr << "FAIL: coupled radial solution max error=" << maxError
-              << "\n";
+    std::cerr << "FAIL: coupled radial solution max error=" << maxError << "\n";
     return false;
   }
   return true;
@@ -6663,8 +6720,8 @@ static bool testScalarVectorRadialConstraintSolve() {
   if (!solution.converged || solution.iterations != 3) {
     std::cerr << "FAIL: scalar-vector radial solve did not converge as "
                  "expected; iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
   if (solution.unknownLayouts.size() != 2 ||
@@ -6725,8 +6782,8 @@ initial_data InvalidSymmetricMixed {
   try {
     (void)buildModuleFromSource(source, CompilationMode::Executable);
   } catch (const std::exception &exception) {
-    if (std::string(exception.what()).find(
-            "must be covariant or contravariant rank two") !=
+    if (std::string(exception.what())
+            .find("must be covariant or contravariant rank two") !=
         std::string::npos) {
       return true;
     }
@@ -6747,8 +6804,8 @@ static bool testRankTwoRadialConstraintSolve() {
       solution.unknownLayouts.size() != 3) {
     std::cerr << "FAIL: rank-two radial solve did not converge as expected; "
                  "iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
 
@@ -6803,12 +6860,11 @@ static bool testTensorContractionRadialConstraintSolve() {
   auto solution =
       tensorium::solver::solveRadialConstraintProblem(result.module);
   if (!solution.converged || solution.iterations != 2 ||
-      solution.residualNorm > 1.0e-11 ||
-      solution.unknownLayouts.size() != 4) {
+      solution.residualNorm > 1.0e-11 || solution.unknownLayouts.size() != 4) {
     std::cerr << "FAIL: tensor-contraction radial solve did not converge as "
                  "expected; iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
 
@@ -6839,9 +6895,10 @@ static bool testTensorContractionRadialConstraintSolve() {
     }
     const auto &values = solution.unknowns.at(wanted.name);
     if (values.size() != wanted.componentCount * layout.pointsPerComponent) {
-      std::cerr << "FAIL: tensor-contraction flattened buffer size is incorrect "
-                   "for "
-                << wanted.name << "\n";
+      std::cerr
+          << "FAIL: tensor-contraction flattened buffer size is incorrect "
+             "for "
+          << wanted.name << "\n";
       return false;
     }
     for (double value : values)
@@ -6871,12 +6928,11 @@ static bool testCovariantGeometryRadialConstraintSolve() {
   auto solution =
       tensorium::solver::solveRadialConstraintProblem(result.module);
   if (!solution.converged || solution.iterations != 1 ||
-      solution.residualNorm > 1.0e-11 ||
-      solution.unknownLayouts.size() != 3) {
+      solution.residualNorm > 1.0e-11 || solution.unknownLayouts.size() != 3) {
     std::cerr << "FAIL: covariant geometry solve did not converge as expected; "
                  "iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
 
@@ -6902,10 +6958,10 @@ static bool testCovariantGeometryRadialConstraintSolve() {
           std::abs(tensor[component * coordinates.size() + point] - expected));
     }
     maxError = std::max(maxError, std::abs(divergence[point] - 0.5));
-    maxError = std::max(
-        maxError, std::abs(divergence[coordinates.size() + point]));
-    maxError = std::max(
-        maxError, std::abs(divergence[2 * coordinates.size() + point]));
+    maxError =
+        std::max(maxError, std::abs(divergence[coordinates.size() + point]));
+    maxError = std::max(maxError,
+                        std::abs(divergence[2 * coordinates.size() + point]));
   }
   if (maxError > 1.0e-10) {
     std::cerr << "FAIL: covariant geometry manufactured solution max error="
@@ -6921,12 +6977,11 @@ static bool testCovariantTensorLaplacianRadialConstraintSolve() {
   auto solution =
       tensorium::solver::solveRadialConstraintProblem(result.module);
   if (!solution.converged || solution.iterations != 1 ||
-      solution.residualNorm > 1.0e-10 ||
-      solution.unknownLayouts.size() != 3) {
+      solution.residualNorm > 1.0e-10 || solution.unknownLayouts.size() != 3) {
     std::cerr << "FAIL: covariant tensor-laplacian solve did not converge as "
                  "expected; iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
 
@@ -6934,8 +6989,8 @@ static bool testCovariantTensorLaplacianRadialConstraintSolve() {
   const auto &vector = solution.unknowns.at("V");
   const auto &tensor = solution.unknowns.at("T");
   const auto &hessian = solution.unknowns.at("Q");
-  if (coordinates.size() != 9 || vector.size() != 27 ||
-      tensor.size() != 54 || hessian.size() != 54) {
+  if (coordinates.size() != 9 || vector.size() != 27 || tensor.size() != 54 ||
+      hessian.size() != 54) {
     std::cerr << "FAIL: covariant tensor-laplacian layout is incorrect\n";
     return false;
   }
@@ -6954,13 +7009,11 @@ static bool testCovariantTensorLaplacianRadialConstraintSolve() {
       const bool diagonal = component == 0 || component == 3 || component == 5;
       const double expectedHessian = diagonal ? 0.5 : 0.0;
       maxError = std::max(
-          maxError,
-          std::abs(tensor[component * coordinates.size() + point] -
-                   expectedTensor));
+          maxError, std::abs(tensor[component * coordinates.size() + point] -
+                             expectedTensor));
       maxError = std::max(
-          maxError,
-          std::abs(hessian[component * coordinates.size() + point] -
-                   expectedHessian));
+          maxError, std::abs(hessian[component * coordinates.size() + point] -
+                             expectedHessian));
     }
   }
   if (maxError > 1.0e-10) {
@@ -6978,12 +7031,11 @@ static bool testCttCurvedBackgroundConstraintSolve() {
   auto solution =
       tensorium::solver::solveRadialConstraintProblem(result.module);
   if (!solution.converged || solution.iterations != 4 ||
-      solution.residualNorm > 1.0e-11 ||
-      solution.unknownLayouts.size() != 4) {
+      solution.residualNorm > 1.0e-11 || solution.unknownLayouts.size() != 4) {
     std::cerr << "FAIL: curved-background CTT solve did not converge as "
                  "expected; iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
 
@@ -7003,9 +7055,9 @@ static bool testCttCurvedBackgroundConstraintSolve() {
     const double radius = coordinates[point];
     const double profile =
         radius * std::pow(radius - 1.0, 2) * std::pow(radius - 2.0, 2);
-    const double longitudinalAmplitude =
-        2.0 * std::pow(radius, 4) - 9.0 * std::pow(radius, 3) +
-        13.0 * radius * radius - 6.0 * radius;
+    const double longitudinalAmplitude = 2.0 * std::pow(radius, 4) -
+                                         9.0 * std::pow(radius, 3) +
+                                         13.0 * radius * radius - 6.0 * radius;
     maxError = std::max(maxError, std::abs(psi[point] - 1.0));
     for (std::size_t component = 0; component < 3; ++component) {
       const double expected = component == 0 ? profile : 0.0;
@@ -7025,8 +7077,7 @@ static bool testCttCurvedBackgroundConstraintSolve() {
                    expected));
       maxError = std::max(
           maxError,
-          std::abs(lowered[component * coordinates.size() + point] -
-                   expected));
+          std::abs(lowered[component * coordinates.size() + point] - expected));
     }
   }
   if (maxError > 1.0e-10) {
@@ -7053,8 +7104,8 @@ static bool testBrillLindquistSchwarzschildPaperSolution() {
       !std::isinf(solution.coordinates.back())) {
     std::cerr << "FAIL: Brill-Lindquist paper benchmark did not converge as "
                  "expected; iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
 
@@ -7104,8 +7155,8 @@ static bool testReissnerNordstromEinsteinMaxwellPaperSolution() {
       !std::isinf(solution.coordinates.back())) {
     std::cerr << "FAIL: Reissner-Nordstrom paper benchmark did not converge "
                  "as expected; iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
 
@@ -7118,12 +7169,11 @@ static bool testReissnerNordstromEinsteinMaxwellPaperSolution() {
   double maxPhysicalElectricError = 0.0;
   for (std::size_t point = 0; point < solution.coordinates.size(); ++point) {
     const double radius = solution.coordinates[point];
-    const double expected = std::isinf(radius)
-                                ? 1.0
-                                : std::sqrt(
-                                      std::pow(1.0 + mass / (2.0 * radius), 2) -
-                                      charge * charge /
-                                          (4.0 * radius * radius));
+    const double expected =
+        std::isinf(radius)
+            ? 1.0
+            : std::sqrt(std::pow(1.0 + mass / (2.0 * radius), 2) -
+                        charge * charge / (4.0 * radius * radius));
     maxSolutionError =
         std::max(maxSolutionError, std::abs(psi[point] - expected));
     const double expectedConformalElectric =
@@ -7342,8 +7392,8 @@ initial_data InvalidGeometryDependency {
     std::cerr << "FAIL: unknown-dependent geometry scale was accepted\n";
     return false;
   } catch (const std::exception &exception) {
-    if (std::string(exception.what()).find(
-            "may reference only r and scalar parameters") ==
+    if (std::string(exception.what())
+            .find("may reference only r and scalar parameters") ==
         std::string::npos) {
       std::cerr << "FAIL: unexpected geometry dependency diagnostic: "
                 << exception.what() << "\n";
@@ -7399,8 +7449,8 @@ static bool testCttRadialVacuumConstraintSolve() {
       solution.iterations > 8) {
     std::cerr << "FAIL: radial CTT vacuum solve did not converge "
                  "nonlinearly; iterations="
-              << solution.iterations
-              << " residual=" << solution.residualNorm << "\n";
+              << solution.iterations << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
   if (solution.domains.size() != 2 ||
@@ -7429,9 +7479,9 @@ static bool testCttRadialVacuumConstraintSolve() {
     maxWError = std::max(maxWError, std::abs(w[i] - expectedW));
   }
   if (maxPsiError > 1.0e-9 || maxWError > 1.0e-9) {
-    std::cerr << "FAIL: radial CTT exact-solution errors: psi="
-              << maxPsiError << " w=" << maxWError
-              << " residual=" << solution.residualNorm << "\n";
+    std::cerr << "FAIL: radial CTT exact-solution errors: psi=" << maxPsiError
+              << " w=" << maxWError << " residual=" << solution.residualNorm
+              << "\n";
     return false;
   }
 
@@ -7446,8 +7496,7 @@ static bool testCttRadialVacuumConstraintSolve() {
       physical.meanCurvature.size() != solution.coordinates.size() ||
       physical.spatialMetricRadial.size() != solution.coordinates.size() ||
       physical.spatialMetricTangential.size() != solution.coordinates.size() ||
-      physical.extrinsicCurvatureRadial.size() !=
-          solution.coordinates.size() ||
+      physical.extrinsicCurvatureRadial.size() != solution.coordinates.size() ||
       physical.extrinsicCurvatureTangential.size() !=
           solution.coordinates.size()) {
     std::cerr << "FAIL: radial CTT physical field layout is incorrect\n";
@@ -7467,13 +7516,12 @@ static bool testCttRadialVacuumConstraintSolve() {
         maxPhysicalError, std::abs(physical.spatialMetricRadial[i] - 1.0));
     maxPhysicalError = std::max(
         maxPhysicalError, std::abs(physical.spatialMetricTangential[i] - 1.0));
+    maxPhysicalError =
+        std::max(maxPhysicalError,
+                 std::abs(physical.extrinsicCurvatureRadial[i] + radialPower));
     maxPhysicalError = std::max(
         maxPhysicalError,
-        std::abs(physical.extrinsicCurvatureRadial[i] + radialPower));
-    maxPhysicalError = std::max(
-        maxPhysicalError,
-        std::abs(physical.extrinsicCurvatureTangential[i] -
-                 2.0 * radialPower));
+        std::abs(physical.extrinsicCurvatureTangential[i] - 2.0 * radialPower));
     const double reconstructedTrace =
         (physical.extrinsicCurvatureRadial[i] +
          2.0 * physical.extrinsicCurvatureTangential[i]) /
@@ -7527,15 +7575,13 @@ static bool testCttPhysicalGridHandoff() {
   sphericalTarget.coordinateComponents = {radius.data(), theta.data(),
                                           phi.data()};
   tensorium::solver::CttEvolutionBuffers sphericalOutputs;
-  sphericalOutputs.spatialMetric =
-      makePointers(sphericalGamma, radius.size());
+  sphericalOutputs.spatialMetric = makePointers(sphericalGamma, radius.size());
   sphericalOutputs.inverseSpatialMetric =
       makePointers(sphericalGammaU, radius.size());
-  sphericalOutputs.extrinsicCurvature =
-      makePointers(sphericalK, radius.size());
+  sphericalOutputs.extrinsicCurvature = makePointers(sphericalK, radius.size());
   sphericalOutputs.meanCurvature = sphericalMean.data();
-  tensorium::solver::interpolateRadialCttToGrid(
-      solution, sphericalTarget, sphericalOutputs);
+  tensorium::solver::interpolateRadialCttToGrid(solution, sphericalTarget,
+                                                sphericalOutputs);
 
   double maxSphericalError = 0.0;
   for (std::size_t point = 0; point < radius.size(); ++point) {
@@ -7543,30 +7589,32 @@ static bool testCttPhysicalGridHandoff() {
     const double sinTheta = std::sin(theta[point]);
     const double azimuthScale = r2 * sinTheta * sinTheta;
     const double radialPower = amplitude * std::pow(radius[point], -1.5);
-    const std::array<double, 9> expectedGamma = {
-        1.0, 0.0, 0.0, 0.0, r2, 0.0, 0.0, 0.0, azimuthScale};
+    const std::array<double, 9> expectedGamma = {1.0, 0.0, 0.0, 0.0,         r2,
+                                                 0.0, 0.0, 0.0, azimuthScale};
     const std::array<double, 9> expectedGammaU = {
-        1.0, 0.0, 0.0, 0.0, 1.0 / r2, 0.0, 0.0, 0.0,
-        1.0 / azimuthScale};
-    const std::array<double, 9> expectedK = {
-        -radialPower, 0.0, 0.0, 0.0, 2.0 * r2 * radialPower,
-        0.0,          0.0, 0.0, 2.0 * azimuthScale * radialPower};
+        1.0, 0.0, 0.0, 0.0, 1.0 / r2, 0.0, 0.0, 0.0, 1.0 / azimuthScale};
+    const std::array<double, 9> expectedK = {-radialPower,
+                                             0.0,
+                                             0.0,
+                                             0.0,
+                                             2.0 * r2 * radialPower,
+                                             0.0,
+                                             0.0,
+                                             0.0,
+                                             2.0 * azimuthScale * radialPower};
     for (std::size_t component = 0; component < 9; ++component) {
-      maxSphericalError = std::max(
-          maxSphericalError,
-          std::abs(sphericalGamma[component][point] -
-                   expectedGamma[component]));
-      maxSphericalError = std::max(
-          maxSphericalError,
-          std::abs(sphericalGammaU[component][point] -
-                   expectedGammaU[component]));
-      maxSphericalError = std::max(
-          maxSphericalError,
-          std::abs(sphericalK[component][point] - expectedK[component]));
+      maxSphericalError = std::max(maxSphericalError,
+                                   std::abs(sphericalGamma[component][point] -
+                                            expectedGamma[component]));
+      maxSphericalError = std::max(maxSphericalError,
+                                   std::abs(sphericalGammaU[component][point] -
+                                            expectedGammaU[component]));
+      maxSphericalError =
+          std::max(maxSphericalError, std::abs(sphericalK[component][point] -
+                                               expectedK[component]));
     }
-    maxSphericalError =
-        std::max(maxSphericalError,
-                 std::abs(sphericalMean[point] - 3.0 * radialPower));
+    maxSphericalError = std::max(
+        maxSphericalError, std::abs(sphericalMean[point] - 3.0 * radialPower));
   }
 
   const std::array<double, 3> x = {1.0, 0.0, 1.0};
@@ -7585,8 +7633,8 @@ static bool testCttPhysicalGridHandoff() {
   cartesianOutputs.inverseSpatialMetric =
       makePointers(cartesianGammaU, x.size());
   cartesianOutputs.extrinsicCurvature = makePointers(cartesianK, x.size());
-  tensorium::solver::interpolateRadialCttToGrid(
-      solution, cartesianTarget, cartesianOutputs);
+  tensorium::solver::interpolateRadialCttToGrid(solution, cartesianTarget,
+                                                cartesianOutputs);
 
   double maxCartesianError = 0.0;
   for (std::size_t point = 0; point < x.size(); ++point) {
@@ -7599,18 +7647,18 @@ static bool testCttPhysicalGridHandoff() {
       for (std::size_t j = 0; j < 3; ++j) {
         const std::size_t component = 3 * i + j;
         const double delta = i == j ? 1.0 : 0.0;
-        const double expectedK =
-            2.0 * radialPower * delta -
-            3.0 * radialPower * radialUnit[i] * radialUnit[j];
-        maxCartesianError = std::max(
-            maxCartesianError,
-            std::abs(cartesianGamma[component][point] - delta));
-        maxCartesianError = std::max(
-            maxCartesianError,
-            std::abs(cartesianGammaU[component][point] - delta));
-        maxCartesianError = std::max(
-            maxCartesianError,
-            std::abs(cartesianK[component][point] - expectedK));
+        const double expectedK = 2.0 * radialPower * delta - 3.0 * radialPower *
+                                                                 radialUnit[i] *
+                                                                 radialUnit[j];
+        maxCartesianError =
+            std::max(maxCartesianError,
+                     std::abs(cartesianGamma[component][point] - delta));
+        maxCartesianError =
+            std::max(maxCartesianError,
+                     std::abs(cartesianGammaU[component][point] - delta));
+        maxCartesianError =
+            std::max(maxCartesianError,
+                     std::abs(cartesianK[component][point] - expectedK));
       }
     }
   }
@@ -7649,8 +7697,8 @@ static bool testCttPhysicalGridHandoff() {
   compactTarget.coordinates =
       tensorium::solver::CttTargetCoordinates::Spherical;
   compactTarget.pointCount = compactRadius.size();
-  compactTarget.coordinateComponents = {
-      compactRadius.data(), compactTheta.data(), compactPhi.data()};
+  compactTarget.coordinateComponents = {compactRadius.data(),
+                                        compactTheta.data(), compactPhi.data()};
   tensorium::solver::CttEvolutionBuffers compactOutputs;
   compactOutputs.spatialMetric =
       makePointers(compactGamma, compactRadius.size());
@@ -7659,8 +7707,8 @@ static bool testCttPhysicalGridHandoff() {
   compactOutputs.extrinsicCurvature =
       makePointers(compactK, compactRadius.size());
   compactOutputs.meanCurvature = compactMean.data();
-  tensorium::solver::interpolateRadialCttToGrid(
-      compactSolution, compactTarget, compactOutputs);
+  tensorium::solver::interpolateRadialCttToGrid(compactSolution, compactTarget,
+                                                compactOutputs);
 
   double maxCompactifiedError = 0.0;
   for (std::size_t point = 0; point < compactRadius.size(); ++point) {
@@ -7668,9 +7716,8 @@ static bool testCttPhysicalGridHandoff() {
     maxCompactifiedError =
         std::max(maxCompactifiedError,
                  std::abs(compactGamma[0][point] - (1.0 + inverseRadius)));
-    maxCompactifiedError =
-        std::max(maxCompactifiedError,
-                 std::abs(compactK[0][point] - inverseRadius));
+    maxCompactifiedError = std::max(
+        maxCompactifiedError, std::abs(compactK[0][point] - inverseRadius));
     maxCompactifiedError =
         std::max(maxCompactifiedError,
                  std::abs(compactMean[point] - 5.0 * inverseRadius));
@@ -7699,11 +7746,9 @@ static bool testCttBssnGeneratedRhsHandoff() {
   }
 
   constexpr std::size_t axisPoints = 3;
-  constexpr std::size_t pointCount =
-      axisPoints * axisPoints * axisPoints;
+  constexpr std::size_t pointCount = axisPoints * axisPoints * axisPoints;
   constexpr std::size_t center = 1;
-  const auto linearIndex = [](std::size_t ix, std::size_t iy,
-                              std::size_t iz) {
+  const auto linearIndex = [](std::size_t ix, std::size_t iy, std::size_t iz) {
     return (ix * axisPoints + iy) * axisPoints + iz;
   };
   std::vector<double> x(pointCount);
@@ -7760,15 +7805,13 @@ static bool testCttBssnGeneratedRhsHandoff() {
   tensorium::solver::BssnGaugeSeed gauge;
   gauge.lapse = 0.9;
   gauge.shift = {0.1, -0.2, 0.3};
-  tensorium::solver::initializeBssnFromRadialCtt(solution, target, bssn,
-                                                 gauge);
+  tensorium::solver::initializeBssnFromRadialCtt(solution, target, bssn, gauge);
 
   double maxInitializationError = 0.0;
   double maxTraceFreeError = 0.0;
   for (std::size_t point = 0; point < pointCount; ++point) {
-    const double radius =
-        std::sqrt(x[point] * x[point] + y[point] * y[point] +
-                  z[point] * z[point]);
+    const double radius = std::sqrt(x[point] * x[point] + y[point] * y[point] +
+                                    z[point] * z[point]);
     const std::array<double, 3> radialUnit = {
         x[point] / radius, y[point] / radius, z[point] / radius};
     const double radialPower = amplitude * std::pow(radius, -1.5);
@@ -7789,19 +7832,19 @@ static bool testCttBssnGeneratedRhsHandoff() {
       for (std::size_t j = 0; j < 3; ++j) {
         const std::size_t component = 3 * i + j;
         const double delta = i == j ? 1.0 : 0.0;
-        const double expectedAtilde =
-            radialPower * delta -
-            3.0 * radialPower * radialUnit[i] * radialUnit[j];
-        maxInitializationError = std::max(
-            maxInitializationError,
-            std::abs(conformalMetric[component][point] - delta));
+        const double expectedAtilde = radialPower * delta - 3.0 * radialPower *
+                                                                radialUnit[i] *
+                                                                radialUnit[j];
+        maxInitializationError =
+            std::max(maxInitializationError,
+                     std::abs(conformalMetric[component][point] - delta));
         maxInitializationError = std::max(
             maxInitializationError,
             std::abs(inverseConformalMetric[component][point] - delta));
-        maxInitializationError = std::max(
-            maxInitializationError,
-            std::abs(traceFreeExtrinsicCurvature[component][point] -
-                     expectedAtilde));
+        maxInitializationError =
+            std::max(maxInitializationError,
+                     std::abs(traceFreeExtrinsicCurvature[component][point] -
+                              expectedAtilde));
         trace += inverseConformalMetric[component][point] *
                  traceFreeExtrinsicCurvature[component][point];
       }
@@ -7818,8 +7861,8 @@ static bool testCttBssnGeneratedRhsHandoff() {
     std::cerr << "FAIL: combined constraint/evolution module has no RHS\n";
     return false;
   }
-  const auto fieldNames = parseStringArrayAttr(
-      rhs->getAttrOfType<::mlir::ArrayAttr>(
+  const auto fieldNames =
+      parseStringArrayAttr(rhs->getAttrOfType<::mlir::ArrayAttr>(
           tensorium_mlir::abi::kAttrFieldNames));
   if (fieldNames.size() != rhs.getNumArguments()) {
     std::cerr << "FAIL: combined CTT/BSSN RHS has invalid field metadata\n";
@@ -7856,9 +7899,8 @@ static bool testCttBssnGeneratedRhsHandoff() {
   }
 
   const std::size_t centerPoint = linearIndex(center, center, center);
-  const double expectedChiRhs =
-      (2.0 / 3.0) * lapse[centerPoint] * chi[centerPoint] *
-      meanCurvature[centerPoint];
+  const double expectedChiRhs = (2.0 / 3.0) * lapse[centerPoint] *
+                                chi[centerPoint] * meanCurvature[centerPoint];
   std::array<double, 9> expectedMetricRhs{};
   for (std::size_t component = 0; component < 9; ++component) {
     expectedMetricRhs[component] =
@@ -7875,16 +7917,14 @@ static bool testCttBssnGeneratedRhsHandoff() {
 
   double maxRhsError = std::abs(chi[centerPoint] - expectedChiRhs);
   for (std::size_t component = 0; component < 9; ++component) {
-    maxRhsError = std::max(
-        maxRhsError,
-        std::abs(conformalMetric[component][centerPoint] -
-                 expectedMetricRhs[component]));
+    maxRhsError =
+        std::max(maxRhsError, std::abs(conformalMetric[component][centerPoint] -
+                                       expectedMetricRhs[component]));
   }
   if (maxInitializationError > 2.0e-9 || maxTraceFreeError > 2.0e-9 ||
       maxRhsError > 1.0e-12) {
     std::cerr << "FAIL: CTT-to-BSSN generated RHS errors: initialization="
-              << maxInitializationError
-              << " trace_free=" << maxTraceFreeError
+              << maxInitializationError << " trace_free=" << maxTraceFreeError
               << " rhs=" << maxRhsError << "\n";
     return false;
   }
@@ -7902,13 +7942,19 @@ int main() {
        &testMLIRGenOptimizationPassOptions},
       {"testConTensor3Lowering", &testConTensor3Lowering},
       {"testIndexSetPolicy", &testIndexSetPolicy},
-      {"testIRTensorTypeMappingForExternCall", &testIRTensorTypeMappingForExternCall},
-      {"testIRCanonicalGradientFromFixture", &testIRCanonicalGradientFromFixture},
-      {"testIRCanonicalDivergenceFromFixture", &testIRCanonicalDivergenceFromFixture},
+      {"testIRTensorTypeMappingForExternCall",
+       &testIRTensorTypeMappingForExternCall},
+      {"testIRCanonicalGradientFromFixture",
+       &testIRCanonicalGradientFromFixture},
+      {"testIRCanonicalDivergenceFromFixture",
+       &testIRCanonicalDivergenceFromFixture},
       {"testIRCanonicalTraceFromFixture", &testIRCanonicalTraceFromFixture},
-      {"testIRCanonicalEinsteinRenameInsert", &testIRCanonicalEinsteinRenameInsert},
-      {"testIRVerifierRejectsUncanonicalizedGradient", &testIRVerifierRejectsUncanonicalizedGradient},
-      {"testSchwarzschildCanonicalPatterns", &testSchwarzschildCanonicalPatterns},
+      {"testIRCanonicalEinsteinRenameInsert",
+       &testIRCanonicalEinsteinRenameInsert},
+      {"testIRVerifierRejectsUncanonicalizedGradient",
+       &testIRVerifierRejectsUncanonicalizedGradient},
+      {"testSchwarzschildCanonicalPatterns",
+       &testSchwarzschildCanonicalPatterns},
       {"testEinsteinCanonicalEquivalence", &testEinsteinCanonicalEquivalence},
       {"testSchwarzschildMLIRVerification", &testSchwarzschildMLIRVerification},
       {"testMLIRNormalizationPasses", &testMLIRNormalizationPasses},
@@ -7951,10 +7997,8 @@ int main() {
       {"testStripSourceFuncsRhsOnly", &testStripSourceFuncsRhsOnly},
       {"testLoweredGridModuleLLVMIREmission",
        &testLoweredGridModuleLLVMIREmission},
-      {"testLoweredGridHostHeaderEmission",
-       &testLoweredGridHostHeaderEmission},
-      {"testLoweredGridHostABIDescriptor",
-       &testLoweredGridHostABIDescriptor},
+      {"testLoweredGridHostHeaderEmission", &testLoweredGridHostHeaderEmission},
+      {"testLoweredGridHostABIDescriptor", &testLoweredGridHostABIDescriptor},
       {"testSpectralInitialDataDeclarativeMetadata",
        &testSpectralInitialDataDeclarativeMetadata},
       {"testHostFieldStoragePlanDeduplicatesBuffers",
@@ -7971,8 +8015,7 @@ int main() {
        &testSpectralNewtonProjectsConstrainedResidual},
       {"testTwoPunctureDerivativeProjectorEnforcesParity",
        &testTwoPunctureDerivativeProjectorEnforcesParity},
-      {"testSpectralLocalReactionDiagonal",
-       &testSpectralLocalReactionDiagonal},
+      {"testSpectralLocalReactionDiagonal", &testSpectralLocalReactionDiagonal},
       {"testSpectralTwoGridTransferPreservesResolvedModes",
        &testSpectralTwoGridTransferPreservesResolvedModes},
       {"testSpectralMappedMultigridReducesSparseResidual",
@@ -7998,8 +8041,8 @@ int main() {
        &testTwoPunctureMappedSpectralDerivatives},
       {"testLinearBoundaryFactorUnknownMapProductRule",
        &testLinearBoundaryFactorUnknownMapProductRule},
-      {"testSpectralSystemAuxiliaryUsesMappedUnknownValue",
-       &testSpectralSystemAuxiliaryUsesMappedUnknownValue},
+      {"testSpectralSystemAuxiliaryUsesMappedUnknownDerivatives",
+       &testSpectralSystemAuxiliaryUsesMappedUnknownDerivatives},
       {"testCompilerApiCompileFileToLLVMIR",
        &testCompilerApiCompileFileToLLVMIR},
       {"testCompilerApiSymbolicWarningPropagation",
@@ -8009,7 +8052,8 @@ int main() {
       {"testSchwarzschildInitHorizonIEEE", &testSchwarzschildInitHorizonIEEE},
       {"testReissnerNordstromInitNumericPoint",
        &testReissnerNordstromInitNumericPoint},
-      {"testSpatialOffdiagInitNumericPoint", &testSpatialOffdiagInitNumericPoint},
+      {"testSpatialOffdiagInitNumericPoint",
+       &testSpatialOffdiagInitNumericPoint},
       {"testKerrLikeInitNumericPoint", &testKerrLikeInitNumericPoint},
       {"testKerrLikeReconstructMetricPoint",
        &testKerrLikeReconstructMetricPoint},
@@ -8035,7 +8079,8 @@ int main() {
        &testSchwarzschildChristoffelNumericPoint},
       {"testSchwarzschildChristoffelMLIRStructure",
        &testSchwarzschildChristoffelMLIRStructure},
-      {"testInitRhsInvariantRejectsMetricInRhs", &testInitRhsInvariantRejectsMetricInRhs},
+      {"testInitRhsInvariantRejectsMetricInRhs",
+       &testInitRhsInvariantRejectsMetricInRhs},
       {"testRegularBallPoissonConstraintSolve",
        &testRegularBallPoissonConstraintSolve},
       {"testCoupledNonlinearRadialConstraintSolve",
@@ -8044,8 +8089,7 @@ int main() {
        &testScalarVectorRadialConstraintSolve},
       {"testSymmetricConstraintUnknownValidation",
        &testSymmetricConstraintUnknownValidation},
-      {"testRankTwoRadialConstraintSolve",
-       &testRankTwoRadialConstraintSolve},
+      {"testRankTwoRadialConstraintSolve", &testRankTwoRadialConstraintSolve},
       {"testTensorContractionRadialConstraintSolve",
        &testTensorContractionRadialConstraintSolve},
       {"testCovariantGeometryRadialConstraintSolve",
@@ -8060,8 +8104,7 @@ int main() {
        &testReissnerNordstromEinsteinMaxwellPaperSolution},
       {"testElectromagneticReconstructionDiagnostics",
        &testElectromagneticReconstructionDiagnostics},
-      {"testConstraintGeometryDiagnostics",
-       &testConstraintGeometryDiagnostics},
+      {"testConstraintGeometryDiagnostics", &testConstraintGeometryDiagnostics},
       {"testCttRadialVacuumConstraintSolve",
        &testCttRadialVacuumConstraintSolve},
       {"testCttPhysicalGridHandoff", &testCttPhysicalGridHandoff},

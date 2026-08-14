@@ -4,16 +4,16 @@
 
 namespace tensorium_mlir::runtime {
 
-inline SpectralResidualKernel
-spectralResidualKernelFromDesc(const tensorium_spectral_residual_kernel_desc &desc) {
+inline SpectralResidualKernel spectralResidualKernelFromDesc(
+    const tensorium_spectral_residual_kernel_desc &desc) {
   if (!desc.symbol_name || desc.symbol_name[0] == '\0')
     throw std::runtime_error("spectral residual kernel symbol is empty");
   if (!desc.evaluate)
     throw std::runtime_error("spectral residual kernel callback is null");
-  return SpectralResidualKernel{
-      desc.symbol_name, desc.evaluate,
-      desc.jvp_symbol_name ? desc.jvp_symbol_name : "", desc.evaluate_jvp,
-      desc.user_data};
+  return SpectralResidualKernel{desc.symbol_name, desc.evaluate,
+                                desc.jvp_symbol_name ? desc.jvp_symbol_name
+                                                     : "",
+                                desc.evaluate_jvp, desc.user_data};
 }
 
 inline SpectralResidualGridKernel spectralResidualGridKernelFromDesc(
@@ -26,8 +26,8 @@ inline SpectralResidualGridKernel spectralResidualGridKernelFromDesc(
                                     desc.user_data};
 }
 
-inline SpectralCoordinateMap
-spectralCoordinateMapFromDesc(const tensorium_spectral_coordinate_map_desc &desc) {
+inline SpectralCoordinateMap spectralCoordinateMapFromDesc(
+    const tensorium_spectral_coordinate_map_desc &desc) {
   if (!desc.symbol_name || desc.symbol_name[0] == '\0')
     throw std::runtime_error("spectral coordinate map symbol is empty");
   if (!desc.map)
@@ -50,8 +50,7 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
   if (!pointKernelDescs)
     throw std::runtime_error("spectral residual system point kernels are null");
   if (inputs.size() != static_cast<std::size_t>(desc.equation_count)) {
-    throw std::runtime_error(
-        "spectral residual system input count mismatch");
+    throw std::runtime_error("spectral residual system input count mismatch");
   }
 
   SpectralGeneratedResidualSystem out;
@@ -94,8 +93,7 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
         &grid,
         spectralResidualKernelFromDesc(
             pointKernelDescs[equationDesc.point_kernel_index]),
-        input.params,
-        input.auxiliaryFields};
+        input.params, input.auxiliaryFields};
     if (equationDesc.grid_kernel_index >= 0) {
       if (!gridKernelDescs ||
           static_cast<std::size_t>(equationDesc.grid_kernel_index) >=
@@ -108,8 +106,7 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
     }
 
     out.equations.push_back(SpectralResidualSystemEquation{
-        problem,
-        static_cast<std::size_t>(equationDesc.unknown_index),
+        problem, static_cast<std::size_t>(equationDesc.unknown_index),
         equationDesc.residual_name,
         std::span<const SpectralAuxiliaryUnknownIndex>(
             equationDesc.auxiliary_unknown_indices,
@@ -118,8 +115,9 @@ inline SpectralGeneratedResidualSystem makeSpectralResidualSystemFromDesc(
   return out;
 }
 
-inline void validateSpectralDerivativeBundle(const SpectralGrid3D &grid,
-                                             const SpectralDerivatives3D &derivs) {
+inline void
+validateSpectralDerivativeBundle(const SpectralGrid3D &grid,
+                                 const SpectralDerivatives3D &derivs) {
   const std::size_t size = grid.size();
   if (derivs.value.size() != size || derivs.d1.size() != size ||
       derivs.d2.size() != size || derivs.d3.size() != size ||
@@ -130,10 +128,11 @@ inline void validateSpectralDerivativeBundle(const SpectralGrid3D &grid,
   }
 }
 
-inline SpectralDerivatives3D applySpectralDerivativeMap(
-    const SpectralGrid3D &grid, const SpectralDerivatives3D &logicalDerivatives,
-    const SpectralDerivativeMap &derivativeMap,
-    std::span<const double> coordinateParams = {}) {
+inline SpectralDerivatives3D
+applySpectralDerivativeMap(const SpectralGrid3D &grid,
+                           const SpectralDerivatives3D &logicalDerivatives,
+                           const SpectralDerivativeMap &derivativeMap,
+                           std::span<const double> coordinateParams = {}) {
   validateSpectralDerivativeBundle(grid, logicalDerivatives);
   if (!derivativeMap.transform)
     return logicalDerivatives;
@@ -179,10 +178,11 @@ inline SpectralDerivatives3D applySpectralDerivativeMap(
   return physicalDerivatives;
 }
 
-inline SpectralDerivatives3D applySpectralUnknownMap(
-    const SpectralGrid3D &grid, const SpectralDerivatives3D &solverDerivatives,
-    const SpectralUnknownMap &unknownMap,
-    std::span<const double> unknownMapParams = {}) {
+inline SpectralDerivatives3D
+applySpectralUnknownMap(const SpectralGrid3D &grid,
+                        const SpectralDerivatives3D &solverDerivatives,
+                        const SpectralUnknownMap &unknownMap,
+                        std::span<const double> unknownMapParams = {}) {
   const SpectralDerivativeMap derivativeTransform{
       unknownMap.symbolName, unknownMap.transform, unknownMap.userData};
   return applySpectralDerivativeMap(grid, solverDerivatives,
@@ -232,8 +232,7 @@ makeSpectralResidualAssemblyResult(std::vector<double> values,
 }
 
 inline SpectralJacobianVectorProductResult
-makeSpectralJacobianVectorProductResult(std::vector<double> values,
-                                        double step,
+makeSpectralJacobianVectorProductResult(std::vector<double> values, double step,
                                         bool usedGeneratedJvpKernel = false) {
   SpectralJacobianVectorProductResult result;
   result.values = std::move(values);
@@ -252,12 +251,31 @@ requireSpectralResidualGrid(const SpectralResidualProblem &problem) {
   return *problem.grid;
 }
 
+inline tensorium_spectral_residual_derivatives
+spectralResidualDerivativePoint(const SpectralPointDerivatives3D &derivatives) {
+  return tensorium_spectral_residual_derivatives{
+      derivatives.value, derivatives.d1,  derivatives.d2,  derivatives.d3,
+      derivatives.d11,   derivatives.d12, derivatives.d13, derivatives.d22,
+      derivatives.d23,   derivatives.d33};
+}
+
+inline tensorium_spectral_residual_derivative_fields
+spectralResidualDerivativeFields(const SpectralDerivatives3D &derivatives) {
+  return tensorium_spectral_residual_derivative_fields{
+      derivatives.value.data(), derivatives.d1.data(),  derivatives.d2.data(),
+      derivatives.d3.data(),    derivatives.d11.data(), derivatives.d12.data(),
+      derivatives.d13.data(),   derivatives.d22.data(), derivatives.d23.data(),
+      derivatives.d33.data()};
+}
+
 inline tensorium_spectral_residual_point makeSpectralResidualPoint(
     const SpectralGrid3D &grid, const SpectralDerivatives3D &derivs,
     std::size_t i, std::size_t j, std::size_t k,
     const SpectralCoordinateMap &coordinateMap,
     std::span<const double> coordinateParams,
-    std::span<const double> auxiliaryValues = {}) {
+    std::span<const double> auxiliaryValues = {},
+    std::span<const tensorium_spectral_residual_derivatives>
+        auxiliaryDerivatives = {}) {
   const SpectralPoint3D point = grid.point(i, j, k);
   const SpectralPointDerivatives3D u =
       grid.pointDerivatives(derivs, point.index);
@@ -290,6 +308,9 @@ inline tensorium_spectral_residual_point makeSpectralResidualPoint(
   out.d33 = u.d33;
   out.aux_values = auxiliaryValues.data();
   out.aux_count = static_cast<std::int64_t>(auxiliaryValues.size());
+  out.aux_derivatives = auxiliaryDerivatives.data();
+  out.aux_derivative_count =
+      static_cast<std::int64_t>(auxiliaryDerivatives.size());
   return out;
 }
 
@@ -298,7 +319,8 @@ inline std::vector<double> evaluateSpectralResidualWithAuxFields(
     const SpectralResidualKernel &kernel, std::span<const double> params,
     std::span<const std::vector<double>> auxiliaryFields,
     const SpectralCoordinateMap &coordinateMap = {},
-    std::span<const double> coordinateParams = {}) {
+    std::span<const double> coordinateParams = {},
+    std::span<const SpectralDerivatives3D> auxiliaryDerivativeFields = {}) {
   validateSpectralDerivativeBundle(grid, derivs);
   if (!kernel.evaluate)
     throw std::runtime_error("spectral residual kernel callback is null");
@@ -306,21 +328,43 @@ inline std::vector<double> evaluateSpectralResidualWithAuxFields(
     if (field.size() != grid.size())
       throw std::runtime_error("spectral auxiliary field size mismatch");
   }
+  if (!auxiliaryDerivativeFields.empty() &&
+      auxiliaryDerivativeFields.size() != auxiliaryFields.size()) {
+    throw std::runtime_error(
+        "spectral auxiliary derivative field count mismatch");
+  }
+  std::vector<SpectralDerivatives3D> computedAuxiliaryDerivatives;
+  if (auxiliaryDerivativeFields.empty() && !auxiliaryFields.empty()) {
+    computedAuxiliaryDerivatives.reserve(auxiliaryFields.size());
+    for (const auto &field : auxiliaryFields)
+      computedAuxiliaryDerivatives.push_back(grid.derivatives(field));
+    auxiliaryDerivativeFields = std::span<const SpectralDerivatives3D>(
+        computedAuxiliaryDerivatives.data(),
+        computedAuxiliaryDerivatives.size());
+  }
+  for (const auto &derivatives : auxiliaryDerivativeFields)
+    validateSpectralDerivativeBundle(grid, derivatives);
 
   std::vector<double> out(grid.size(), 0.0);
   std::vector<double> pointAux(auxiliaryFields.size(), 0.0);
+  std::vector<tensorium_spectral_residual_derivatives> pointAuxDerivatives(
+      auxiliaryFields.size());
   for (std::size_t k = 0; k < grid.n3(); ++k) {
     for (std::size_t j = 0; j < grid.n2(); ++j) {
       for (std::size_t i = 0; i < grid.n1(); ++i) {
         const std::size_t pointIndex = grid.index(i, j, k);
-        for (std::size_t aux = 0; aux < auxiliaryFields.size(); ++aux)
+        for (std::size_t aux = 0; aux < auxiliaryFields.size(); ++aux) {
           pointAux[aux] = auxiliaryFields[aux][pointIndex];
+          pointAuxDerivatives[aux] =
+              spectralResidualDerivativePoint(grid.pointDerivatives(
+                  auxiliaryDerivativeFields[aux], pointIndex));
+        }
         const auto point = makeSpectralResidualPoint(
-            grid, derivs, i, j, k, coordinateMap, coordinateParams, pointAux);
-        out[static_cast<std::size_t>(point.index)] =
-            kernel.evaluate(&point, params.data(),
-                            static_cast<std::int64_t>(params.size()),
-                            kernel.userData);
+            grid, derivs, i, j, k, coordinateMap, coordinateParams, pointAux,
+            pointAuxDerivatives);
+        out[static_cast<std::size_t>(point.index)] = kernel.evaluate(
+            &point, params.data(), static_cast<std::int64_t>(params.size()),
+            kernel.userData);
       }
     }
   }
@@ -350,10 +394,11 @@ inline std::vector<double> evaluateSpectralResidualWithAuxFields(
     const SpectralResidualKernel &kernel, std::span<const double> params,
     std::span<const std::vector<double>> auxiliaryFields,
     const SpectralCoordinateMap &coordinateMap = {},
-    std::span<const double> coordinateParams = {}) {
+    std::span<const double> coordinateParams = {},
+    std::span<const SpectralDerivatives3D> auxiliaryDerivativeFields = {}) {
   return evaluateSpectralResidualWithAuxFields(
       grid, grid.derivatives(values), kernel, params, auxiliaryFields,
-      coordinateMap, coordinateParams);
+      coordinateMap, coordinateParams, auxiliaryDerivativeFields);
 }
 
 inline std::array<std::vector<double>, 3> makeSpectralPhysicalCoordinateBuffers(
@@ -378,8 +423,7 @@ inline std::array<std::vector<double>, 3> makeSpectralPhysicalCoordinateBuffers(
         physical[2] = point.x3;
         if (coordinateMap.map) {
           coordinateMap.map(logical, physical, coordinateParams.data(),
-                            static_cast<std::int64_t>(
-                                coordinateParams.size()),
+                            static_cast<std::int64_t>(coordinateParams.size()),
                             coordinateMap.userData);
         }
         coords[0][point.index] = physical[0];
@@ -396,7 +440,8 @@ inline std::vector<double> evaluateSpectralResidualWithGridKernel(
     const SpectralResidualGridKernel &kernel, std::span<const double> params,
     std::span<const std::vector<double>> auxiliaryFields,
     const SpectralCoordinateMap &coordinateMap = {},
-    std::span<const double> coordinateParams = {}) {
+    std::span<const double> coordinateParams = {},
+    std::span<const SpectralDerivatives3D> auxiliaryDerivativeFields = {}) {
   validateSpectralDerivativeBundle(grid, derivs);
   if (!kernel.evaluate)
     throw std::runtime_error("spectral residual grid kernel callback is null");
@@ -404,15 +449,36 @@ inline std::vector<double> evaluateSpectralResidualWithGridKernel(
     if (field.size() != grid.size())
       throw std::runtime_error("spectral auxiliary field size mismatch");
   }
+  if (!auxiliaryDerivativeFields.empty() &&
+      auxiliaryDerivativeFields.size() != auxiliaryFields.size()) {
+    throw std::runtime_error(
+        "spectral auxiliary grid derivative field count mismatch");
+  }
+  std::vector<SpectralDerivatives3D> computedAuxiliaryDerivatives;
+  if (auxiliaryDerivativeFields.empty() && !auxiliaryFields.empty()) {
+    computedAuxiliaryDerivatives.reserve(auxiliaryFields.size());
+    for (const auto &field : auxiliaryFields)
+      computedAuxiliaryDerivatives.push_back(grid.derivatives(field));
+    auxiliaryDerivativeFields = std::span<const SpectralDerivatives3D>(
+        computedAuxiliaryDerivatives.data(),
+        computedAuxiliaryDerivatives.size());
+  }
+  std::vector<tensorium_spectral_residual_derivative_fields>
+      auxiliaryDerivativePointers;
+  auxiliaryDerivativePointers.reserve(auxiliaryDerivativeFields.size());
+  for (const auto &derivatives : auxiliaryDerivativeFields) {
+    validateSpectralDerivativeBundle(grid, derivatives);
+    auxiliaryDerivativePointers.push_back(
+        spectralResidualDerivativeFields(derivatives));
+  }
 
   std::vector<const double *> auxiliaryPointers;
   auxiliaryPointers.reserve(auxiliaryFields.size());
   for (const auto &field : auxiliaryFields)
     auxiliaryPointers.push_back(field.data());
 
-  const auto coords =
-      makeSpectralPhysicalCoordinateBuffers(grid, coordinateMap,
-                                            coordinateParams);
+  const auto coords = makeSpectralPhysicalCoordinateBuffers(grid, coordinateMap,
+                                                            coordinateParams);
   std::vector<double> out(grid.size(), 0.0);
   const int status = kernel.evaluate(
       static_cast<std::int64_t>(grid.size()), params.data(),
@@ -421,17 +487,21 @@ inline std::vector<double> evaluateSpectralResidualWithGridKernel(
       derivs.d12.data(), derivs.d13.data(), derivs.d22.data(),
       derivs.d23.data(), derivs.d33.data(),
       auxiliaryPointers.empty() ? nullptr : auxiliaryPointers.data(),
-      static_cast<std::int64_t>(auxiliaryPointers.size()), coords[0].data(),
-      coords[1].data(), coords[2].data(), out.data(), kernel.userData);
+      static_cast<std::int64_t>(auxiliaryPointers.size()),
+      auxiliaryDerivativePointers.empty() ? nullptr
+                                          : auxiliaryDerivativePointers.data(),
+      static_cast<std::int64_t>(auxiliaryDerivativePointers.size()),
+      coords[0].data(), coords[1].data(), coords[2].data(), out.data(),
+      kernel.userData);
   if (status != 0)
     throw std::runtime_error("spectral residual grid kernel failed: " +
                              std::to_string(status));
   return out;
 }
 
-inline SpectralResidualAssemblyResult assembleSpectralResidual(
-    const SpectralResidualProblem &problem,
-    const SpectralDerivatives3D &derivs) {
+inline SpectralResidualAssemblyResult
+assembleSpectralResidual(const SpectralResidualProblem &problem,
+                         const SpectralDerivatives3D &derivs) {
   const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
   SpectralDerivatives3D physicalUnknownDerivatives;
   const SpectralDerivatives3D *unknownDerivatives = &derivs;
@@ -444,35 +514,60 @@ inline SpectralResidualAssemblyResult assembleSpectralResidual(
   if (problem.fieldProjector.projectDerivatives) {
     projectedUnknownDerivatives = *unknownDerivatives;
     problem.fieldProjector.projectDerivatives(
-        &grid, &projectedUnknownDerivatives,
-        problem.fieldProjector.userData);
+        &grid, &projectedUnknownDerivatives, problem.fieldProjector.userData);
     validateSpectralDerivativeBundle(grid, projectedUnknownDerivatives);
     unknownDerivatives = &projectedUnknownDerivatives;
   }
   SpectralDerivatives3D mappedDerivatives;
   const SpectralDerivatives3D *assembledDerivatives = unknownDerivatives;
   if (problem.derivativeMap.transform) {
-    mappedDerivatives = applySpectralDerivativeMap(
-        grid, *unknownDerivatives, problem.derivativeMap,
-        problem.coordinateParams);
+    mappedDerivatives = applySpectralDerivativeMap(grid, *unknownDerivatives,
+                                                   problem.derivativeMap,
+                                                   problem.coordinateParams);
     assembledDerivatives = &mappedDerivatives;
   }
+  std::vector<SpectralDerivatives3D> computedAuxiliaryDerivatives;
+  std::span<const SpectralDerivatives3D> auxiliaryDerivatives =
+      problem.auxiliaryDerivatives;
+  if (auxiliaryDerivatives.empty() && !problem.auxiliaryFields.empty()) {
+    computedAuxiliaryDerivatives.reserve(problem.auxiliaryFields.size());
+    for (const auto &field : problem.auxiliaryFields) {
+      SpectralDerivatives3D auxiliary = grid.derivatives(field);
+      if (problem.derivativeMap.transform) {
+        auxiliary = applySpectralDerivativeMap(
+            grid, auxiliary, problem.derivativeMap, problem.coordinateParams);
+      }
+      computedAuxiliaryDerivatives.push_back(std::move(auxiliary));
+    }
+    auxiliaryDerivatives = std::span<const SpectralDerivatives3D>(
+        computedAuxiliaryDerivatives.data(),
+        computedAuxiliaryDerivatives.size());
+  }
+  if (!auxiliaryDerivatives.empty() &&
+      auxiliaryDerivatives.size() != problem.auxiliaryFields.size()) {
+    throw std::runtime_error(
+        "spectral residual auxiliary derivative count mismatch");
+  }
+  for (const auto &auxiliary : auxiliaryDerivatives)
+    validateSpectralDerivativeBundle(grid, auxiliary);
   if (problem.gridKernel.evaluate) {
     return makeSpectralResidualAssemblyResult(
         evaluateSpectralResidualWithGridKernel(
             grid, *assembledDerivatives, problem.gridKernel, problem.params,
             problem.auxiliaryFields, problem.coordinateMap,
-            problem.coordinateParams),
+            problem.coordinateParams, auxiliaryDerivatives),
         true);
   }
-  return makeSpectralResidualAssemblyResult(evaluateSpectralResidualWithAuxFields(
-      grid, *assembledDerivatives, problem.kernel, problem.params,
-      problem.auxiliaryFields,
-      problem.coordinateMap, problem.coordinateParams));
+  return makeSpectralResidualAssemblyResult(
+      evaluateSpectralResidualWithAuxFields(
+          grid, *assembledDerivatives, problem.kernel, problem.params,
+          problem.auxiliaryFields, problem.coordinateMap,
+          problem.coordinateParams, auxiliaryDerivatives));
 }
 
-inline SpectralResidualAssemblyResult assembleSpectralResidual(
-    const SpectralResidualProblem &problem, const std::vector<double> &values) {
+inline SpectralResidualAssemblyResult
+assembleSpectralResidual(const SpectralResidualProblem &problem,
+                         const std::vector<double> &values) {
   const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
   if (values.size() != grid.size())
     throw std::runtime_error("spectral residual state size mismatch");
@@ -485,13 +580,13 @@ inline SpectralResidualAssemblyResult assembleSpectralResidual(
     std::span<const std::vector<double>> auxiliaryFields = {},
     const SpectralCoordinateMap &coordinateMap = {},
     std::span<const double> coordinateParams = {}) {
-  const SpectralResidualProblem problem{&grid, kernel, params, auxiliaryFields,
-                                        coordinateMap, coordinateParams};
+  const SpectralResidualProblem problem{
+      &grid, kernel, params, auxiliaryFields, coordinateMap, coordinateParams};
   return assembleSpectralResidual(problem, values);
 }
 
-inline const SpectralGrid3D &requireSpectralResidualSystemGrid(
-    const SpectralResidualSystemProblem &system) {
+inline const SpectralGrid3D &
+requireSpectralResidualSystemGrid(const SpectralResidualSystemProblem &system) {
   if (!system.grid)
     throw std::runtime_error("spectral residual system grid is null");
   return *system.grid;
@@ -505,22 +600,23 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
     throw std::runtime_error("spectral residual system has no equations");
   for (const auto &field : unknownFields) {
     if (field.size() != grid.size())
-      throw std::runtime_error("spectral residual system unknown size mismatch");
+      throw std::runtime_error(
+          "spectral residual system unknown size mismatch");
   }
 
-  struct UnknownMapBinding {
+  struct UnknownRepresentationBinding {
     SpectralUnknownMap map;
     std::span<const double> params{};
+    SpectralFieldProjector projector;
     bool bound = false;
   };
-  std::vector<UnknownMapBinding> unknownMapBindings(unknownFields.size());
+  std::vector<UnknownRepresentationBinding> unknownBindings(
+      unknownFields.size());
   for (const auto &equation : system.equations) {
     if (equation.unknownIndex >= unknownFields.size())
       throw std::runtime_error(
           "spectral residual system equation unknown index out of range");
-    if (!equation.problem.unknownMap.transform)
-      continue;
-    auto &binding = unknownMapBindings[equation.unknownIndex];
+    auto &binding = unknownBindings[equation.unknownIndex];
     if (binding.bound) {
       const bool sameMap =
           binding.map.transform == equation.problem.unknownMap.transform &&
@@ -529,45 +625,42 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
           binding.params.size() == equation.problem.unknownMapParams.size() &&
           std::equal(binding.params.begin(), binding.params.end(),
                      equation.problem.unknownMapParams.begin());
-      if (!sameMap || !sameParams) {
+      const bool sameProjector =
+          binding.projector.project ==
+              equation.problem.fieldProjector.project &&
+          binding.projector.projectDerivatives ==
+              equation.problem.fieldProjector.projectDerivatives &&
+          binding.projector.userData ==
+              equation.problem.fieldProjector.userData;
+      if (!sameMap || !sameParams || !sameProjector) {
         throw std::runtime_error(
-            "spectral residual system has conflicting unknown maps");
+            "spectral residual system has conflicting unknown "
+            "representations");
       }
       continue;
     }
     binding.map = equation.problem.unknownMap;
     binding.params = equation.problem.unknownMapParams;
+    binding.projector = equation.problem.fieldProjector;
     binding.bound = true;
   }
-  for (const auto &equation : system.equations) {
-    if (unknownMapBindings[equation.unknownIndex].bound &&
-        !equation.problem.unknownMap.transform) {
-      throw std::runtime_error(
-          "spectral residual system equation is missing its unknown map");
-    }
-  }
 
-  std::vector<bool> physicalUnknownValueNeeded(unknownFields.size(), false);
-  for (const auto &equation : system.equations) {
-    for (SpectralAuxiliaryUnknownIndex mappedUnknown :
-         equation.auxiliaryUnknownIndices) {
-      if (mappedUnknown >= 0 &&
-          static_cast<std::size_t>(mappedUnknown) < unknownFields.size()) {
-        physicalUnknownValueNeeded[static_cast<std::size_t>(mappedUnknown)] =
-            true;
-      }
-    }
-  }
-
-  std::vector<std::vector<double>> physicalUnknownValues(unknownFields.size());
+  std::vector<SpectralDerivatives3D> representedUnknownDerivatives;
+  representedUnknownDerivatives.reserve(unknownFields.size());
   for (std::size_t unknown = 0; unknown < unknownFields.size(); ++unknown) {
-    const auto &binding = unknownMapBindings[unknown];
-    if (!binding.bound || !physicalUnknownValueNeeded[unknown])
-      continue;
-    auto mapped = applySpectralUnknownMap(
-        grid, grid.derivatives(unknownFields[unknown]), binding.map,
-        binding.params);
-    physicalUnknownValues[unknown] = std::move(mapped.value);
+    SpectralDerivatives3D represented =
+        grid.derivatives(unknownFields[unknown]);
+    const auto &binding = unknownBindings[unknown];
+    if (binding.bound && binding.map.transform) {
+      represented = applySpectralUnknownMap(grid, represented, binding.map,
+                                            binding.params);
+    }
+    if (binding.bound && binding.projector.projectDerivatives) {
+      binding.projector.projectDerivatives(&grid, &represented,
+                                           binding.projector.userData);
+      validateSpectralDerivativeBundle(grid, represented);
+    }
+    representedUnknownDerivatives.push_back(std::move(represented));
   }
 
   SpectralResidualSystemAssemblyResult result;
@@ -587,6 +680,7 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
     if (problem.grid != &grid)
       throw std::runtime_error("spectral residual system grid mismatch");
     std::vector<std::vector<double>> resolvedAuxiliaryFields;
+    std::vector<SpectralDerivatives3D> resolvedAuxiliaryDerivatives;
     if (!equation.auxiliaryUnknownIndices.empty()) {
       if (equation.auxiliaryUnknownIndices.size() !=
           problem.auxiliaryFields.size()) {
@@ -594,11 +688,20 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
             "spectral residual system auxiliary map size mismatch");
       }
       resolvedAuxiliaryFields.reserve(problem.auxiliaryFields.size());
+      resolvedAuxiliaryDerivatives.reserve(problem.auxiliaryFields.size());
       for (std::size_t i = 0; i < problem.auxiliaryFields.size(); ++i) {
         const SpectralAuxiliaryUnknownIndex mappedUnknown =
             equation.auxiliaryUnknownIndices[i];
         if (mappedUnknown == kSpectralStaticAuxiliary) {
-          resolvedAuxiliaryFields.push_back(problem.auxiliaryFields[i]);
+          SpectralDerivatives3D derivatives =
+              grid.derivatives(problem.auxiliaryFields[i]);
+          if (problem.derivativeMap.transform) {
+            derivatives = applySpectralDerivativeMap(grid, derivatives,
+                                                     problem.derivativeMap,
+                                                     problem.coordinateParams);
+          }
+          resolvedAuxiliaryFields.push_back(derivatives.value);
+          resolvedAuxiliaryDerivatives.push_back(std::move(derivatives));
           continue;
         }
         if (mappedUnknown < 0 ||
@@ -607,12 +710,21 @@ inline SpectralResidualSystemAssemblyResult assembleSpectralResidualSystem(
               "spectral residual system auxiliary unknown index out of range");
         }
         const std::size_t unknown = static_cast<std::size_t>(mappedUnknown);
-        resolvedAuxiliaryFields.push_back(
-            unknownMapBindings[unknown].bound ? physicalUnknownValues[unknown]
-                                              : unknownFields[unknown]);
+        SpectralDerivatives3D derivatives =
+            representedUnknownDerivatives[unknown];
+        if (problem.derivativeMap.transform) {
+          derivatives = applySpectralDerivativeMap(grid, derivatives,
+                                                   problem.derivativeMap,
+                                                   problem.coordinateParams);
+        }
+        resolvedAuxiliaryFields.push_back(derivatives.value);
+        resolvedAuxiliaryDerivatives.push_back(std::move(derivatives));
       }
       problem.auxiliaryFields = std::span<const std::vector<double>>(
           resolvedAuxiliaryFields.data(), resolvedAuxiliaryFields.size());
+      problem.auxiliaryDerivatives = std::span<const SpectralDerivatives3D>(
+          resolvedAuxiliaryDerivatives.data(),
+          resolvedAuxiliaryDerivatives.size());
     }
 
     const auto residual =

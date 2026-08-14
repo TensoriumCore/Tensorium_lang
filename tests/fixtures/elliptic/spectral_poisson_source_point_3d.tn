@@ -4,7 +4,8 @@
 #   F(u, source) = laplacian(u) + alpha * u + source
 #
 # The runtime supplies derivatives for u and point values for source through
-# tensorium_spectral_residual_point::aux_values.
+# tensorium_spectral_residual_point::aux_derivatives (with aux_values retained
+# for manual callback compatibility).
 field scalar u
 field scalar source
 field scalar H

@@ -285,7 +285,7 @@ spectral `R A P`. At each Newton state, the compiled point JVP evaluates the
 nonlinear reaction derivative. After accounting for the unknown map, this
 `O(N)` diagonal correction is inserted into the fine operator and restricted
 through the hierarchy; no global JVP columns are assembled. Kernels without the
-ABI v2 JVP callback retain the local finite-difference estimate.
+ABI v3 JVP callback retain the local finite-difference estimate.
 
 With the sparse mapped preconditioner, the physical regression now includes a
 `7x7x12` grid with 588 unknowns:
@@ -565,10 +565,11 @@ but it is still a small collocation regression. It does not yet provide:
 - additional coordinate-map, projector, and reconstruction registry entries
   beyond the currently implemented identity and TwoPunctures policies.
 
-The compiled spectral residual path currently differentiates one scalar
-unknown per equation. General coupled scalar systems are supported through
-auxiliary-unknown mappings, but arbitrary tensor-valued multidimensional
-elliptic unknowns still require additional lowering and runtime work.
+The compiled spectral residual path now differentiates every referenced scalar
+field through its complete value/gradient/Hessian bundle, including mapped
+auxiliary unknowns and their JVP directions. Arbitrary tensor-valued
+multidimensional elliptic unknowns still require additional lowering and
+runtime work.
 
 The scalar endpoint projector is not a complete tensor regularity system. In
 particular, the expected `rho^|m|` behavior of each Fourier mode and the parity

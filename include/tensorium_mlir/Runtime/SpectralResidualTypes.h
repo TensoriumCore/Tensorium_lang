@@ -16,6 +16,32 @@
 #ifndef TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H
 #define TENSORIUM_SPECTRAL_RESIDUAL_ABI_TYPES_H
 
+typedef struct tensorium_spectral_residual_derivatives {
+  double value;
+  double d1;
+  double d2;
+  double d3;
+  double d11;
+  double d12;
+  double d13;
+  double d22;
+  double d23;
+  double d33;
+} tensorium_spectral_residual_derivatives;
+
+typedef struct tensorium_spectral_residual_derivative_fields {
+  const double *value;
+  const double *d1;
+  const double *d2;
+  const double *d3;
+  const double *d11;
+  const double *d12;
+  const double *d13;
+  const double *d22;
+  const double *d23;
+  const double *d33;
+} tensorium_spectral_residual_derivative_fields;
+
 typedef struct tensorium_spectral_residual_point {
   std::int64_t i;
   std::int64_t j;
@@ -35,6 +61,8 @@ typedef struct tensorium_spectral_residual_point {
   double d33;
   const double *aux_values;
   std::int64_t aux_count;
+  const tensorium_spectral_residual_derivatives *aux_derivatives;
+  std::int64_t aux_derivative_count;
 } tensorium_spectral_residual_point;
 
 typedef double (*tensorium_spectral_residual_kernel_fn)(
@@ -49,14 +77,18 @@ typedef double (*tensorium_spectral_residual_jvp_kernel_fn)(
 typedef int (*tensorium_spectral_residual_grid_kernel_fn)(
     std::int64_t n_points, const double *params, std::int64_t param_count,
     const double *value, const double *d1, const double *d2, const double *d3,
-    const double *d11, const double *d12, const double *d13,
-    const double *d22, const double *d23, const double *d33,
-    const double *const *aux_fields, std::int64_t aux_count, const double *x1,
-    const double *x2, const double *x3, double *out, void *user_data);
+    const double *d11, const double *d12, const double *d13, const double *d22,
+    const double *d23, const double *d33, const double *const *aux_fields,
+    std::int64_t aux_count,
+    const tensorium_spectral_residual_derivative_fields *aux_derivatives,
+    std::int64_t aux_derivative_count, const double *x1, const double *x2,
+    const double *x3, double *out, void *user_data);
 
-typedef void (*tensorium_spectral_coordinate_map_fn)(
-    const double *logical, double *physical, const double *params,
-    std::int64_t param_count, void *user_data);
+typedef void (*tensorium_spectral_coordinate_map_fn)(const double *logical,
+                                                     double *physical,
+                                                     const double *params,
+                                                     std::int64_t param_count,
+                                                     void *user_data);
 
 typedef struct tensorium_spectral_residual_kernel_desc {
   const char *symbol_name;
@@ -152,12 +184,11 @@ struct SpectralResidualKernel {
                          void *userData = nullptr)
       : symbolName(std::move(symbolName)), evaluate(evaluate),
         userData(userData) {}
-  SpectralResidualKernel(
-      std::string symbolName,
-      tensorium_spectral_residual_kernel_fn evaluate,
-      std::string jvpSymbolName,
-      tensorium_spectral_residual_jvp_kernel_fn evaluateJvp,
-      void *userData = nullptr)
+  SpectralResidualKernel(std::string symbolName,
+                         tensorium_spectral_residual_kernel_fn evaluate,
+                         std::string jvpSymbolName,
+                         tensorium_spectral_residual_jvp_kernel_fn evaluateJvp,
+                         void *userData = nullptr)
       : symbolName(std::move(symbolName)), evaluate(evaluate),
         jvpSymbolName(std::move(jvpSymbolName)), evaluateJvp(evaluateJvp),
         userData(userData) {}
@@ -175,10 +206,11 @@ struct SpectralCoordinateMap {
   void *userData = nullptr;
 };
 
-using SpectralDerivativeMapFn = void (*)(
-    const double logical[3], const SpectralPointDerivatives3D *logicalDerivatives,
-    SpectralPointDerivatives3D *physicalDerivatives, const double *params,
-    std::int64_t paramCount, void *userData);
+using SpectralDerivativeMapFn =
+    void (*)(const double logical[3],
+             const SpectralPointDerivatives3D *logicalDerivatives,
+             SpectralPointDerivatives3D *physicalDerivatives,
+             const double *params, std::int64_t paramCount, void *userData);
 
 struct SpectralDerivativeMap {
   std::string symbolName = "tensorium_spectral_identity_derivative_map";
@@ -199,9 +231,9 @@ using SpectralFieldProjectorFn = void (*)(const SpectralGrid3D *grid,
                                           std::int64_t valueCount,
                                           void *userData);
 
-using SpectralDerivativeProjectorFn = void (*)(
-    const SpectralGrid3D *grid, SpectralDerivatives3D *derivatives,
-    void *userData);
+using SpectralDerivativeProjectorFn =
+    void (*)(const SpectralGrid3D *grid, SpectralDerivatives3D *derivatives,
+             void *userData);
 
 struct SpectralFieldProjector {
   std::string symbolName = "tensorium_spectral_identity_field_projector";
@@ -222,6 +254,11 @@ struct SpectralResidualProblem {
   SpectralUnknownMap unknownMap{};
   std::span<const double> unknownMapParams{};
   SpectralFieldProjector fieldProjector{};
+  // When present, these bundles are already transformed into the same
+  // physical field/coordinate representation as the primary unknown.
+  // Otherwise the runtime differentiates auxiliaryFields and applies the
+  // equation's coordinate derivative map.
+  std::span<const SpectralDerivatives3D> auxiliaryDerivatives{};
 };
 
 struct SpectralResidualAssemblyResult {
@@ -283,8 +320,8 @@ struct SpectralGeneratedResidualSystem {
 
   SpectralResidualSystemProblem view() const {
     return SpectralResidualSystemProblem{
-        grid, std::span<const SpectralResidualSystemEquation>(equations.data(),
-                                                              equations.size())};
+        grid, std::span<const SpectralResidualSystemEquation>(
+                  equations.data(), equations.size())};
   }
 };
 

@@ -72,6 +72,18 @@ if ! grep -q "tensorium_spectral_residual_jvp_Hv" "$HOST_HEADER"; then
   echo "error: expected Hv spectral JVP symbol" >&2
   exit 2
 fi
+if ! grep -q "tensorium_spectral_residual_derivative_fields" "$HOST_HEADER"; then
+  echo "error: expected spectral auxiliary derivative-field ABI" >&2
+  exit 2
+fi
+if ! grep -q "point->aux_derivatives\[1\].d11" "$HOST_HEADER"; then
+  echo "error: expected generated point wrapper to forward auxiliary Hessians" >&2
+  exit 2
+fi
+if ! grep -q "direction->aux_derivatives\[1\].d1" "$HOST_HEADER"; then
+  echo "error: expected generated JVP wrapper to forward auxiliary gradients" >&2
+  exit 2
+fi
 if ! grep -q "tensorium_spectral_residual_systems" "$HOST_HEADER"; then
   echo "error: expected spectral residual system descriptor table" >&2
   exit 2

@@ -50,9 +50,9 @@ Long term, an initial-data source should be able to declare:
 | Area | Current state |
 | --- | --- |
 | Tensor DSL frontend | Lexer, parser, typed AST, explicit covariant/contravariant indices, free/dummy-index validation, contractions, partial/covariant derivatives, Laplacians, and metric rules. |
-| Compiler | Custom Tensorium MLIR dialect, Einstein canonicalization/validation, stencil and grid lowering, forward-mode JVP generation for spectral residuals, LLVM emission, and generated host ABI metadata. |
+| Compiler | Custom Tensorium MLIR dialect, Einstein canonicalization/validation, stencil and grid lowering, multi-field value/gradient/Hessian spectral ABI, forward-mode JVP generation, LLVM emission, and generated host metadata. |
 | Radial initial data | Host-side multidomain Chebyshev solver with compactified exteriors, matching, regular scalar-ball support, coupled scalar/vector/tensor layouts, and implemented subsets of CTT and electrostatic Einstein-Maxwell problems. |
-| Multidimensional initial data | Compiled scalar residual systems on tensor-product Chebyshev/Fourier grids, Newton solves, dense or matrix-free FGMRES linear solves, and reusable preconditioners/maps. |
+| Multidimensional initial data | Compiled coupled-scalar residual systems on tensor-product Chebyshev/Fourier grids, including cross-field Laplacians and gradient contractions, Newton solves, dense or matrix-free FGMRES linear solves, and reusable preconditioners/maps. |
 | Binary black holes | A physical Bowen-York two-puncture Hamiltonian solve on a compactified two-centre domain, with ADM diagnostics, puncture-mass calibration, regularity checks, and low-resolution published-data guards. |
 | Handoff | Cartesian BSSN reconstruction into caller-owned structure-of-arrays buffers, plus a generic runner that writes a diagnostic CSV and JSON metadata. |
 
@@ -113,9 +113,10 @@ checkpoint.
   not implemented.
 - The nonradial handoff has a C++ SoA API, but no stable versioned C ABI or
   concrete adapter for an external evolution code yet.
-- The compiled spectral path is strongest for one scalar unknown per equation;
-  general tensor-valued multidimensional elliptic systems need more lowering
-  and runtime work.
+- The compiled spectral path supports coupled scalar systems whose residuals
+  use the value, gradient, and Hessian of every referenced scalar field.
+  General tensor-valued multidimensional elliptic systems still need more
+  lowering and runtime work.
 - Only a small registry of coordinate maps, unknown maps, projectors, and
   reconstructions is currently available.
 

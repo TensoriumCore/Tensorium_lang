@@ -877,6 +877,26 @@ bash ./run_initial_data.sh \
 grep -q '^i,j,k,q1,q2,q3,x,y,z,U$' /tmp/tensorium_spectral_identity.csv
 grep -q '"case": "SpectralIdentity"' \
   /tmp/tensorium_spectral_identity.csv.json
+bash ./run_initial_data.sh \
+  tests/fixtures/elliptic/spectral_two_field_initial_data_3d.tn \
+  /tmp/tensorium_coupled_scalar.csv
+grep -q '^i,j,k,q1,q2,q3,x,y,z,u,v$' \
+  /tmp/tensorium_coupled_scalar.csv
+grep -q '"case": "CoupledScalarManufactured"' \
+  /tmp/tensorium_coupled_scalar.csv.json
+awk -F, '
+  NR > 1 {
+    u_exact = $7*$7 + 0.5*$8*$8
+    v_exact = 0.25*$7*$8 + 0.1*$7
+    u_error = $10 - u_exact
+    v_error = $11 - v_exact
+    if (u_error < 0) u_error = -u_error
+    if (v_error < 0) v_error = -v_error
+    if (u_error > max_u_error) max_u_error = u_error
+    if (v_error > max_v_error) max_v_error = v_error
+  }
+  END { exit !(max_u_error < 1e-8 && max_v_error < 1e-8) }
+' /tmp/tensorium_coupled_scalar.csv
 bash tools/dev/test_parallel_residual_grid_ll.sh
 
 echo

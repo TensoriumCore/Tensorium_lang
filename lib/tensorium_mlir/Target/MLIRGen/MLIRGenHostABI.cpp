@@ -115,14 +115,14 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
     names.insert(names.end(), items.begin(), items.end());
   };
 
-  const auto params =
-      getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrParamNames);
-  const auto coords =
-      getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrCoordNames);
-  const auto fields =
-      getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrFieldNames);
-  const auto outputs =
-      getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrOutputNames);
+  const auto params = getStringArrayAttr(fn.getOperation(),
+                                         tensorium_mlir::abi::kAttrParamNames);
+  const auto coords = getStringArrayAttr(fn.getOperation(),
+                                         tensorium_mlir::abi::kAttrCoordNames);
+  const auto fields = getStringArrayAttr(fn.getOperation(),
+                                         tensorium_mlir::abi::kAttrFieldNames);
+  const auto outputs = getStringArrayAttr(
+      fn.getOperation(), tensorium_mlir::abi::kAttrOutputNames);
 
   if (kind == tensorium_mlir::abi::kKindInitPoint) {
     append(params);
@@ -143,24 +143,32 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
     append(params);
     append(fields);
   } else if (kind == tensorium_mlir::abi::kKindSpectralResidualPoint) {
-    names = {"value", "d1", "d2", "d3",  "d11", "d12", "d13",
-             "d22",   "d23", "d33"};
-    for (std::size_t i = 1; i < fields.size(); ++i)
-      names.push_back(fields[i]);
-    append(coords);
-    append(params);
-  } else if (kind ==
-             tensorium_mlir::abi::kKindSpectralResidualJvpPoint) {
     const char *derivatives[] = {"value", "d1",  "d2",  "d3",  "d11",
                                  "d12",   "d13", "d22", "d23", "d33"};
-    for (const char *name : derivatives)
-      names.push_back(name);
-    for (const char *name : derivatives)
-      names.push_back(std::string("direction_") + name);
-    for (std::size_t i = 1; i < fields.size(); ++i)
-      names.push_back(fields[i]);
-    for (std::size_t i = 1; i < fields.size(); ++i)
-      names.push_back("direction_" + fields[i]);
+    for (std::size_t field = 0; field < fields.size(); ++field) {
+      for (const char *derivative : derivatives) {
+        names.push_back(field == 0 ? derivative
+                                   : fields[field] + "_" + derivative);
+      }
+    }
+    append(coords);
+    append(params);
+  } else if (kind == tensorium_mlir::abi::kKindSpectralResidualJvpPoint) {
+    const char *derivatives[] = {"value", "d1",  "d2",  "d3",  "d11",
+                                 "d12",   "d13", "d22", "d23", "d33"};
+    for (std::size_t field = 0; field < fields.size(); ++field) {
+      for (const char *derivative : derivatives) {
+        names.push_back(field == 0 ? derivative
+                                   : fields[field] + "_" + derivative);
+      }
+    }
+    for (std::size_t field = 0; field < fields.size(); ++field) {
+      for (const char *derivative : derivatives) {
+        names.push_back(field == 0
+                            ? std::string("direction_") + derivative
+                            : "direction_" + fields[field] + "_" + derivative);
+      }
+    }
     append(coords);
     append(params);
   } else if (kind == tensorium_mlir::abi::kKindSpectralResidualGrid) {
@@ -168,10 +176,12 @@ std::vector<std::string> logicalArgNames(mlir::func::FuncOp fn) {
     append(params);
     const char *derivatives[] = {"value", "d1",  "d2",  "d3",  "d11",
                                  "d12",   "d13", "d22", "d23", "d33"};
-    for (const char *name : derivatives)
-      names.push_back(name);
-    for (std::size_t i = 1; i < fields.size(); ++i)
-      names.push_back(fields[i]);
+    for (std::size_t field = 0; field < fields.size(); ++field) {
+      for (const char *derivative : derivatives) {
+        names.push_back(field == 0 ? derivative
+                                   : fields[field] + "_" + derivative);
+      }
+    }
     append(coords);
     append(outputs);
   }
@@ -269,8 +279,8 @@ HostArgKind hostArgKindFor(mlir::Type type) {
   return HostArgKind::F64;
 }
 
-const HostFieldABI *
-findHostField(const std::vector<HostFieldABI> &fields, llvm::StringRef name) {
+const HostFieldABI *findHostField(const std::vector<HostFieldABI> &fields,
+                                  llvm::StringRef name) {
   for (const auto &field : fields) {
     if (field.name == name)
       return &field;
@@ -290,8 +300,8 @@ HostArgAccess combineAccess(bool reads, bool writes) {
 
 HostBufferABI makeHostBufferABI(const HostModuleABI &abi,
                                 llvm::StringRef logicalName,
-                                std::int64_t argIndex,
-                                HostBufferRole role, HostArgAccess access) {
+                                std::int64_t argIndex, HostBufferRole role,
+                                HostArgAccess access) {
   HostBufferABI buffer;
   buffer.name = logicalName.str();
   buffer.cName = makeHostCIdentifier(logicalName.str(), "buffer");
@@ -324,8 +334,8 @@ std::vector<HostBufferABI> hostKernelBuffers(const HostModuleABI &abi,
   };
 
   if (kernel.kind == tensorium_mlir::abi::kKindInitPoint) {
-    const std::int64_t outputBase = static_cast<std::int64_t>(
-        kernel.params.size() + kernel.coords.size());
+    const std::int64_t outputBase =
+        static_cast<std::int64_t>(kernel.params.size() + kernel.coords.size());
     for (std::size_t i = 0; i < kernel.outputs.size(); ++i) {
       const std::int64_t argIndex = outputBase + static_cast<std::int64_t>(i);
       buffers.push_back(makeHostBufferABI(
@@ -383,20 +393,20 @@ bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
   if (fn.getNumResults() == 1)
     kernel.returnKind = HostReturnKind::F64;
 
-  kernel.params =
-      getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrParamNames);
-  kernel.coords =
-      getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrCoordNames);
-  kernel.fields =
-      getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrFieldNames);
-  kernel.outputs =
-      getStringArrayAttr(fn.getOperation(), tensorium_mlir::abi::kAttrOutputNames);
+  kernel.params = getStringArrayAttr(fn.getOperation(),
+                                     tensorium_mlir::abi::kAttrParamNames);
+  kernel.coords = getStringArrayAttr(fn.getOperation(),
+                                     tensorium_mlir::abi::kAttrCoordNames);
+  kernel.fields = getStringArrayAttr(fn.getOperation(),
+                                     tensorium_mlir::abi::kAttrFieldNames);
+  kernel.outputs = getStringArrayAttr(fn.getOperation(),
+                                      tensorium_mlir::abi::kAttrOutputNames);
   kernel.readArgIndices = getI64ArrayAttr(
       fn.getOperation(), tensorium_mlir::abi::kAttrReadArgIndices);
   kernel.writeArgIndices = getI64ArrayAttr(
       fn.getOperation(), tensorium_mlir::abi::kAttrWriteArgIndices);
-  kernel.stencilRadius = getI64Attr(
-      fn.getOperation(), tensorium_mlir::abi::kAttrStencilRadius);
+  kernel.stencilRadius =
+      getI64Attr(fn.getOperation(), tensorium_mlir::abi::kAttrStencilRadius);
 
   const auto names = logicalArgNames(fn);
   kernel.rawArgs.reserve(fn.getNumArguments());
@@ -412,9 +422,9 @@ bool appendHostKernelABI(HostModuleABI &abi, mlir::func::FuncOp fn) {
   return true;
 }
 
-const HostKernelABI *findSpectralResidualKernel(
-    const std::vector<HostKernelABI> &kernels, llvm::StringRef kind,
-    llvm::StringRef residualName) {
+const HostKernelABI *
+findSpectralResidualKernel(const std::vector<HostKernelABI> &kernels,
+                           llvm::StringRef kind, llvm::StringRef residualName) {
   for (const auto &kernel : kernels) {
     if (kernel.kind == kind && kernel.outputs.size() == 1 &&
         kernel.outputs[0] == residualName)
@@ -442,9 +452,9 @@ std::int64_t findUnknownIndex(const std::vector<std::string> &unknowns,
   return -1;
 }
 
-std::vector<HostSpectralResidualSystemABI> hostSpectralResidualSystems(
-    const tensorium::backend::ModuleIR &module,
-    const std::vector<HostKernelABI> &kernels) {
+std::vector<HostSpectralResidualSystemABI>
+hostSpectralResidualSystems(const tensorium::backend::ModuleIR &module,
+                            const std::vector<HostKernelABI> &kernels) {
   std::vector<HostSpectralResidualSystemABI> systems;
   if (!module.hasResidualConstraints)
     return systems;
@@ -559,8 +569,7 @@ std::vector<std::string> validateHostModuleABI(const HostModuleABI &abi) {
       add("kernel stencil radius must not be negative: " + kernel.symbolName);
 
     auto validateArgIndex = [&](std::int64_t idx, const char *attrName) {
-      if (idx < 0 ||
-          static_cast<std::size_t>(idx) >= kernel.rawArgs.size()) {
+      if (idx < 0 || static_cast<std::size_t>(idx) >= kernel.rawArgs.size()) {
         std::ostringstream oss;
         oss << "kernel " << kernel.symbolName << " has out-of-range "
             << attrName << " index " << idx;
@@ -570,8 +579,8 @@ std::vector<std::string> validateHostModuleABI(const HostModuleABI &abi) {
       if (kernel.rawArgs[static_cast<std::size_t>(idx)].kind !=
           HostArgKind::Memref1DF64) {
         std::ostringstream oss;
-        oss << "kernel " << kernel.symbolName << " has non-buffer "
-            << attrName << " index " << idx;
+        oss << "kernel " << kernel.symbolName << " has non-buffer " << attrName
+            << " index " << idx;
         add(oss.str());
       }
     };
@@ -593,8 +602,8 @@ std::vector<std::string> validateHostModuleABI(const HostModuleABI &abi) {
       }
       if (kernel.rawArgs[static_cast<std::size_t>(buffer.argIndex)].kind !=
           HostArgKind::Memref1DF64)
-        add("kernel buffer does not map to a memref arg: " +
-            kernel.symbolName + "." + buffer.name);
+        add("kernel buffer does not map to a memref arg: " + kernel.symbolName +
+            "." + buffer.name);
       if (buffer.componentCount <= 0)
         add("kernel buffer component count must be positive: " +
             kernel.symbolName + "." + buffer.name);

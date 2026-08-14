@@ -825,17 +825,21 @@ parameter bindings, map names, reconstruction, and nonlinear/linear solver
 settings.
 `GeneratedInitialData.h` consumes that descriptor through registries for
 coordinate maps, unknown maps, field projectors, and preconditioners.
-The experimental `mapped_fd_multigrid` preconditioner selects a geometric
-two-grid V-cycle over the mapped finite-difference operator;
+The `mapped_fd_multigrid` preconditioner builds a recursive geometric hierarchy
+over the mapped finite-difference operator and uses a dense terminal solve only
+on the configured small coarsest grid;
 `preconditioner_sweeps` controls both its pre- and post-relaxation counts.
-The QC0 fixture uses this two-grid path with twelve pre- and twelve
+The QC0 fixture uses this recursive path with twelve pre- and twelve
 post-relaxation sweeps. The runtime augments its mapped Laplacian with the
 point kernel's local Jacobian reaction term at every Newton state.
-For supported scalar residual expressions, the compiler also emits a
+Every scalar field referenced by a residual is supplied through a complete
+value/gradient/Hessian bundle. This permits Laplacians and contracted gradients
+of several unknowns in the same DSL equation. For supported scalar residual
+expressions, the compiler also emits a
 forward-mode `tensorium_spectral_residual_jvp_<target>` kernel directly from
 the DSL expression. Newton/FGMRES and the local-reaction estimate use this
 compiled `Jv`; centered finite differences remain the fallback for kernels
-that do not expose the ABI v2 callback.
+that do not expose the ABI v3 callback.
 `mapped_fd_laplacian_shift` remains available as the one-level alternative.
 The spectral block owns its grid metadata, so a constraint-only source does
 not need a separate `simulation` block; the compiler synthesizes the internal
@@ -851,6 +855,12 @@ From the repository root, the generic executable workflow is:
 collocation points, including logical and mapped physical coordinates.
 `reconstruction = two_puncture_bssn` instead exports the Cartesian BSSN slice
 and physical diagnostics described in `two_puncture_initial_data.md`.
+
+`tests/fixtures/elliptic/spectral_two_field_initial_data_3d.tn` exercises this
+generic workflow with two coupled scalar unknowns. Both residuals contain the
+other field's Laplacian and a nonlinear contracted-gradient term; the generated
+JVP, Newton/FGMRES solve, recursive multigrid preconditioner, CSV export, and
+manufactured-solution errors are checked by the full test suite.
 
 `tests/fixtures/elliptic/spectral_two_puncture_hamiltonian_3d.tn` is the first
 physical binary-black-hole example on this path. The DSL itself computes the

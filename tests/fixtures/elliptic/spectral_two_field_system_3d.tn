@@ -1,8 +1,12 @@
 # Spectral two-field system fixture.
 #
 # The generated point kernels evaluate:
-#   F_u = laplacian(u) + alpha * u + coupling * v + source_u
-#   F_v = laplacian(v) + beta * v + coupling * u + source_v
+#   F_u = laplacian(u) + cross_laplacian * laplacian(v)
+#         + gradient_coupling * contract(d_i(u) * d_i(v))
+#         + alpha * u + coupling * v + source_u
+#   F_v = laplacian(v) + cross_laplacian * laplacian(u)
+#         + gradient_coupling * contract(d_i(v) * d_i(u))
+#         + beta * v + coupling * u + source_v
 #
 # Runtime tests assemble both scalar residuals into one equation-major system
 # vector with manufactured sources.
@@ -13,7 +17,7 @@ field scalar source_v
 field scalar Hu
 field scalar Hv
 
-params { alpha, beta, coupling }
+params { alpha, beta, coupling, cross_laplacian, gradient_coupling }
 
 simulation {
   coordinates = cartesian
@@ -33,8 +37,8 @@ simulation {
 }
 
 constraints SpectralTwoFieldSystem3D {
-  Hulocal = laplacian(u) + alpha * u + coupling * v + source_u
-  Hvlocal = laplacian(v) + beta * v + coupling * u + source_v
+  Hulocal = laplacian(u) + cross_laplacian * laplacian(v) + gradient_coupling * contract(d_i(u) * d_i(v)) + alpha * u + coupling * v + source_u
+  Hvlocal = laplacian(v) + cross_laplacian * laplacian(u) + gradient_coupling * contract(d_i(v) * d_i(u)) + beta * v + coupling * u + source_v
 
   residual Hu = Hulocal
   residual Hv = Hvlocal
