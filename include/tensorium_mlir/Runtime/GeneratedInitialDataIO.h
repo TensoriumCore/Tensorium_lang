@@ -153,6 +153,29 @@ inline double generatedInitialDataParameter(
   return found->second;
 }
 
+inline double generatedInitialDataParameter(
+    const GeneratedSpectralInitialDataSolution &solution,
+    std::string_view canonicalName, std::string_view descriptiveName) {
+  const auto canonical = solution.parameters.find(std::string(canonicalName));
+  const auto descriptive =
+      solution.parameters.find(std::string(descriptiveName));
+  if (canonical != solution.parameters.end() &&
+      descriptive != solution.parameters.end() &&
+      canonicalName != descriptiveName) {
+    throw std::runtime_error(
+        "generated initial_data parameter is ambiguous: '" +
+        std::string(canonicalName) + "' and '" +
+        std::string(descriptiveName) + "' are both available");
+  }
+  if (canonical != solution.parameters.end())
+    return canonical->second;
+  if (descriptive != solution.parameters.end())
+    return descriptive->second;
+  throw std::runtime_error("generated initial_data parameter '" +
+                           std::string(canonicalName) + "' or '" +
+                           std::string(descriptiveName) + "' is unavailable");
+}
+
 template <std::size_t Components>
 inline std::array<double *, Components> generatedInitialDataBuffers(
     std::array<std::vector<double>, Components> &storage,
@@ -198,20 +221,20 @@ exportGeneratedInitialDataBssnSlice(
   physical.bareMasses = {generatedInitialDataParameter(solution, "m1"),
                          generatedInitialDataParameter(solution, "m2")};
   physical.momenta = {{
-      {generatedInitialDataParameter(solution, "p1x"),
-       generatedInitialDataParameter(solution, "p1y"),
-       generatedInitialDataParameter(solution, "p1z")},
-      {generatedInitialDataParameter(solution, "p2x"),
-       generatedInitialDataParameter(solution, "p2y"),
-       generatedInitialDataParameter(solution, "p2z")},
+      {generatedInitialDataParameter(solution, "p1x", "P1_x"),
+       generatedInitialDataParameter(solution, "p1y", "P1_y"),
+       generatedInitialDataParameter(solution, "p1z", "P1_z")},
+      {generatedInitialDataParameter(solution, "p2x", "P2_x"),
+       generatedInitialDataParameter(solution, "p2y", "P2_y"),
+       generatedInitialDataParameter(solution, "p2z", "P2_z")},
   }};
   physical.spins = {{
-      {generatedInitialDataParameter(solution, "s1x"),
-       generatedInitialDataParameter(solution, "s1y"),
-       generatedInitialDataParameter(solution, "s1z")},
-      {generatedInitialDataParameter(solution, "s2x"),
-       generatedInitialDataParameter(solution, "s2y"),
-       generatedInitialDataParameter(solution, "s2z")},
+      {generatedInitialDataParameter(solution, "s1x", "S1_x"),
+       generatedInitialDataParameter(solution, "s1y", "S1_y"),
+       generatedInitialDataParameter(solution, "s1z", "S1_z")},
+      {generatedInitialDataParameter(solution, "s2x", "S2_x"),
+       generatedInitialDataParameter(solution, "s2y", "S2_y"),
+       generatedInitialDataParameter(solution, "s2z", "S2_z")},
   }};
 
   const auto &field = solution.fields.front();

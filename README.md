@@ -73,8 +73,8 @@ binary-black-hole puncture data:
 
 - compactified two-puncture coordinates and Cartesian derivative transforms;
 - the physical Bowen-York/Lichnerowicz Hamiltonian residual compiled from DSL;
-- bounded-memory matrix-free Newton-FGMRES with a mapped sparse
-  preconditioner;
+- bounded-memory matrix-free Newton-FGMRES with mapped sparse one-level and
+  experimental geometric two-grid preconditioners;
 - refinement, ADM, puncture-mass, symmetry, and axis-regularity diagnostics;
 - an unequal-mass published-data comparison and Cartesian BSSN handoff;
 - a fully declarative spectral case: physical parameters, resolution, maps,
@@ -83,14 +83,16 @@ binary-black-hole puncture data:
   flexible-GMRES updates.
 
 The provided QC0 case converges on its validated `10 x 10 x 16` spectral grid
-and exports a Cartesian `z=0` BSSN slice. This is a genuine nonlinear physical
-solve, not a manufactured Poisson example. The exported CSV is nevertheless a
-diagnostic artifact, not a production 3D checkpoint.
+with the geometric two-grid preconditioner and exports a Cartesian `z=0` BSSN
+slice. This is a genuine nonlinear physical solve, not a manufactured Poisson
+example. The exported CSV is nevertheless a diagnostic artifact, not a
+production 3D checkpoint.
 
 ### What is not production-ready
 
 - QC0 is not yet reliable at the next tested `12 x 12 x 20` resolution with
-  the current relaxation preconditioner.
+  either the one-level relaxation preconditioner or the first two-grid
+  prototype.
 - High-resolution convergence, Fourier-mode regularity at axes/punctures, and
   spinning/unequal-mass validation are incomplete.
 - Apparent-horizon masses and independent surface-integral charge checks are

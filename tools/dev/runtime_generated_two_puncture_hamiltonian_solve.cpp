@@ -86,10 +86,37 @@ int main() {
     std::array<double, 15> physicalParams{};
     const auto paramIndex = [&](const char *name) {
       const auto &equation = systemDesc.equations[0];
-      for (std::int64_t i = 0; i < equation.param_count; ++i) {
-        if (equation.param_names[i] &&
-            std::strcmp(equation.param_names[i], name) == 0)
-          return static_cast<std::size_t>(i);
+      const auto findIndex = [&](const char *candidate) {
+        for (std::int64_t i = 0; i < equation.param_count; ++i) {
+          if (equation.param_names[i] &&
+              std::strcmp(equation.param_names[i], candidate) == 0)
+            return static_cast<std::size_t>(i);
+        }
+        return static_cast<std::size_t>(equation.param_count);
+      };
+      const std::size_t canonical = findIndex(name);
+      if (canonical != static_cast<std::size_t>(equation.param_count))
+        return canonical;
+      static constexpr std::array<std::pair<const char *, const char *>, 12>
+          kDescriptiveNames = {{{"p1x", "P1_x"},
+                                {"p1y", "P1_y"},
+                                {"p1z", "P1_z"},
+                                {"s1x", "S1_x"},
+                                {"s1y", "S1_y"},
+                                {"s1z", "S1_z"},
+                                {"p2x", "P2_x"},
+                                {"p2y", "P2_y"},
+                                {"p2z", "P2_z"},
+                                {"s2x", "S2_x"},
+                                {"s2y", "S2_y"},
+                                {"s2z", "S2_z"}}};
+      for (const auto &[canonicalName, descriptiveName] : kDescriptiveNames) {
+        if (std::strcmp(name, canonicalName) == 0) {
+          const std::size_t descriptive = findIndex(descriptiveName);
+          if (descriptive != static_cast<std::size_t>(equation.param_count))
+            return descriptive;
+          break;
+        }
       }
       throw std::runtime_error(std::string("missing generated parameter: ") +
                                name);
@@ -364,6 +391,23 @@ int main() {
     const auto fineResidual = assembleSpectralResidualSystem(
         fineSystem, std::span<const std::vector<double>>(
                         fineSolverFields.data(), fineSolverFields.size()));
+    std::array<std::vector<double>, 1> multigridSolverFields{
+        std::vector<double>(fineGrid.size(), 0.0)};
+    SpectralEllipticSolveOptions multigridOptions = fineOptions;
+    multigridOptions.gmresPreconditioner =
+        SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid;
+    multigridOptions.preconditionerMultigridPreSweeps = 3;
+    multigridOptions.preconditionerMultigridPostSweeps = 3;
+    multigridOptions.preconditionerMultigridRelaxationOmega = 1.0;
+    const auto multigridSolveResult = solveSpectralNewton(
+        fineSystem,
+        std::span<std::vector<double>>(multigridSolverFields.data(),
+                                       multigridSolverFields.size()),
+        multigridOptions);
+    const auto multigridResidual = assembleSpectralResidualSystem(
+        fineSystem, std::span<const std::vector<double>>(
+                        multigridSolverFields.data(),
+                        multigridSolverFields.size()));
     const double fineProbe =
         (probeA - 1.0) *
         fineGrid.interpolate(fineSolverFields[0], probeA, probeB, probePhi);
@@ -783,6 +827,12 @@ int main() {
                 static_cast<int>(fineSolveResult.status), fineSolveResult.steps,
                 fineSolveResult.linearIterations,
                 fineSolveResult.finalLinearResidualL2);
+    std::printf("[two-puncture-hamiltonian] two-grid Newton "
+                "status/steps/linear = %d/%d/%d, residual %.17g\n",
+                static_cast<int>(multigridSolveResult.status),
+                multigridSolveResult.steps,
+                multigridSolveResult.linearIterations,
+                multigridResidual.l2Norm);
     std::printf("[two-puncture-hamiltonian] very-coarse Newton "
                 "status/steps/linear = %d/%d/%d, linear residual = %.17g\n",
                 static_cast<int>(veryCoarseSolveResult.status),
@@ -900,6 +950,13 @@ int main() {
         !fineSolveResult.usedPreconditioner ||
         !fineSolveResult.usedFieldProjector ||
         fineSolveResult.linearIterations <= options.gmresRestart ||
+        !multigridSolveResult.converged() ||
+        !multigridSolveResult.usedMatrixFreeGMRES ||
+        !multigridSolveResult.usedPreconditioner ||
+        multigridSolveResult.linearIterations >=
+            fineSolveResult.linearIterations ||
+        !multigridResidual.finite || multigridResidual.l2Norm > 2.0e-8 ||
+        multigridResidual.maxAbs > 2.0e-7 ||
         !veryCoarseSolveResult.converged() ||
         !veryCoarseSolveResult.usedMatrixFreeGMRES ||
         !veryCoarseSolveResult.usedPreconditioner ||

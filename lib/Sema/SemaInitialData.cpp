@@ -1,9 +1,12 @@
 #include "tensorium/Sema/Sema.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <set>
 #include <stdexcept>
+#include <string_view>
+#include <utility>
 
 namespace tensorium {
 
@@ -396,7 +399,8 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
           "spectral initial_data linear method must be direct or gmres");
     static const std::set<std::string> kPreconditioners = {
         "none", "diagonal_jvp", "dense_laplacian_shift",
-        "modal_laplacian_shift", "mapped_fd_laplacian_shift"};
+        "modal_laplacian_shift", "mapped_fd_laplacian_shift",
+        "mapped_fd_multigrid"};
     if (!kPreconditioners.count(solve.preconditioner))
       throw std::runtime_error("unsupported spectral preconditioner '" +
                                solve.preconditioner + "'");
@@ -431,14 +435,35 @@ void SemanticAnalyzer::validateInitialData(const InitialDataDecl &init) {
       if (spectral.coordinateMap != "two_puncture")
         throw std::runtime_error(
             "two_puncture_bssn reconstruction requires two_puncture map");
-      static const std::set<std::string> kRequired = {
-          "b",   "m1",  "m2",  "p1x", "p1y", "p1z", "s1x", "s1y",
-          "s1z", "p2x", "p2y", "p2z", "s2x", "s2y", "s2z"};
-      for (const auto &name : kRequired) {
-        if (!bindingNames.count(name))
+      static constexpr std::array<std::pair<const char *, const char *>, 15>
+          kRequired = {{{"b", "b"},
+                        {"m1", "m1"},
+                        {"m2", "m2"},
+                        {"p1x", "P1_x"},
+                        {"p1y", "P1_y"},
+                        {"p1z", "P1_z"},
+                        {"s1x", "S1_x"},
+                        {"s1y", "S1_y"},
+                        {"s1z", "S1_z"},
+                        {"p2x", "P2_x"},
+                        {"p2y", "P2_y"},
+                        {"p2z", "P2_z"},
+                        {"s2x", "S2_x"},
+                        {"s2y", "S2_y"},
+                        {"s2z", "S2_z"}}};
+      for (const auto &[canonical, descriptive] : kRequired) {
+        const bool hasCanonical = bindingNames.count(canonical) != 0;
+        const bool hasDescriptive = bindingNames.count(descriptive) != 0;
+        if (!hasCanonical && !hasDescriptive)
           throw std::runtime_error(
               "two_puncture_bssn reconstruction requires parameter '" +
-              name + "'");
+              std::string(canonical) + "' or '" + descriptive + "'");
+        if (std::string_view(canonical) != descriptive && hasCanonical &&
+            hasDescriptive)
+          throw std::runtime_error(
+              "two_puncture_bssn reconstruction parameter is ambiguous: '" +
+              std::string(canonical) + "' and '" + descriptive +
+              "' are both declared");
       }
     }
   }

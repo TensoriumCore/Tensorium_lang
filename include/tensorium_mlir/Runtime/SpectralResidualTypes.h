@@ -293,6 +293,7 @@ enum class SpectralPreconditionerKind {
   DenseLaplacianShift,
   ModalLaplacianShift,
   MappedFiniteDifferenceLaplacianShift,
+  MappedFiniteDifferenceMultigrid,
 };
 
 struct SpectralEllipticSolveOptions {
@@ -317,6 +318,9 @@ struct SpectralEllipticSolveOptions {
   std::vector<double> preconditionerLaplacianShifts{};
   int preconditionerRelaxationSweeps = 4;
   double preconditionerRelaxationOmega = 1.0;
+  int preconditionerMultigridPreSweeps = 3;
+  int preconditionerMultigridPostSweeps = 3;
+  double preconditionerMultigridRelaxationOmega = 1.0;
   SpectralJacobianVectorProductOptions jvpOptions{};
 };
 

@@ -263,6 +263,13 @@ are deliberately omitted by this seven-point approximation; a wider stencil is
 required to represent them. No TwoPunctures residual term is hard-coded into
 this path.
 
+`MappedFiniteDifferenceMultigrid` is the first geometric two-grid extension of
+that operator. It coarsens every Chebyshev/Fourier axis, transfers fields with
+the corresponding tensor-product spectral interpolation, applies symmetric
+pre- and post-relaxation, and solves the Galerkin coarse correction `R A P`.
+The dense coarse LU is built once with the preconditioner and reused by every
+FGMRES application.
+
 With the sparse mapped preconditioner, the physical regression now includes a
 `7x7x12` grid with 588 unknowns:
 
@@ -270,15 +277,19 @@ With the sparse mapped preconditioner, the physical regression now includes a
 GMRES restart length:                    24
 coarse cumulative linear iterations:    24
 fine cumulative linear iterations:      69
+two-grid cumulative linear iterations:  54
 coarse nonlinear residual L2:            5.1e-11
 fine final linear residual L2:           2.5e-11
+two-grid nonlinear residual L2:          6.4e-11
 fine scalar-axis regularity error:       4.2e-6
 puncture-mass change:                    8.36e-4 -> 2.49e-4
 ```
 
 This removes dense Jacobian storage and the `N` residual-JVP setup calls of the
-previous diagonal preconditioner. Production-scale parallelism and algebraic
-multigrid remain external-backend concerns.
+previous diagonal preconditioner. The two-grid prototype reduces Krylov work
+by about 22% on this case, but it is not recursive and does not yet unlock the
+`12x12x20` QC0 solve. Production-scale distributed or algebraic multigrid
+remains an external-backend concern.
 
 ## TP-7: Published unequal-mass case and Cartesian BSSN handoff
 
@@ -379,10 +390,10 @@ performs the Cartesian BSSN handoff, and writes both the requested CSV and
 
 ```text
 Newton steps:                  4
-cumulative FGMRES iterations: 90
-Hamiltonian residual L2:       1.86e-8
-Hamiltonian residual max:      1.86e-7
-ADM energy:                    1.00792632
+cumulative FGMRES iterations: 67
+Hamiltonian residual L2:       6.69e-9
+Hamiltonian residual max:      7.57e-8
+ADM energy:                    1.00792631
 ADM angular momentum Jz:       0.77876433
 puncture ADM masses:           0.51685532, 0.51685532
 axis regularity error:         6.66e-6
@@ -407,15 +418,28 @@ TENSORIUM_SLICE_N=257 TENSORIUM_HALF_WIDTH=12 \
     /tmp/qc0_high.csv
 ```
 
+`run_two_puncture_qc0.sh` selects `mapped_fd_multigrid` by default. For an
+explicit comparison without changing the DSL, set `TP_PRECONDITIONER`; the
+generic runner accepts the equivalent
+`TENSORIUM_INITIAL_DATA_PRECONDITIONER` override. Sweep counts can likewise be
+overridden with `TP_PRECONDITIONER_SWEEPS` or
+`TENSORIUM_INITIAL_DATA_PRECONDITIONER_SWEEPS`:
+
+```bash
+TP_PRECONDITIONER=mapped_fd_laplacian_shift \
+TP_PRECONDITIONER_SWEEPS=12 \
+  ./run_two_puncture_qc0.sh /tmp/qc0_one_level.csv
+```
+
 This is a real solved data set and a reproducible handoff example. The CSV is
 intentionally a diagnostic slice, not a production 3D evolution checkpoint;
 an external solver should call the SoA handoff API on its own full Cartesian
 grid. The spectral resolution and solver policy are part of the DSL `spectral`
 block, so changing a physical case never requires editing or rebuilding a C++
-runner. The `10x10x16` configuration is the validated default;
-the current relaxation preconditioner does not yet converge reliably for QC0
-at `12x12x20`, which is why production-resolution scaling remains an explicit
-open item rather than an implied capability.
+runner. The `10x10x16` configuration is the validated default; neither the
+one-level relaxation preconditioner nor the first two-grid prototype converges
+reliably for QC0 at `12x12x20`, which is why production-resolution scaling
+remains an explicit open item rather than an implied capability.
 
 ## Runtime performance controls
 
@@ -442,13 +466,13 @@ script detects MacPorts or Homebrew `libomp`; on other platforms it uses
 `-fopenmp`. `TENSORIUM_CXXFLAGS` and `TENSORIUM_LDFLAGS` can append toolchain-
 specific flags.
 
-On the QC0 `10x10x16` regression, operator caching first reduced the isolated
-solve wall time from about `1.56 s` to `0.37 s`. Correct flexible-GMRES updates
-then reduced it to about `0.15 s`, with four Newton steps and 90 cumulative
-Krylov iterations. These are single-machine engineering measurements, not a
-production-scaling claim. Higher resolutions still require a stronger
-preconditioner; the current relaxation preconditioner still fails the
-`12x12x20` QC0 acceptance criterion.
+On the QC0 `10x10x16` regression, the current two-grid default completes four
+Newton steps in about `0.17 s` with 67 cumulative Krylov iterations, compared
+with 90 iterations for the previous one-level default. These are
+single-machine engineering measurements, not a production-scaling claim.
+Higher resolutions still require a stronger hierarchy and operator
+approximation; the first two-grid prototype still fails the `12x12x20` QC0
+acceptance criterion.
 
 ## What remains before production TwoPunctures
 

@@ -218,6 +218,12 @@ consume directly:
   row and approximately inverts them with symmetric relaxation. The physical
   TwoPunctures regression combines this `O(N)` preconditioner with bounded-
   memory restarted GMRES.
+  `SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid` extends the
+  same mapped sparse operator with one geometric coarse level. Restriction and
+  prolongation use tensor-product Chebyshev/Fourier interpolation, the coarse
+  operator is the Galerkin product `R A P`, and its LU factorization is cached
+  across Krylov applications. This is an experimental two-grid
+  preconditioner, not yet a recursive production multigrid hierarchy.
 - `tests/fixtures/elliptic/spectral_hamiltonian_toy_nonlinear_3d.tn` is a
   manufactured nonlinear spectral constraint. Its runtime test solves
   `laplacian(psi) + mass * psi + alpha * psi^5 + source = 0` from a non-exact

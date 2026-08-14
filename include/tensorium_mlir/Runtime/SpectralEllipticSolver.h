@@ -6,6 +6,94 @@
 
 namespace tensorium_mlir::runtime {
 
+struct SpectralDenseLUFactorization {
+  std::size_t size = 0;
+  std::vector<double> factors;
+  std::vector<std::size_t> pivotRows;
+};
+
+inline bool factorDenseLinearSystem(
+    std::vector<double> matrix, double pivotTolerance,
+    SpectralDenseLUFactorization &factorization) {
+  const std::size_t n = static_cast<std::size_t>(
+      std::sqrt(static_cast<double>(matrix.size())));
+  if (n == 0 || n * n != matrix.size())
+    return false;
+  factorization = {};
+  factorization.size = n;
+  factorization.factors = std::move(matrix);
+  factorization.pivotRows.resize(n);
+
+  for (std::size_t col = 0; col < n; ++col) {
+    std::size_t pivotRow = col;
+    double pivotAbs =
+        std::fabs(factorization.factors[col * n + col]);
+    for (std::size_t row = col + 1; row < n; ++row) {
+      const double candidate =
+          std::fabs(factorization.factors[row * n + col]);
+      if (candidate > pivotAbs) {
+        pivotAbs = candidate;
+        pivotRow = row;
+      }
+    }
+    if (!(pivotAbs > pivotTolerance) || !std::isfinite(pivotAbs))
+      return false;
+    factorization.pivotRows[col] = pivotRow;
+    if (pivotRow != col) {
+      for (std::size_t j = 0; j < n; ++j)
+        std::swap(factorization.factors[col * n + j],
+                  factorization.factors[pivotRow * n + j]);
+    }
+
+    const double pivot = factorization.factors[col * n + col];
+    for (std::size_t row = col + 1; row < n; ++row) {
+      const double multiplier =
+          factorization.factors[row * n + col] / pivot;
+      factorization.factors[row * n + col] = multiplier;
+      for (std::size_t j = col + 1; j < n; ++j) {
+        factorization.factors[row * n + j] -=
+            multiplier * factorization.factors[col * n + j];
+      }
+    }
+  }
+  return spectralVectorIsFinite(factorization.factors);
+}
+
+inline bool solveFactorizedDenseLinearSystem(
+    const SpectralDenseLUFactorization &factorization,
+    std::span<const double> rhs, double pivotTolerance,
+    std::vector<double> &solution) {
+  const std::size_t n = factorization.size;
+  if (n == 0 || rhs.size() != n ||
+      factorization.factors.size() != n * n ||
+      factorization.pivotRows.size() != n)
+    return false;
+  solution.assign(rhs.begin(), rhs.end());
+  for (std::size_t col = 0; col < n; ++col) {
+    const std::size_t pivotRow = factorization.pivotRows[col];
+    if (pivotRow >= n)
+      return false;
+    if (pivotRow != col)
+      std::swap(solution[col], solution[pivotRow]);
+  }
+  for (std::size_t row = 0; row < n; ++row) {
+    for (std::size_t col = 0; col < row; ++col)
+      solution[row] -=
+          factorization.factors[row * n + col] * solution[col];
+  }
+  for (std::size_t reversed = 0; reversed < n; ++reversed) {
+    const std::size_t row = n - 1 - reversed;
+    for (std::size_t col = row + 1; col < n; ++col)
+      solution[row] -=
+          factorization.factors[row * n + col] * solution[col];
+    const double diagonal = factorization.factors[row * n + row];
+    if (!(std::fabs(diagonal) > pivotTolerance) || !std::isfinite(diagonal))
+      return false;
+    solution[row] /= diagonal;
+  }
+  return spectralVectorIsFinite(solution);
+}
+
 inline bool solveDenseLinearSystem(std::vector<double> matrix,
                                    std::vector<double> rhs,
                                    std::vector<double> &solution,
@@ -88,6 +176,20 @@ struct SpectralSparseMatrix {
   std::vector<double> diagonal;
 };
 
+struct SpectralTensorGridTransfer3D {
+  std::array<std::size_t, 3> fineExtents{0, 0, 0};
+  std::array<std::size_t, 3> coarseExtents{0, 0, 0};
+  std::array<std::vector<double>, 3> restrictionMatrices;
+  std::array<std::vector<double>, 3> prolongationMatrices;
+};
+
+struct SpectralTwoGridPreconditionerBlock {
+  SpectralSparseMatrix fineMatrix;
+  std::vector<double> coarseDenseMatrix;
+  SpectralDenseLUFactorization coarseFactorization;
+  SpectralTensorGridTransfer3D transfer;
+};
+
 inline bool spectralPreconditionerRequested(
     const SpectralEllipticSolveOptions &options) {
   return options.gmresPreconditioner != SpectralPreconditionerKind::None;
@@ -99,6 +201,7 @@ struct SpectralLinearPreconditioner {
   std::vector<std::vector<double>> denseBlocks;
   std::vector<std::vector<double>> modalBlocks;
   std::vector<SpectralSparseMatrix> sparseBlocks;
+  std::vector<SpectralTwoGridPreconditionerBlock> multigridBlocks;
   std::size_t blockSize = 0;
   std::size_t modalBlockSize = 0;
   std::array<std::size_t, 3> modalExtents{0, 0, 0};
@@ -107,6 +210,8 @@ struct SpectralLinearPreconditioner {
       SpectralBasis::ChebyshevZeros};
   int relaxationSweeps = 0;
   double relaxationOmega = 1.0;
+  int multigridPreSweeps = 0;
+  int multigridPostSweeps = 0;
 };
 
 inline bool spectralFieldProjectorEnabled(
@@ -479,23 +584,183 @@ inline bool applySpectralModalPreconditionerBlock(
   return true;
 }
 
-inline bool solveSpectralSparseRelaxation(const SpectralSparseMatrix &matrix,
-                                          std::span<const double> rhs,
-                                          int sweeps, double omega,
-                                          double pivotTolerance,
-                                          std::vector<double> &solution) {
+inline std::vector<double> buildSpectralAxisInterpolationMatrix(
+    const SpectralAxis &source, const SpectralAxis &target) {
+  if (source.size() == 0 || target.size() == 0)
+    throw std::runtime_error("spectral grid transfer requires nonempty axes");
+  std::vector<double> matrix(target.size() * source.size(), 0.0);
+  std::vector<double> cardinal(source.size(), 0.0);
+  for (std::size_t column = 0; column < source.size(); ++column) {
+    cardinal[column] = 1.0;
+    for (std::size_t row = 0; row < target.size(); ++row) {
+      matrix[row * source.size() + column] =
+          source.interpolate(cardinal, target.points[row]);
+    }
+    cardinal[column] = 0.0;
+  }
+  return matrix;
+}
+
+inline SpectralTensorGridTransfer3D buildSpectralTensorGridTransfer(
+    const SpectralGrid3D &fine, const SpectralGrid3D &coarse) {
+  SpectralTensorGridTransfer3D transfer;
+  transfer.fineExtents = {fine.n1(), fine.n2(), fine.n3()};
+  transfer.coarseExtents = {coarse.n1(), coarse.n2(), coarse.n3()};
+  for (std::size_t dim = 0; dim < 3; ++dim) {
+    if (fine.axis(dim).basis != coarse.axis(dim).basis)
+      throw std::runtime_error("spectral grid transfer basis mismatch");
+    transfer.restrictionMatrices[dim] =
+        buildSpectralAxisInterpolationMatrix(fine.axis(dim), coarse.axis(dim));
+    transfer.prolongationMatrices[dim] =
+        buildSpectralAxisInterpolationMatrix(coarse.axis(dim), fine.axis(dim));
+  }
+  return transfer;
+}
+
+inline std::vector<double> applySpectralTensorGridTransfer(
+    std::span<const double> source,
+    const std::array<std::size_t, 3> &sourceExtents,
+    const std::array<std::size_t, 3> &targetExtents,
+    const std::array<std::vector<double>, 3> &matrices) {
+  const std::size_t sourceSize =
+      sourceExtents[0] * sourceExtents[1] * sourceExtents[2];
+  if (source.size() != sourceSize)
+    throw std::runtime_error("spectral grid transfer source size mismatch");
+  for (std::size_t dim = 0; dim < 3; ++dim) {
+    if (matrices[dim].size() != targetExtents[dim] * sourceExtents[dim])
+      throw std::runtime_error("spectral grid transfer matrix size mismatch");
+  }
+
+  std::vector<double> axis0(targetExtents[0] * sourceExtents[1] *
+                                sourceExtents[2],
+                            0.0);
+  for (std::size_t k = 0; k < sourceExtents[2]; ++k) {
+    for (std::size_t j = 0; j < sourceExtents[1]; ++j) {
+      for (std::size_t targetI = 0; targetI < targetExtents[0]; ++targetI) {
+        double sum = 0.0;
+        for (std::size_t sourceI = 0; sourceI < sourceExtents[0]; ++sourceI) {
+          sum += matrices[0][targetI * sourceExtents[0] + sourceI] *
+                 source[sourceI +
+                        sourceExtents[0] * (j + sourceExtents[1] * k)];
+        }
+        axis0[targetI +
+              targetExtents[0] * (j + sourceExtents[1] * k)] = sum;
+      }
+    }
+  }
+
+  std::vector<double> axis1(targetExtents[0] * targetExtents[1] *
+                                sourceExtents[2],
+                            0.0);
+  for (std::size_t k = 0; k < sourceExtents[2]; ++k) {
+    for (std::size_t targetJ = 0; targetJ < targetExtents[1]; ++targetJ) {
+      for (std::size_t i = 0; i < targetExtents[0]; ++i) {
+        double sum = 0.0;
+        for (std::size_t sourceJ = 0; sourceJ < sourceExtents[1]; ++sourceJ) {
+          sum += matrices[1][targetJ * sourceExtents[1] + sourceJ] *
+                 axis0[i + targetExtents[0] *
+                               (sourceJ + sourceExtents[1] * k)];
+        }
+        axis1[i + targetExtents[0] *
+                      (targetJ + targetExtents[1] * k)] = sum;
+      }
+    }
+  }
+
+  std::vector<double> target(targetExtents[0] * targetExtents[1] *
+                                 targetExtents[2],
+                             0.0);
+  for (std::size_t targetK = 0; targetK < targetExtents[2]; ++targetK) {
+    for (std::size_t j = 0; j < targetExtents[1]; ++j) {
+      for (std::size_t i = 0; i < targetExtents[0]; ++i) {
+        double sum = 0.0;
+        for (std::size_t sourceK = 0; sourceK < sourceExtents[2]; ++sourceK) {
+          sum += matrices[2][targetK * sourceExtents[2] + sourceK] *
+                 axis1[i + targetExtents[0] *
+                               (j + targetExtents[1] * sourceK)];
+        }
+        target[i + targetExtents[0] *
+                       (j + targetExtents[1] * targetK)] = sum;
+      }
+    }
+  }
+  if (!spectralVectorIsFinite(target))
+    throw std::runtime_error("spectral grid transfer produced nonfinite data");
+  return target;
+}
+
+inline std::vector<double> restrictSpectralField(
+    const SpectralTensorGridTransfer3D &transfer,
+    std::span<const double> fineValues) {
+  return applySpectralTensorGridTransfer(
+      fineValues, transfer.fineExtents, transfer.coarseExtents,
+      transfer.restrictionMatrices);
+}
+
+inline std::vector<double> prolongSpectralField(
+    const SpectralTensorGridTransfer3D &transfer,
+    std::span<const double> coarseValues) {
+  return applySpectralTensorGridTransfer(
+      coarseValues, transfer.coarseExtents, transfer.fineExtents,
+      transfer.prolongationMatrices);
+}
+
+inline bool applySpectralSparseMatrix(const SpectralSparseMatrix &matrix,
+                                      std::span<const double> values,
+                                      std::vector<double> &result) {
+  if (matrix.size == 0 || values.size() != matrix.size ||
+      matrix.rowOffsets.size() != matrix.size + 1 ||
+      matrix.columns.size() != matrix.values.size())
+    return false;
+  result.assign(matrix.size, 0.0);
+  for (std::size_t row = 0; row < matrix.size; ++row) {
+    if (matrix.rowOffsets[row] > matrix.rowOffsets[row + 1] ||
+        matrix.rowOffsets[row + 1] > matrix.values.size())
+      return false;
+    double sum = 0.0;
+    for (std::size_t entry = matrix.rowOffsets[row];
+         entry < matrix.rowOffsets[row + 1]; ++entry) {
+      if (matrix.columns[entry] >= matrix.size)
+        return false;
+      sum += matrix.values[entry] * values[matrix.columns[entry]];
+    }
+    result[row] = sum;
+  }
+  return spectralVectorIsFinite(result);
+}
+
+inline bool spectralSparseResidual(const SpectralSparseMatrix &matrix,
+                                   std::span<const double> solution,
+                                   std::span<const double> rhs,
+                                   std::vector<double> &residual) {
+  if (rhs.size() != matrix.size)
+    return false;
+  std::vector<double> applied;
+  if (!applySpectralSparseMatrix(matrix, solution, applied))
+    return false;
+  residual.resize(matrix.size);
+  for (std::size_t row = 0; row < matrix.size; ++row)
+    residual[row] = rhs[row] - applied[row];
+  return spectralVectorIsFinite(residual);
+}
+
+inline bool relaxSpectralSparseInPlace(const SpectralSparseMatrix &matrix,
+                                       std::span<const double> rhs,
+                                       int sweeps, double omega,
+                                       double pivotTolerance,
+                                       std::vector<double> &solution) {
   if (matrix.size == 0 || rhs.size() != matrix.size ||
       matrix.rowOffsets.size() != matrix.size + 1 ||
-      matrix.diagonal.size() != matrix.size || sweeps <= 0 ||
+      matrix.diagonal.size() != matrix.size ||
+      matrix.columns.size() != matrix.values.size() ||
+      solution.size() != matrix.size || sweeps <= 0 ||
       !(omega > 0.0 && omega <= 2.0)) {
     return false;
   }
-  solution.assign(matrix.size, 0.0);
   for (std::size_t row = 0; row < matrix.size; ++row) {
     const double diagonal = matrix.diagonal[row];
     if (!std::isfinite(diagonal) || std::fabs(diagonal) <= pivotTolerance)
       return false;
-    solution[row] = rhs[row] / diagonal;
   }
 
   const auto relaxRow = [&](std::size_t row) {
@@ -524,6 +789,62 @@ inline bool solveSpectralSparseRelaxation(const SpectralSparseMatrix &matrix,
     }
   }
   return spectralVectorIsFinite(solution);
+}
+
+inline bool solveSpectralSparseRelaxation(const SpectralSparseMatrix &matrix,
+                                          std::span<const double> rhs,
+                                          int sweeps, double omega,
+                                          double pivotTolerance,
+                                          std::vector<double> &solution) {
+  if (matrix.size == 0 || rhs.size() != matrix.size ||
+      matrix.diagonal.size() != matrix.size)
+    return false;
+  solution.assign(matrix.size, 0.0);
+  for (std::size_t row = 0; row < matrix.size; ++row) {
+    const double diagonal = matrix.diagonal[row];
+    if (!std::isfinite(diagonal) || std::fabs(diagonal) <= pivotTolerance)
+      return false;
+    solution[row] = rhs[row] / diagonal;
+  }
+  return relaxSpectralSparseInPlace(matrix, rhs, sweeps, omega,
+                                    pivotTolerance, solution);
+}
+
+inline bool applySpectralTwoGridVCycle(
+    const SpectralTwoGridPreconditionerBlock &multigrid,
+    std::span<const double> rhs, int preSweeps, int postSweeps, double omega,
+    double pivotTolerance, std::vector<double> &solution) {
+  const std::size_t coarseSize =
+      multigrid.transfer.coarseExtents[0] *
+      multigrid.transfer.coarseExtents[1] *
+      multigrid.transfer.coarseExtents[2];
+  if (rhs.size() != multigrid.fineMatrix.size || preSweeps <= 0 ||
+      postSweeps <= 0 ||
+      multigrid.coarseFactorization.size != coarseSize)
+    return false;
+
+  if (!solveSpectralSparseRelaxation(multigrid.fineMatrix, rhs, preSweeps,
+                                     omega, pivotTolerance, solution))
+    return false;
+  std::vector<double> fineResidual;
+  if (!spectralSparseResidual(multigrid.fineMatrix, solution, rhs,
+                              fineResidual))
+    return false;
+  const std::vector<double> coarseRhs =
+      restrictSpectralField(multigrid.transfer, fineResidual);
+  std::vector<double> coarseCorrection;
+  if (!solveFactorizedDenseLinearSystem(multigrid.coarseFactorization,
+                                        coarseRhs, pivotTolerance,
+                                        coarseCorrection))
+    return false;
+  const std::vector<double> fineCorrection =
+      prolongSpectralField(multigrid.transfer, coarseCorrection);
+  if (fineCorrection.size() != solution.size())
+    return false;
+  for (std::size_t point = 0; point < solution.size(); ++point)
+    solution[point] += fineCorrection[point];
+  return relaxSpectralSparseInPlace(multigrid.fineMatrix, rhs, postSweeps,
+                                    omega, pivotTolerance, solution);
 }
 
 inline bool applySpectralPreconditioner(
@@ -561,6 +882,32 @@ inline bool applySpectralPreconditioner(
                                       preconditioner.blockSize),
               preconditioner.relaxationSweeps, preconditioner.relaxationOmega,
               pivotTolerance, solution)) {
+        return false;
+      }
+      std::copy(solution.begin(), solution.end(), out.begin() + offset);
+    }
+    values = std::move(out);
+    return spectralVectorIsFinite(values);
+  }
+
+  if (preconditioner.kind ==
+      SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid) {
+    if (preconditioner.blockSize == 0 ||
+        values.size() !=
+            preconditioner.blockSize * preconditioner.multigridBlocks.size())
+      return false;
+    std::vector<double> out(values.size(), 0.0);
+    for (std::size_t block = 0;
+         block < preconditioner.multigridBlocks.size(); ++block) {
+      const std::size_t offset = block * preconditioner.blockSize;
+      std::vector<double> solution;
+      if (!applySpectralTwoGridVCycle(
+              preconditioner.multigridBlocks[block],
+              std::span<const double>(&values[offset],
+                                      preconditioner.blockSize),
+              preconditioner.multigridPreSweeps,
+              preconditioner.multigridPostSweeps,
+              preconditioner.relaxationOmega, pivotTolerance, solution)) {
         return false;
       }
       std::copy(solution.begin(), solution.end(), out.begin() + offset);
@@ -796,6 +1143,97 @@ inline SpectralSparseMatrix buildSpectralMappedFiniteDifferenceLaplacianShift(
   return matrix;
 }
 
+inline SpectralAxis coarsenSpectralMultigridAxis(const SpectralAxis &fine) {
+  if (fine.basis == SpectralBasis::FourierPeriodic) {
+    std::size_t coarseSize = std::max<std::size_t>(4, fine.size() / 2);
+    if (coarseSize % 2 != 0)
+      ++coarseSize;
+    coarseSize = std::min(coarseSize, fine.size());
+    return SpectralAxis::fourierPeriodic(coarseSize, fine.period,
+                                         fine.points.front());
+  }
+
+  const std::size_t coarseSize =
+      std::min(fine.size(), std::max<std::size_t>(3, (fine.size() + 1) / 2));
+  if (fine.size() < 2)
+    throw std::runtime_error(
+        "spectral multigrid Chebyshev axis requires at least two points");
+  const double theta =
+      kSpectralPi / (2.0 * static_cast<double>(fine.size()));
+  const double cosine = std::cos(theta);
+  if (!(cosine > 0.0))
+    throw std::runtime_error("invalid spectral multigrid Chebyshev axis");
+  const double center = 0.5 * (fine.points.front() + fine.points.back());
+  const double scale =
+      0.5 * (fine.points.front() - fine.points.back()) / cosine;
+  return SpectralAxis::chebyshevZeros(coarseSize, center - scale,
+                                      center + scale);
+}
+
+inline SpectralGrid3D
+makeSpectralMultigridCoarseGrid(const SpectralGrid3D &fine) {
+  SpectralGrid3D coarse(coarsenSpectralMultigridAxis(fine.axis(0)),
+                        coarsenSpectralMultigridAxis(fine.axis(1)),
+                        coarsenSpectralMultigridAxis(fine.axis(2)));
+  if (coarse.size() >= fine.size())
+    throw std::runtime_error(
+        "spectral multigrid could not construct a smaller coarse grid");
+  return coarse;
+}
+
+inline std::vector<double> buildSpectralGalerkinCoarseMatrix(
+    const SpectralSparseMatrix &fineMatrix,
+    const SpectralTensorGridTransfer3D &transfer) {
+  const std::size_t coarseSize = transfer.coarseExtents[0] *
+                                 transfer.coarseExtents[1] *
+                                 transfer.coarseExtents[2];
+  if (fineMatrix.size != transfer.fineExtents[0] * transfer.fineExtents[1] *
+                             transfer.fineExtents[2] ||
+      coarseSize == 0)
+    throw std::runtime_error("spectral Galerkin transfer size mismatch");
+
+  std::vector<double> dense(coarseSize * coarseSize, 0.0);
+  std::vector<double> coarseBasis(coarseSize, 0.0);
+  for (std::size_t column = 0; column < coarseSize; ++column) {
+    coarseBasis[column] = 1.0;
+    const std::vector<double> fineBasis =
+        prolongSpectralField(transfer, coarseBasis);
+    std::vector<double> fineApplied;
+    if (!applySpectralSparseMatrix(fineMatrix, fineBasis, fineApplied))
+      throw std::runtime_error("spectral Galerkin fine operator failed");
+    const std::vector<double> coarseApplied =
+        restrictSpectralField(transfer, fineApplied);
+    for (std::size_t row = 0; row < coarseSize; ++row)
+      dense[row * coarseSize + column] = coarseApplied[row];
+    coarseBasis[column] = 0.0;
+  }
+  if (!spectralVectorIsFinite(dense))
+    throw std::runtime_error("spectral Galerkin operator is nonfinite");
+  return dense;
+}
+
+inline SpectralTwoGridPreconditionerBlock
+buildSpectralMappedFiniteDifferenceTwoGrid(
+    const SpectralResidualProblem &problem, double shift,
+    double pivotTolerance) {
+  const SpectralGrid3D &fineGrid = requireSpectralResidualGrid(problem);
+  SpectralGrid3D coarseGrid = makeSpectralMultigridCoarseGrid(fineGrid);
+
+  SpectralTwoGridPreconditionerBlock multigrid;
+  multigrid.fineMatrix =
+      buildSpectralMappedFiniteDifferenceLaplacianShift(problem, shift,
+                                                         pivotTolerance);
+  multigrid.transfer =
+      buildSpectralTensorGridTransfer(fineGrid, coarseGrid);
+  multigrid.coarseDenseMatrix = buildSpectralGalerkinCoarseMatrix(
+      multigrid.fineMatrix, multigrid.transfer);
+  if (!factorDenseLinearSystem(multigrid.coarseDenseMatrix, pivotTolerance,
+                               multigrid.coarseFactorization))
+    throw std::runtime_error(
+        "spectral multigrid coarse factorization failed");
+  return multigrid;
+}
+
 inline std::vector<double> buildSpectralLaplacianShiftMatrix(
     const SpectralGrid3D &grid, double shift) {
   const std::size_t n = grid.size();
@@ -898,6 +1336,26 @@ inline bool buildSpectralScalarPreconditioner(
     preconditioner.relaxationOmega = options.preconditionerRelaxationOmega;
     preconditioner.sparseBlocks.push_back(
         buildSpectralMappedFiniteDifferenceLaplacianShift(
+            problem, options.preconditionerLaplacianShift,
+            options.preconditionerPivotTolerance));
+    return true;
+  }
+  if (options.gmresPreconditioner ==
+      SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid) {
+    const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+    if (values.size() != grid.size())
+      return false;
+    preconditioner.kind =
+        SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid;
+    preconditioner.blockSize = grid.size();
+    preconditioner.relaxationOmega =
+        options.preconditionerMultigridRelaxationOmega;
+    preconditioner.multigridPreSweeps =
+        options.preconditionerMultigridPreSweeps;
+    preconditioner.multigridPostSweeps =
+        options.preconditionerMultigridPostSweeps;
+    preconditioner.multigridBlocks.push_back(
+        buildSpectralMappedFiniteDifferenceTwoGrid(
             problem, options.preconditionerLaplacianShift,
             options.preconditionerPivotTolerance));
     return true;
@@ -1429,6 +1887,32 @@ inline bool buildSpectralSystemPreconditioner(
     return true;
   }
   if (options.gmresPreconditioner ==
+      SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid) {
+    const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
+    const std::size_t fieldCount = values.size();
+    if (!validateSpectralSystemSolveLayout(system, values, grid.size()))
+      return false;
+    preconditioner.kind =
+        SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid;
+    preconditioner.blockSize = grid.size();
+    preconditioner.relaxationOmega =
+        options.preconditionerMultigridRelaxationOmega;
+    preconditioner.multigridPreSweeps =
+        options.preconditionerMultigridPreSweeps;
+    preconditioner.multigridPostSweeps =
+        options.preconditionerMultigridPostSweeps;
+    preconditioner.multigridBlocks.resize(fieldCount);
+    for (const auto &equation : system.equations) {
+      preconditioner.multigridBlocks[equation.unknownIndex] =
+          buildSpectralMappedFiniteDifferenceTwoGrid(
+              equation.problem,
+              spectralPreconditionerShiftForBlock(options,
+                                                  equation.unknownIndex),
+              options.preconditionerPivotTolerance);
+    }
+    return true;
+  }
+  if (options.gmresPreconditioner ==
       SpectralPreconditionerKind::DenseLaplacianShift) {
     const SpectralGrid3D &grid = requireSpectralResidualSystemGrid(system);
     const std::size_t fieldCount = values.size();
@@ -1691,12 +2175,27 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       options.gmresTolerance < 0.0 || options.gmresRelativeTolerance < 0.0 ||
       !(options.preconditionerPivotTolerance > 0.0) ||
       !std::isfinite(options.preconditionerPivotTolerance) ||
+      ((options.gmresPreconditioner ==
+            SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift ||
+        options.gmresPreconditioner ==
+            SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid) &&
+       ((options.gmresPreconditioner ==
+             SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid
+             ? !std::isfinite(options.preconditionerMultigridRelaxationOmega)
+             : !std::isfinite(options.preconditionerRelaxationOmega)) ||
+        !(options.gmresPreconditioner ==
+                  SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid
+              ? options.preconditionerMultigridRelaxationOmega > 0.0 &&
+                    options.preconditionerMultigridRelaxationOmega <= 2.0
+              : options.preconditionerRelaxationOmega > 0.0 &&
+                    options.preconditionerRelaxationOmega <= 2.0))) ||
       (options.gmresPreconditioner ==
            SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift &&
-       (options.preconditionerRelaxationSweeps <= 0 ||
-        !std::isfinite(options.preconditionerRelaxationOmega) ||
-        !(options.preconditionerRelaxationOmega > 0.0 &&
-          options.preconditionerRelaxationOmega <= 2.0)))) {
+       options.preconditionerRelaxationSweeps <= 0) ||
+      (options.gmresPreconditioner ==
+           SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid &&
+       (options.preconditionerMultigridPreSweeps <= 0 ||
+        options.preconditionerMultigridPostSweeps <= 0))) {
     result.status = SpectralEllipticSolveStatus::InvalidInput;
     return result;
   }
@@ -1829,12 +2328,27 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       options.gmresTolerance < 0.0 || options.gmresRelativeTolerance < 0.0 ||
       !(options.preconditionerPivotTolerance > 0.0) ||
       !std::isfinite(options.preconditionerPivotTolerance) ||
+      ((options.gmresPreconditioner ==
+            SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift ||
+        options.gmresPreconditioner ==
+            SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid) &&
+       ((options.gmresPreconditioner ==
+             SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid
+             ? !std::isfinite(options.preconditionerMultigridRelaxationOmega)
+             : !std::isfinite(options.preconditionerRelaxationOmega)) ||
+        !(options.gmresPreconditioner ==
+                  SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid
+              ? options.preconditionerMultigridRelaxationOmega > 0.0 &&
+                    options.preconditionerMultigridRelaxationOmega <= 2.0
+              : options.preconditionerRelaxationOmega > 0.0 &&
+                    options.preconditionerRelaxationOmega <= 2.0))) ||
       (options.gmresPreconditioner ==
            SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift &&
-       (options.preconditionerRelaxationSweeps <= 0 ||
-        !std::isfinite(options.preconditionerRelaxationOmega) ||
-        !(options.preconditionerRelaxationOmega > 0.0 &&
-          options.preconditionerRelaxationOmega <= 2.0)))) {
+       options.preconditionerRelaxationSweeps <= 0) ||
+      (options.gmresPreconditioner ==
+           SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid &&
+       (options.preconditionerMultigridPreSweeps <= 0 ||
+        options.preconditionerMultigridPostSweeps <= 0))) {
     result.status = SpectralEllipticSolveStatus::InvalidInput;
     return result;
   }

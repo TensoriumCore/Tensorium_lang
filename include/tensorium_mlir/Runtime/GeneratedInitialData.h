@@ -124,6 +124,8 @@ generatedInitialDataPreconditioner(const char *name) {
     return SpectralPreconditionerKind::ModalLaplacianShift;
   if (value == "mapped_fd_laplacian_shift")
     return SpectralPreconditionerKind::MappedFiniteDifferenceLaplacianShift;
+  if (value == "mapped_fd_multigrid")
+    return SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid;
   throw std::runtime_error("unsupported generated spectral preconditioner '" +
                            std::string(name) + "'");
 }
@@ -153,6 +155,10 @@ inline SpectralEllipticSolveOptions generatedInitialDataSolveOptions(
   options.gmresPreconditioner =
       generatedInitialDataPreconditioner(desc.preconditioner);
   options.preconditionerRelaxationSweeps =
+      static_cast<int>(desc.preconditioner_sweeps);
+  options.preconditionerMultigridPreSweeps =
+      static_cast<int>(desc.preconditioner_sweeps);
+  options.preconditionerMultigridPostSweeps =
       static_cast<int>(desc.preconditioner_sweeps);
   options.jvpOptions.relativeStep = desc.jvp_relative_step;
   options.jvpOptions.absoluteStep = desc.jvp_absolute_step;
@@ -187,7 +193,9 @@ inline GeneratedSpectralInitialDataSolution solveGeneratedSpectralInitialData(
     std::size_t pointKernelCount,
     const tensorium_spectral_residual_grid_kernel_desc *gridKernels,
     std::size_t gridKernelCount,
-    const std::unordered_map<std::string, double> &parameterOverrides = {}) {
+    const std::unordered_map<std::string, double> &parameterOverrides = {},
+    const char *preconditionerOverride = nullptr,
+    int preconditionerSweepsOverride = 0) {
   if (desc.abi_version != 1)
     throw std::runtime_error(
         "unsupported generated spectral initial_data ABI version");
@@ -331,6 +339,21 @@ inline GeneratedSpectralInitialDataSolution solveGeneratedSpectralInitialData(
       static_cast<std::size_t>(systemDesc.unknown_count),
       std::vector<double>(solution.grid->size(), 0.0));
   solution.options = generatedInitialDataSolveOptions(desc);
+  if (preconditionerOverride && preconditionerOverride[0] != '\0') {
+    solution.options.gmresPreconditioner =
+        generatedInitialDataPreconditioner(preconditionerOverride);
+  }
+  if (preconditionerSweepsOverride < 0)
+    throw std::runtime_error(
+        "generated initial_data preconditioner sweeps override is invalid");
+  if (preconditionerSweepsOverride > 0) {
+    solution.options.preconditionerRelaxationSweeps =
+        preconditionerSweepsOverride;
+    solution.options.preconditionerMultigridPreSweeps =
+        preconditionerSweepsOverride;
+    solution.options.preconditionerMultigridPostSweeps =
+        preconditionerSweepsOverride;
+  }
   solution.solveResult = solveSpectralNewton(
       solution.generatedSystem.view(),
       std::span<std::vector<double>>(solution.fields.data(),

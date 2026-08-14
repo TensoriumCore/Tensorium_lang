@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -50,6 +51,19 @@ int main(int argc, char **argv) {
     }
 
     const auto solveStart = std::chrono::steady_clock::now();
+    const char *preconditionerOverride =
+        std::getenv("TENSORIUM_INITIAL_DATA_PRECONDITIONER");
+    const char *preconditionerSweepsText =
+        std::getenv("TENSORIUM_INITIAL_DATA_PRECONDITIONER_SWEEPS");
+    int preconditionerSweepsOverride = 0;
+    if (preconditionerSweepsText && preconditionerSweepsText[0] != '\0') {
+      const std::size_t parsedSweeps =
+          parseSize(preconditionerSweepsText, "preconditioner_sweeps", 1);
+      if (parsedSweeps > static_cast<std::size_t>(
+                             std::numeric_limits<int>::max()))
+        throw std::runtime_error("invalid preconditioner_sweeps");
+      preconditionerSweepsOverride = static_cast<int>(parsedSweeps);
+    }
     auto solution = solveGeneratedSpectralInitialData(
         tensorium_spectral_initial_data[0],
         tensorium_spectral_residual_systems,
@@ -57,7 +71,8 @@ int main(int argc, char **argv) {
         tensorium_spectral_residual_kernels,
         TENSORIUM_SPECTRAL_RESIDUAL_KERNEL_COUNT,
         tensorium_spectral_residual_grid_kernels,
-        TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT);
+        TENSORIUM_SPECTRAL_RESIDUAL_GRID_KERNEL_COUNT, {},
+        preconditionerOverride, preconditionerSweepsOverride);
     const auto solveEnd = std::chrono::steady_clock::now();
     const double solveSeconds =
         std::chrono::duration<double>(solveEnd - solveStart).count();
@@ -69,6 +84,17 @@ int main(int argc, char **argv) {
               << static_cast<int>(solution.solveResult.status) << " / "
               << solution.solveResult.steps << " / "
               << solution.solveResult.linearIterations << '\n'
+              << "[initial_data] preconditioner = "
+              << (preconditionerOverride && preconditionerOverride[0] != '\0'
+                      ? preconditionerOverride
+                      : tensorium_spectral_initial_data[0].preconditioner)
+              << '\n'
+              << "[initial_data] preconditioner sweeps = "
+              << (preconditionerSweepsOverride > 0
+                      ? preconditionerSweepsOverride
+                      : tensorium_spectral_initial_data[0]
+                            .preconditioner_sweeps)
+              << '\n'
               << "[initial_data] solve wall time = " << solveSeconds
               << " s\n"
               << "[initial_data] residual L2 / max = "

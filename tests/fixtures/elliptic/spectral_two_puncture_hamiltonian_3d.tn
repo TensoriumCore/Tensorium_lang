@@ -7,167 +7,260 @@
 #
 # Each puncture contributes the standard Bowen-York linear-momentum and spin
 # tensors. Their sum is contracted before entering the Lichnerowicz equation:
-#   psi = 1 + m1/(2*r1) + m2/(2*r2) + U
-#   H = laplacian(U) + (1/8) * Atilde_ij*Atilde^ij * psi^(-7)
+#
+# psi = 1 + m1/(2*r1) + m2/(2*r2) + U
+#
+# H = laplacian(U) + (1/8) * Atilde_ij*Atilde^ij * psi^(-7)
+
 extern scalar sqrt(scalar)
 
 field scalar U
 field scalar H
 
 params {
-  b, m1, m2,
-  p1x, p1y, p1z, s1x, s1y, s1z,
-  p2x, p2y, p2z, s2x, s2y, s2z
+    b, m1, m2,
+    P1_x, P1_y, P1_z, S1_x, S1_y, S1_z,
+    P2_x, P2_y, P2_z, S2_x, S2_y, S2_z
 }
 
 initial_data QC0 {
-  spectral {
-    system = SpectralTwoPunctureHamiltonian3D
-    coordinate_map = two_puncture
-    resolution = [10, 10, 16]
-    basis = [chebyshev, chebyshev, fourier]
-    coordinate_parameters = [b]
-    unknown_map = linear_boundary
-    unknown_map_parameters = [0, 1, 1]
-    field_projector = two_puncture_inversion_even
-    reconstruction = two_puncture_bssn
+    spectral {
+        system = SpectralTwoPunctureHamiltonian3D
+        coordinate_map = two_puncture
+        resolution = [10, 10, 16]
+        basis = [chebyshev, chebyshev, fourier]
+        coordinate_parameters = [b]
+        unknown_map = linear_boundary
+        unknown_map_parameters = [0, 1, 1]
+        field_projector = two_puncture_inversion_even
+        reconstruction = two_puncture_bssn
 
-    parameter b = 1.168642873
-    parameter m1 = 0.453
-    parameter m2 = 0.453
-    parameter p1x = 0
-    parameter p1y = 0.3331917498
-    parameter p1z = 0
-    parameter s1x = 0
-    parameter s1y = 0
-    parameter s1z = 0
-    parameter p2x = 0
-    parameter p2y = -0.3331917498
-    parameter p2z = 0
-    parameter s2x = 0
-    parameter s2y = 0
-    parameter s2z = 0
+        parameter b = 1.168642873
+        parameter m1 = 0.453
+        parameter m2 = 0.453
 
-    solve {
-      nonlinear = newton
-      linear = gmres
-      tolerance = 2e-8
-      max_iterations = 16
-      linear_tolerance = 1e-9
-      linear_relative_tolerance = 2e-2
-      max_linear_iterations = 1024
-      restart = 64
-      preconditioner = mapped_fd_laplacian_shift
-      preconditioner_sweeps = 12
-      jvp_relative_step = 2e-6
-      jvp_absolute_step = 1e-8
+        parameter P1_x = 0
+        parameter P1_y = 0.3331917498
+        parameter P1_z = 0
+
+        parameter S1_x = 0
+        parameter S1_y = 0
+        parameter S1_z = 0
+
+        parameter P2_x = 0
+        parameter P2_y = -0.3331917498
+        parameter P2_z = 0
+
+        parameter S2_x = 0
+        parameter S2_y = 0
+        parameter S2_z = 0
+
+        solve {
+            nonlinear = newton
+            linear = gmres
+            tolerance = 2e-8
+            max_iterations = 16
+            linear_tolerance = 1e-9
+            linear_relative_tolerance = 2e-2
+            max_linear_iterations = 1024
+            restart = 64
+            preconditioner = mapped_fd_multigrid
+            preconditioner_sweeps = 6
+            jvp_relative_step = 2e-6
+            jvp_absolute_step = 1e-8
+        }
     }
-  }
 }
 
 simulation {
-  coordinates = cartesian
-  dimension = 3
-  resolution = [32,32,32]
+    coordinates = cartesian
+    dimension = 3
+    resolution = [256,256,256]
 
-  time {
-    dt = 1.0
-    integrator = euler
-  }
+    time {
+        dt = 1.0
+        integrator = euler
+    }
 
-  spatial {
-    scheme = spectral
-    derivative = centered
-    order = 0
-  }
+    spatial {
+        scheme = spectral
+        derivative = centered
+        order = 0
+    }
 }
 
 constraints SpectralTwoPunctureHamiltonian3D {
-  dx1 = x - b
-  dy1 = y
-  dz1 = z
-  r1 = sqrt(dx1*dx1 + dy1*dy1 + dz1*dz1)
-  ir1 = 1.0 / r1
-  ir12 = ir1 * ir1
-  ir13 = ir12 * ir1
-  n1x = dx1 * ir1
-  n1y = dy1 * ir1
-  n1z = dz1 * ir1
-  p1n = p1x*n1x + p1y*n1y + p1z*n1z
-  s1cnx = s1y*n1z - s1z*n1y
-  s1cny = s1z*n1x - s1x*n1z
-  s1cnz = s1x*n1y - s1y*n1x
-  p1fac = 1.5 * ir12
-  s1fac = 3.0 * ir13
-  a1xx =
-      p1fac*(2.0*p1x*n1x - (1.0-n1x*n1x)*p1n)
-      + s1fac*(2.0*s1cnx*n1x)
-  a1xy =
-      p1fac*(p1x*n1y + p1y*n1x + n1x*n1y*p1n)
-      + s1fac*(s1cnx*n1y + s1cny*n1x)
-  a1xz =
-      p1fac*(p1x*n1z + p1z*n1x + n1x*n1z*p1n)
-      + s1fac*(s1cnx*n1z + s1cnz*n1x)
-  a1yy =
-      p1fac*(2.0*p1y*n1y - (1.0-n1y*n1y)*p1n)
-      + s1fac*(2.0*s1cny*n1y)
-  a1yz =
-      p1fac*(p1y*n1z + p1z*n1y + n1y*n1z*p1n)
-      + s1fac*(s1cny*n1z + s1cnz*n1y)
-  a1zz =
-      p1fac*(2.0*p1z*n1z - (1.0-n1z*n1z)*p1n)
-      + s1fac*(2.0*s1cnz*n1z)
 
-  dx2 = x + b
-  dy2 = y
-  dz2 = z
-  r2 = sqrt(dx2*dx2 + dy2*dy2 + dz2*dz2)
-  ir2 = 1.0 / r2
-  ir22 = ir2 * ir2
-  ir23 = ir22 * ir2
-  n2x = dx2 * ir2
-  n2y = dy2 * ir2
-  n2z = dz2 * ir2
-  p2n = p2x*n2x + p2y*n2y + p2z*n2z
-  s2cnx = s2y*n2z - s2z*n2y
-  s2cny = s2z*n2x - s2x*n2z
-  s2cnz = s2x*n2y - s2y*n2x
-  p2fac = 1.5 * ir22
-  s2fac = 3.0 * ir23
-  a2xx =
-      p2fac*(2.0*p2x*n2x - (1.0-n2x*n2x)*p2n)
-      + s2fac*(2.0*s2cnx*n2x)
-  a2xy =
-      p2fac*(p2x*n2y + p2y*n2x + n2x*n2y*p2n)
-      + s2fac*(s2cnx*n2y + s2cny*n2x)
-  a2xz =
-      p2fac*(p2x*n2z + p2z*n2x + n2x*n2z*p2n)
-      + s2fac*(s2cnx*n2z + s2cnz*n2x)
-  a2yy =
-      p2fac*(2.0*p2y*n2y - (1.0-n2y*n2y)*p2n)
-      + s2fac*(2.0*s2cny*n2y)
-  a2yz =
-      p2fac*(p2y*n2z + p2z*n2y + n2y*n2z*p2n)
-      + s2fac*(s2cny*n2z + s2cnz*n2y)
-  a2zz =
-      p2fac*(2.0*p2z*n2z - (1.0-n2z*n2z)*p2n)
-      + s2fac*(2.0*s2cnz*n2z)
+    # -------------------------------------------------------------------------
+    # Puncture 1
+    #
+    # Position:
+    #     C1 = (+b, 0, 0)
+    #
+    # r1^i = x^i - C1^i
+    # n1^i = r1^i / r1
+    # -------------------------------------------------------------------------
 
-  axx = a1xx + a2xx
-  axy = a1xy + a2xy
-  axz = a1xz + a2xz
-  ayy = a1yy + a2yy
-  ayz = a1yz + a2yz
-  azz = a1zz + a2zz
-  A2 =
-      axx*axx + ayy*ayy + azz*azz
-      + 2.0*(axy*axy + axz*axz + ayz*ayz)
+    r1_x = x - b
+    r1_y = y
+    r1_z = z
 
-  psi = 1.0 + 0.5*m1*ir1 + 0.5*m2*ir2 + U
-  psi2 = psi * psi
-  psi4 = psi2 * psi2
-  psi7 = psi4 * psi2 * psi
-  Hlocal = laplacian(U) + 0.125 * A2 / psi7
+    r1 = sqrt(r1_x*r1_x + r1_y*r1_y + r1_z*r1_z)
 
-  residual H = Hlocal
+    inv_r1 = 1.0 / r1
+    inv_r1_sq = inv_r1 * inv_r1
+    inv_r1_cu = inv_r1_sq * inv_r1
+
+    n1_x = r1_x * inv_r1
+    n1_y = r1_y * inv_r1
+    n1_z = r1_z * inv_r1
+
+    # P1.n1
+
+    P1_dot_n1 = P1_x*n1_x + P1_y*n1_y + P1_z*n1_z
+
+    # S1 x n1
+
+    S1_cross_n1_x = S1_y*n1_z - S1_z*n1_y
+    S1_cross_n1_y = S1_z*n1_x - S1_x*n1_z
+    S1_cross_n1_z = S1_x*n1_y - S1_y*n1_x
+
+    # Bowen-York coefficients:
+    #
+    # A_P^{ij} = 3/(2*r^2) * [P^i*n^j + P^j*n^i - (delta^{ij} - n^i*n^j)*(P.n)]
+    #
+    # A_S^{ij} = 3/r^3 * [(S x n)^i*n^j + (S x n)^j*n^i]
+
+    P1_factor = 1.5 * inv_r1_sq
+    S1_factor = 3.0 * inv_r1_cu
+
+    A1_xx = P1_factor*(2.0*P1_x*n1_x - (1.0 - n1_x*n1_x)*P1_dot_n1) + S1_factor*(2.0*S1_cross_n1_x*n1_x)
+
+    A1_xy = P1_factor*(P1_x*n1_y + P1_y*n1_x + n1_x*n1_y*P1_dot_n1) + S1_factor*(S1_cross_n1_x*n1_y + S1_cross_n1_y*n1_x)
+
+    A1_xz = P1_factor*(P1_x*n1_z + P1_z*n1_x + n1_x*n1_z*P1_dot_n1) + S1_factor*(S1_cross_n1_x*n1_z + S1_cross_n1_z*n1_x)
+
+    A1_yy = P1_factor*(2.0*P1_y*n1_y - (1.0 - n1_y*n1_y)*P1_dot_n1) + S1_factor*(2.0*S1_cross_n1_y*n1_y)
+
+    A1_yz = P1_factor*(P1_y*n1_z + P1_z*n1_y + n1_y*n1_z*P1_dot_n1) + S1_factor*(S1_cross_n1_y*n1_z + S1_cross_n1_z*n1_y)
+
+    A1_zz = P1_factor*(2.0*P1_z*n1_z - (1.0 - n1_z*n1_z)*P1_dot_n1) + S1_factor*(2.0*S1_cross_n1_z*n1_z)
+
+
+    # -------------------------------------------------------------------------
+    # Puncture 2
+    #
+    # Position:
+    #     C2 = (-b, 0, 0)
+    #
+    # r2^i = x^i - C2^i
+    # n2^i = r2^i / r2
+    # -------------------------------------------------------------------------
+
+    r2_x = x + b
+    r2_y = y
+    r2_z = z
+
+    r2 = sqrt(r2_x*r2_x + r2_y*r2_y + r2_z*r2_z)
+
+    inv_r2 = 1.0 / r2
+    inv_r2_sq = inv_r2 * inv_r2
+    inv_r2_cu = inv_r2_sq * inv_r2
+
+    n2_x = r2_x * inv_r2
+    n2_y = r2_y * inv_r2
+    n2_z = r2_z * inv_r2
+
+    # P2.n2
+
+    P2_dot_n2 = P2_x*n2_x + P2_y*n2_y + P2_z*n2_z
+
+    # S2 x n2
+
+    S2_cross_n2_x = S2_y*n2_z - S2_z*n2_y
+    S2_cross_n2_y = S2_z*n2_x - S2_x*n2_z
+    S2_cross_n2_z = S2_x*n2_y - S2_y*n2_x
+
+    P2_factor = 1.5 * inv_r2_sq
+    S2_factor = 3.0 * inv_r2_cu
+
+    A2_xx = P2_factor*(2.0*P2_x*n2_x - (1.0 - n2_x*n2_x)*P2_dot_n2) + S2_factor*(2.0*S2_cross_n2_x*n2_x)
+
+    A2_xy = P2_factor*(P2_x*n2_y + P2_y*n2_x + n2_x*n2_y*P2_dot_n2) + S2_factor*(S2_cross_n2_x*n2_y + S2_cross_n2_y*n2_x)
+
+    A2_xz = P2_factor*(P2_x*n2_z + P2_z*n2_x + n2_x*n2_z*P2_dot_n2) + S2_factor*(S2_cross_n2_x*n2_z + S2_cross_n2_z*n2_x)
+
+    A2_yy = P2_factor*(2.0*P2_y*n2_y - (1.0 - n2_y*n2_y)*P2_dot_n2) + S2_factor*(2.0*S2_cross_n2_y*n2_y)
+
+    A2_yz = P2_factor*(P2_y*n2_z + P2_z*n2_y + n2_y*n2_z*P2_dot_n2) + S2_factor*(S2_cross_n2_y*n2_z + S2_cross_n2_z*n2_y)
+
+    A2_zz = P2_factor*(2.0*P2_z*n2_z - (1.0 - n2_z*n2_z)*P2_dot_n2) + S2_factor*(2.0*S2_cross_n2_z*n2_z)
+
+
+    # -------------------------------------------------------------------------
+    # Total conformal trace-free extrinsic curvature
+    #
+    # Atilde^{ij} = Atilde_1^{ij} + Atilde_2^{ij}
+    # -------------------------------------------------------------------------
+
+    A_xx = A1_xx + A2_xx
+    A_xy = A1_xy + A2_xy
+    A_xz = A1_xz + A2_xz
+    A_yy = A1_yy + A2_yy
+    A_yz = A1_yz + A2_yz
+    A_zz = A1_zz + A2_zz
+
+
+    # -------------------------------------------------------------------------
+    # Flat conformal contraction
+    #
+    # Atilde_sq = Atilde_ij Atilde^ij
+    #
+    # Since gamma_tilde_ij = delta_ij:
+    #
+    # Atilde_sq = A_xx^2 + A_yy^2 + A_zz^2 + 2*(A_xy^2 + A_xz^2 + A_yz^2)
+    #
+    # The total tensor is contracted only after adding both puncture
+    # contributions, so the physical cross terms are retained.
+    # -------------------------------------------------------------------------
+
+    Atilde_sq = A_xx*A_xx + A_yy*A_yy + A_zz*A_zz + 2.0*(A_xy*A_xy + A_xz*A_xz + A_yz*A_yz)
+
+
+    # -------------------------------------------------------------------------
+    # Puncture conformal factor
+    #
+    # psi = 1 + m1/(2*r1) + m2/(2*r2) + U
+    #
+    # The singular Brill-Lindquist pieces are harmonic away from the
+    # punctures. U is the regular correction solved by the Hamiltonian
+    # constraint.
+    # -------------------------------------------------------------------------
+
+    psi = 1.0 + 0.5*m1*inv_r1 + 0.5*m2*inv_r2 + U
+
+    psi_sq = psi * psi
+    psi_4 = psi_sq * psi_sq
+    psi_7 = psi_4 * psi_sq * psi
+
+
+    # -------------------------------------------------------------------------
+    # Vacuum Hamiltonian constraint
+    #
+    # For conformally flat Bowen-York data with maximal slicing K = 0:
+    #
+    # Delta psi + (1/8) Atilde_ij Atilde^ij psi^(-7) = 0
+    #
+    # Away from the punctures:
+    #
+    # Delta[1 + m1/(2*r1) + m2/(2*r2)] = 0
+    #
+    # therefore:
+    #
+    # Delta U + (1/8) Atilde_ij Atilde^ij psi^(-7) = 0
+    # -------------------------------------------------------------------------
+
+    hamiltonian_residual = laplacian(U) + 0.125 * Atilde_sq / psi_7
+
+    residual H = hamiltonian_residual
 }

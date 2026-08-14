@@ -3352,9 +3352,11 @@ initial_data Standalone {
     reconstruction = none
     solve {
       nonlinear = newton
-      linear = direct
+      linear = gmres
       tolerance = 1e-10
       max_iterations = 4
+      preconditioner = mapped_fd_multigrid
+      preconditioner_sweeps = 2
     }
   }
 }
@@ -3372,6 +3374,12 @@ constraints IdentityResidual {
           tensorium::backend::SpatialScheme::Spectral) {
     std::cerr << "FAIL: standalone spectral initial_data did not synthesize "
                  "compiler grid metadata\n";
+    return false;
+  }
+  if (standalone.spectralInitialData->solve.preconditioner !=
+          "mapped_fd_multigrid" ||
+      standalone.spectralInitialData->solve.preconditionerSweeps != 2) {
+    std::cerr << "FAIL: standalone spectral multigrid metadata mismatch\n";
     return false;
   }
 
@@ -3396,10 +3404,10 @@ constraints IdentityResidual {
       initialData.reconstruction != "two_puncture_bssn" ||
       initialData.parameters.size() != 15 ||
       initialData.solve.linear != "gmres" ||
-      initialData.solve.preconditioner != "mapped_fd_laplacian_shift" ||
+      initialData.solve.preconditioner != "mapped_fd_multigrid" ||
       initialData.solve.maxLinearIterations != 1024 ||
       initialData.solve.restart != 64 ||
-      initialData.solve.preconditionerSweeps != 12) {
+      initialData.solve.preconditionerSweeps != 6) {
     std::cerr << "FAIL: QC0 spectral initial_data metadata mismatch\n";
     return false;
   }
@@ -3417,7 +3425,7 @@ constraints IdentityResidual {
       header.find("tensorium_spectral_initial_data[1]") ==
           std::string::npos ||
       header.find("\"two_puncture_bssn\"") == std::string::npos ||
-      header.find("\"mapped_fd_laplacian_shift\"") ==
+      header.find("\"mapped_fd_multigrid\"") ==
           std::string::npos ||
       header.find("0.33319174979999999") == std::string::npos) {
     std::cerr << "FAIL: generated host header lacks declarative QC0 metadata\n";
@@ -5498,6 +5506,244 @@ static bool testSpectralGridManufacturedPoisson() {
   return true;
 }
 
+static bool testSpectralTwoGridTransferPreservesResolvedModes() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::buildSpectralTensorGridTransfer;
+  using tensorium_mlir::runtime::makeSpectralMultigridCoarseGrid;
+  using tensorium_mlir::runtime::prolongSpectralField;
+  using tensorium_mlir::runtime::restrictSpectralField;
+
+  SpectralGrid3D fine(SpectralAxis::chebyshevZeros(9),
+                      SpectralAxis::chebyshevZeros(8),
+                      SpectralAxis::fourierPeriodic(12));
+  const SpectralGrid3D coarse = makeSpectralMultigridCoarseGrid(fine);
+  const auto transfer = buildSpectralTensorGridTransfer(fine, coarse);
+  const auto field = [](double a, double b, double phi) {
+    return 1.0 + 0.2 * a + 0.3 * b * b + 0.1 * std::cos(2.0 * phi) +
+           0.05 * a * b * std::sin(phi);
+  };
+
+  std::vector<double> fineValues(fine.size(), 0.0);
+  for (std::size_t k = 0; k < fine.n3(); ++k) {
+    for (std::size_t j = 0; j < fine.n2(); ++j) {
+      for (std::size_t i = 0; i < fine.n1(); ++i) {
+        const auto point = fine.point(i, j, k);
+        fineValues[point.index] = field(point.x1, point.x2, point.x3);
+      }
+    }
+  }
+
+  const auto coarseValues = restrictSpectralField(transfer, fineValues);
+  double restrictionError = 0.0;
+  for (std::size_t k = 0; k < coarse.n3(); ++k) {
+    for (std::size_t j = 0; j < coarse.n2(); ++j) {
+      for (std::size_t i = 0; i < coarse.n1(); ++i) {
+        const auto point = coarse.point(i, j, k);
+        restrictionError =
+            std::max(restrictionError,
+                     std::abs(coarseValues[point.index] -
+                              field(point.x1, point.x2, point.x3)));
+      }
+    }
+  }
+
+  const auto prolonged = prolongSpectralField(transfer, coarseValues);
+  double roundTripError = 0.0;
+  for (std::size_t point = 0; point < fine.size(); ++point)
+    roundTripError =
+        std::max(roundTripError, std::abs(prolonged[point] - fineValues[point]));
+
+  if (coarse.n1() != 5 || coarse.n2() != 4 || coarse.n3() != 6 ||
+      restrictionError > 2.0e-12 || roundTripError > 3.0e-12) {
+    std::cerr << "FAIL: spectral two-grid transfer extents=" << coarse.n1()
+              << 'x' << coarse.n2() << 'x' << coarse.n3()
+              << " restriction=" << restrictionError
+              << " round-trip=" << roundTripError << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testSpectralMappedTwoGridReducesSparseResidual() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::SpectralLinearPreconditioner;
+  using tensorium_mlir::runtime::SpectralPreconditionerKind;
+  using tensorium_mlir::runtime::SpectralResidualProblem;
+  using tensorium_mlir::runtime::applySpectralPreconditioner;
+  using tensorium_mlir::runtime::applySpectralSparseMatrix;
+  using tensorium_mlir::runtime::buildSpectralScalarPreconditioner;
+  using tensorium_mlir::runtime::solveSpectralRestartedGMRES;
+  using tensorium_mlir::runtime::spectralSparseResidual;
+  using tensorium_mlir::runtime::spectralVectorEuclideanNorm;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(9),
+                      SpectralAxis::chebyshevZeros(8),
+                      SpectralAxis::fourierPeriodic(12));
+  SpectralResidualProblem problem;
+  problem.grid = &grid;
+
+  SpectralEllipticSolveOptions options;
+  options.gmresPreconditioner =
+      SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid;
+  options.preconditionerLaplacianShift = -100.0;
+  options.preconditionerMultigridPreSweeps = 2;
+  options.preconditionerMultigridPostSweeps = 2;
+  options.preconditionerMultigridRelaxationOmega = 0.25;
+  options.preconditionerPivotTolerance = 1.0e-12;
+
+  SpectralLinearPreconditioner preconditioner;
+  std::vector<double> state(grid.size(), 0.0);
+  if (!buildSpectralScalarPreconditioner(problem, state, options,
+                                         preconditioner) ||
+      preconditioner.multigridBlocks.size() != 1) {
+    std::cerr << "FAIL: spectral two-grid preconditioner setup failed\n";
+    return false;
+  }
+
+  std::vector<double> exact(grid.size(), 0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const auto point = grid.point(i, j, k);
+        exact[point.index] =
+            0.7 + 0.1 * point.x1 + 0.08 * point.x2 * point.x2 +
+            0.04 * std::cos(point.x3);
+      }
+    }
+  }
+  const auto &fineMatrix = preconditioner.multigridBlocks[0].fineMatrix;
+  std::vector<double> rhs;
+  if (!applySpectralSparseMatrix(fineMatrix, exact, rhs)) {
+    std::cerr << "FAIL: spectral two-grid manufactured RHS failed\n";
+    return false;
+  }
+  const double initialNorm = spectralVectorEuclideanNorm(rhs);
+  std::vector<double> correction = rhs;
+  if (!applySpectralPreconditioner(preconditioner, correction,
+                                   options.preconditionerPivotTolerance)) {
+    std::cerr << "FAIL: spectral two-grid V-cycle failed\n";
+    return false;
+  }
+  std::vector<double> residual;
+  if (!spectralSparseResidual(fineMatrix, correction, rhs, residual)) {
+    std::cerr << "FAIL: spectral two-grid residual evaluation failed\n";
+    return false;
+  }
+  const double residualRatio =
+      spectralVectorEuclideanNorm(residual) / initialNorm;
+  if (!std::isfinite(residualRatio) || residualRatio > 0.5) {
+    std::cerr << "FAIL: spectral two-grid residual ratio=" << residualRatio
+              << "\n";
+    return false;
+  }
+
+  options.gmresMaxIterations = 32;
+  options.gmresRestart = 16;
+  options.gmresTolerance = 1.0e-11;
+  options.gmresRelativeTolerance = 1.0e-11;
+  const auto linear = solveSpectralRestartedGMRES(
+      grid.size(), rhs, options,
+      [&](const std::vector<double> &direction, std::vector<double> &out) {
+        return applySpectralSparseMatrix(fineMatrix, direction, out);
+      },
+      [&](std::vector<double> &direction) {
+        return applySpectralPreconditioner(
+            preconditioner, direction, options.preconditionerPivotTolerance);
+      });
+  if (!linear.converged || linear.solution.size() != grid.size()) {
+    std::cerr << "FAIL: FGMRES did not converge with spectral two-grid; "
+              << "iterations=" << linear.iterations
+              << " residual=" << linear.residualL2 << "\n";
+    return false;
+  }
+  return true;
+}
+
+static bool testTwoPunctureMappedTwoGridReducesSparseResidual() {
+  using tensorium_mlir::runtime::SpectralAxis;
+  using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
+  using tensorium_mlir::runtime::SpectralGrid3D;
+  using tensorium_mlir::runtime::SpectralLinearPreconditioner;
+  using tensorium_mlir::runtime::SpectralPreconditionerKind;
+  using tensorium_mlir::runtime::SpectralResidualProblem;
+  using tensorium_mlir::runtime::applySpectralPreconditioner;
+  using tensorium_mlir::runtime::applySpectralSparseMatrix;
+  using tensorium_mlir::runtime::buildSpectralScalarPreconditioner;
+  using tensorium_mlir::runtime::makeLinearBoundaryFactorUnknownMap;
+  using tensorium_mlir::runtime::makeTwoPunctureCoordinateMap;
+  using tensorium_mlir::runtime::makeTwoPunctureDerivativeMap;
+  using tensorium_mlir::runtime::spectralSparseResidual;
+  using tensorium_mlir::runtime::spectralVectorEuclideanNorm;
+
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(7),
+                      SpectralAxis::chebyshevZeros(7),
+                      SpectralAxis::fourierPeriodic(12));
+  const std::array<double, 1> coordinateParameters{1.4};
+  const std::array<double, 3> unknownMapParameters{0.0, 1.0, 1.0};
+  SpectralResidualProblem problem;
+  problem.grid = &grid;
+  problem.coordinateMap = makeTwoPunctureCoordinateMap();
+  problem.coordinateParams = coordinateParameters;
+  problem.derivativeMap = makeTwoPunctureDerivativeMap();
+  problem.unknownMap = makeLinearBoundaryFactorUnknownMap();
+  problem.unknownMapParams = unknownMapParameters;
+
+  SpectralEllipticSolveOptions options;
+  options.gmresPreconditioner =
+      SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid;
+  options.preconditionerLaplacianShift = 0.0;
+  options.preconditionerMultigridPreSweeps = 2;
+  options.preconditionerMultigridPostSweeps = 2;
+  options.preconditionerMultigridRelaxationOmega = 1.0;
+  options.preconditionerPivotTolerance = 1.0e-12;
+
+  SpectralLinearPreconditioner preconditioner;
+  std::vector<double> state(grid.size(), 0.0);
+  if (!buildSpectralScalarPreconditioner(problem, state, options,
+                                         preconditioner) ||
+      preconditioner.multigridBlocks.size() != 1) {
+    std::cerr << "FAIL: two-puncture mapped two-grid setup failed\n";
+    return false;
+  }
+
+  std::vector<double> exact(grid.size(), 0.0);
+  for (std::size_t k = 0; k < grid.n3(); ++k) {
+    for (std::size_t j = 0; j < grid.n2(); ++j) {
+      for (std::size_t i = 0; i < grid.n1(); ++i) {
+        const auto point = grid.point(i, j, k);
+        exact[point.index] =
+            0.1 + 0.02 * point.x1 + 0.015 * point.x2 * point.x2 +
+            0.01 * std::cos(point.x3);
+      }
+    }
+  }
+  const auto &fineMatrix = preconditioner.multigridBlocks[0].fineMatrix;
+  std::vector<double> rhs;
+  if (!applySpectralSparseMatrix(fineMatrix, exact, rhs))
+    return false;
+  const double initialNorm = spectralVectorEuclideanNorm(rhs);
+  std::vector<double> correction = rhs;
+  if (!applySpectralPreconditioner(preconditioner, correction,
+                                   options.preconditionerPivotTolerance)) {
+    std::cerr << "FAIL: two-puncture mapped two-grid V-cycle failed\n";
+    return false;
+  }
+  std::vector<double> residual;
+  if (!spectralSparseResidual(fineMatrix, correction, rhs, residual))
+    return false;
+  const double residualRatio =
+      spectralVectorEuclideanNorm(residual) / initialNorm;
+  if (!std::isfinite(residualRatio) || residualRatio > 0.7) {
+    std::cerr << "FAIL: two-puncture mapped two-grid residual ratio="
+              << residualRatio << "\n";
+    return false;
+  }
+  return true;
+}
+
 static bool testSpectralFlexibleGMRESStoresPreconditionedBasis() {
   using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
   using tensorium_mlir::runtime::solveSpectralRestartedGMRES;
@@ -7492,6 +7738,12 @@ int main() {
        &testGeneratedHostStorageEulerUpdatePairs},
       {"testSpectralGridManufacturedPoisson",
        &testSpectralGridManufacturedPoisson},
+      {"testSpectralTwoGridTransferPreservesResolvedModes",
+       &testSpectralTwoGridTransferPreservesResolvedModes},
+      {"testSpectralMappedTwoGridReducesSparseResidual",
+       &testSpectralMappedTwoGridReducesSparseResidual},
+      {"testTwoPunctureMappedTwoGridReducesSparseResidual",
+       &testTwoPunctureMappedTwoGridReducesSparseResidual},
       {"testSpectralFlexibleGMRESStoresPreconditionedBasis",
        &testSpectralFlexibleGMRESStoresPreconditionedBasis},
       {"testSpectralAxisBufferedDerivativeReuse",
