@@ -355,6 +355,8 @@ struct SpectralEllipticSolveOptions {
   int preconditionerMultigridPostSweeps = 3;
   double preconditionerMultigridRelaxationOmega = 1.0;
   bool preconditionerMultigridUseLocalReaction = true;
+  int preconditionerMultigridMaxLevels = 8;
+  std::size_t preconditionerMultigridCoarsestPoints = 512;
   SpectralJacobianVectorProductOptions jvpOptions{};
 };
 

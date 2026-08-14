@@ -266,16 +266,26 @@ are deliberately omitted by this seven-point approximation; a wider stencil is
 required to represent them. No TwoPunctures residual term is hard-coded into
 this path.
 
-`MappedFiniteDifferenceMultigrid` is the first geometric two-grid extension of
-that operator. It coarsens every Chebyshev/Fourier axis, transfers fields with
-the corresponding tensor-product spectral interpolation, applies symmetric
-pre- and post-relaxation, and solves the Galerkin coarse correction `R A P`.
-The dense coarse LU is built once with the preconditioner and reused by every
-FGMRES application. At each Newton state, the compiled point JVP evaluates the
+`MappedFiniteDifferenceMultigrid` now builds a recursive geometric hierarchy.
+It coarsens every Chebyshev/Fourier axis until the terminal grid has at most 512
+points (or eight levels are reached), transfers fields with tensor-product
+spectral interpolation, and applies a V-cycle. The fine level uses symmetric
+mapped sparse relaxation. Intermediate Galerkin operators are applied
+matrix-free through `R A P` and use safeguarded minimum-residual smoothing;
+coarse corrections are damped when repeated spectral transfer exposes a nearly
+null direction. A sparse-relaxation candidate is retained as a fallback, which
+prevents a recursive cycle from degrading the validated fine-level
+preconditioner.
+
+The dense LU is now restricted to the terminal grid and reused by every FGMRES
+application. Two-level hierarchies retain the exact Galerkin coarse operator;
+deeper hierarchies use a mapped finite-difference rediscretization at the
+terminal level to avoid the ill-conditioned dense operator produced by repeated
+spectral `R A P`. At each Newton state, the compiled point JVP evaluates the
 nonlinear reaction derivative. After accounting for the unknown map, this
-`O(N)` diagonal correction is inserted into the fine operator before
-constructing `R A P`; no global JVP columns are assembled. Kernels without the
-ABI v2 JVP callback retain the previous local finite-difference estimate.
+`O(N)` diagonal correction is inserted into the fine operator and restricted
+through the hierarchy; no global JVP columns are assembled. Kernels without the
+ABI v2 JVP callback retain the local finite-difference estimate.
 
 With the sparse mapped preconditioner, the physical regression now includes a
 `7x7x12` grid with 588 unknowns:
@@ -293,12 +303,13 @@ puncture-mass change:                    8.36e-4 -> 2.49e-4
 ```
 
 This removes dense Jacobian storage and the `N` residual-JVP setup calls of the
-previous diagonal preconditioner. The two-grid prototype reduces Krylov work
-by about 22% on this case. After making the constrained residual and JVP
-projection consistent, it also converges on the QC0 probes through
-`16x16x28`. It is still not recursive: its dense coarse LU becomes the next
-scaling limit well before production-oriented grids. Production-scale
-recursive, distributed, or algebraic multigrid remains open work.
+previous diagonal preconditioner. The original two-grid prototype reduced
+Krylov work by about 22% on this case. The current implementation preserves
+that two-level path on small grids and automatically adds levels once the first
+coarse grid exceeds the terminal-LU limit. For example, QC0 uses
+`14x14x24 -> 7x7x12 -> 4x4x6`; the dense solve therefore has 96 unknowns rather
+than 588. Distributed, algebraic, or multidomain preconditioning remains open
+work, but the first dense-coarse scaling barrier is removed.
 
 ## TP-7: Published unequal-mass case and Cartesian BSSN handoff
 
@@ -399,13 +410,13 @@ performs the Cartesian BSSN handoff, and writes both the requested CSV and
 
 ```text
 Newton steps:                  4
-cumulative FGMRES iterations: 98
-projected residual L2:         9.50e-9
-projected residual max:        2.79e-7
-raw residual L2:               9.50e-9
-raw residual max:              2.79e-7
-projected-out residual L2:     3.47e-15
-projected-out residual max:    1.14e-13
+cumulative FGMRES iterations: 94
+projected residual L2:         9.37e-9
+projected residual max:        1.64e-7
+raw residual L2:               9.37e-9
+raw residual max:              1.64e-7
+projected-out residual L2:     2.69e-15
+projected-out residual max:    5.68e-14
 ADM energy:                    1.00787483
 ADM angular momentum Jz:       0.77876433
 puncture ADM masses:           0.51680444, 0.51680444
@@ -421,8 +432,8 @@ sequence is:
 grid       Newton  FGMRES  projected L2  raw L2    projected-out L2  ADM energy
 10x10x16       4      58       3.32e-9    3.32e-9          1.75e-13  1.00792629
 12x12x20       4      70       3.31e-9    3.31e-9          2.01e-16  1.00787551
-14x14x24       4      98       9.50e-9    9.50e-9          3.47e-15  1.00787483
-16x16x28       7     138       1.88e-8    1.88e-8          4.83e-13  1.00787650
+14x14x24       4      94       9.37e-9    9.37e-9          2.69e-15  1.00787477
+16x16x28       9     170       1.74e-8    1.74e-8          4.84e-13  1.00787650
 ```
 
 The projected equation meets the configured `2e-8` L2 criterion at every
@@ -440,8 +451,11 @@ agree to round-off.
 This resolves the symmetry-diagnostic defect, but not the production-scaling
 question. The accepted residual floor rises at `14x14x24` and `16x16x28`, and
 the current sequence is too short to demonstrate asymptotic spectral
-convergence at the punctures. Higher resolutions require a recursive coarse
-hierarchy and further regularity analysis rather than a looser tolerance.
+convergence at the punctures. The recursive hierarchy can run a `20x20x32`
+probe, but Newton reaches its 16-step limit at a `9.3e-8` residual. The next
+accuracy step is therefore coarse-to-fine continuation and further puncture
+regularity analysis rather than a larger dense coarse solve or a looser
+tolerance.
 
 The exported Cartesian `z=0` slice contains `u`, `psi`, `chi`, the
 pre-collapsed gauge seed `alpha=psi^-2`, the six independent components of
@@ -487,10 +501,10 @@ an external solver should call the SoA handoff API on its own full Cartesian
 grid. The spectral resolution and solver policy are part of the DSL `spectral`
 block, so changing a physical case never requires editing or rebuilding a C++
 runner. `TP_RESOLUTION` is an experimental runtime override for refinement
-studies. The `14x14x24` configuration is the validated default. The growing
-raw/projected residual gap and the dense coarse solve are why
-production-resolution scaling remains explicit open work rather than an
-implied capability.
+studies. The `14x14x24` configuration is the validated default. Raw/projected
+symmetry is now controlled and the coarse hierarchy is recursive, but the
+fine-grid puncture residual floor is why production-resolution scaling remains
+explicit open work rather than an implied capability.
 
 ## Runtime performance controls
 
@@ -524,13 +538,14 @@ reaction term, while retaining centered finite differences as an ABI fallback.
 On the nonlinear two-puncture regression, the generated `Jv` agrees with the
 fallback centered difference to `8.4e-11` maximum relative error.
 
-On the QC0 sequence, the Jacobian-aware two-grid solve takes about `0.19 s` at
-`10x10x16`, `0.48 s` at `12x12x20`, `1.29 s` at `14x14x24`, and `3.94 s` at
+On the QC0 sequence, the Jacobian-aware multigrid solve takes about `0.15 s` at
+`10x10x16`, `0.37 s` at `12x12x20`, `1.12 s` at `14x14x24`, and `3.43 s` at
 `16x16x28` on the current development machine. These are single-machine
 engineering measurements, not a production-scaling claim. The raw and
-projected constraints now converge at every listed level, but the rising fine-
-grid residual floor and dense coarse LU remain numerical-validation and
-algorithmic-scaling issues before targeting `32x32x48` and above.
+projected constraints now converge at every listed level, and the recursive
+hierarchy removes the first dense-coarse memory barrier. The rising fine-grid
+residual floor remains the immediate numerical-validation issue before
+targeting `32x32x48` and above.
 
 ## What remains before production TwoPunctures
 
@@ -543,8 +558,8 @@ but it is still a small collocation regression. It does not yet provide:
 - production-resolution convergence of the published unequal-mass case and
   published full-solve spinning comparisons;
 - apparent-horizon masses or independent surface-integral charge checks;
-- algebraic multigrid, distributed sparse solves, or multidomain
-  preconditioning;
+- distributed sparse solves, algebraic alternatives, or multidomain
+  preconditioning for substantially larger grids;
 - a versioned C ABI or a concrete external-evolution-code adapter for the
   nonradial spectral solution;
 - additional coordinate-map, projector, and reconstruction registry entries
@@ -563,8 +578,8 @@ of vector/tensor components still need production-resolution validation.
 
 The production path is now:
 
-1. diagnose the QC0 raw/projected residual gap and replace the dense coarse LU
-   with a recursive hierarchy;
+1. add coarse-to-fine solution continuation and control the puncture residual
+   floor beyond `16x16x28`;
 2. validate the published unequal-mass case at production resolution and add a
    published spinning full-solve comparison;
 3. add apparent-horizon or independent surface-integral diagnostics;

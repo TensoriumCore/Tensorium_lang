@@ -5788,7 +5788,7 @@ static bool testSpectralTwoGridTransferPreservesResolvedModes() {
   return true;
 }
 
-static bool testSpectralMappedTwoGridReducesSparseResidual() {
+static bool testSpectralMappedMultigridReducesSparseResidual() {
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
   using tensorium_mlir::runtime::SpectralGrid3D;
@@ -5821,8 +5821,10 @@ static bool testSpectralMappedTwoGridReducesSparseResidual() {
   std::vector<double> state(grid.size(), 0.0);
   if (!buildSpectralScalarPreconditioner(problem, state, options,
                                          preconditioner) ||
-      preconditioner.multigridBlocks.size() != 1) {
-    std::cerr << "FAIL: spectral two-grid preconditioner setup failed\n";
+      preconditioner.multigridBlocks.size() != 1 ||
+      preconditioner.multigridBlocks[0].levels.size() != 2 ||
+      preconditioner.multigridBlocks[0].levels.back().matrix.size != 120) {
+    std::cerr << "FAIL: spectral multigrid hierarchy setup failed\n";
     return false;
   }
 
@@ -5837,28 +5839,29 @@ static bool testSpectralMappedTwoGridReducesSparseResidual() {
       }
     }
   }
-  const auto &fineMatrix = preconditioner.multigridBlocks[0].fineMatrix;
+  const auto &fineMatrix =
+      preconditioner.multigridBlocks[0].levels.front().matrix;
   std::vector<double> rhs;
   if (!applySpectralSparseMatrix(fineMatrix, exact, rhs)) {
-    std::cerr << "FAIL: spectral two-grid manufactured RHS failed\n";
+    std::cerr << "FAIL: spectral multigrid manufactured RHS failed\n";
     return false;
   }
   const double initialNorm = spectralVectorEuclideanNorm(rhs);
   std::vector<double> correction = rhs;
   if (!applySpectralPreconditioner(preconditioner, correction,
                                    options.preconditionerPivotTolerance)) {
-    std::cerr << "FAIL: spectral two-grid V-cycle failed\n";
+    std::cerr << "FAIL: spectral recursive multigrid V-cycle failed\n";
     return false;
   }
   std::vector<double> residual;
   if (!spectralSparseResidual(fineMatrix, correction, rhs, residual)) {
-    std::cerr << "FAIL: spectral two-grid residual evaluation failed\n";
+    std::cerr << "FAIL: spectral multigrid residual evaluation failed\n";
     return false;
   }
   const double residualRatio =
       spectralVectorEuclideanNorm(residual) / initialNorm;
   if (!std::isfinite(residualRatio) || residualRatio > 0.5) {
-    std::cerr << "FAIL: spectral two-grid residual ratio=" << residualRatio
+    std::cerr << "FAIL: spectral multigrid residual ratio=" << residualRatio
               << "\n";
     return false;
   }
@@ -5877,7 +5880,7 @@ static bool testSpectralMappedTwoGridReducesSparseResidual() {
             preconditioner, direction, options.preconditionerPivotTolerance);
       });
   if (!linear.converged || linear.solution.size() != grid.size()) {
-    std::cerr << "FAIL: FGMRES did not converge with spectral two-grid; "
+    std::cerr << "FAIL: FGMRES did not converge with recursive multigrid; "
               << "iterations=" << linear.iterations
               << " residual=" << linear.residualL2 << "\n";
     return false;
@@ -5885,7 +5888,7 @@ static bool testSpectralMappedTwoGridReducesSparseResidual() {
   return true;
 }
 
-static bool testTwoPunctureMappedTwoGridReducesSparseResidual() {
+static bool testTwoPunctureMappedMultigridReducesSparseResidual() {
   using tensorium_mlir::runtime::SpectralAxis;
   using tensorium_mlir::runtime::SpectralEllipticSolveOptions;
   using tensorium_mlir::runtime::SpectralGrid3D;
@@ -5901,9 +5904,9 @@ static bool testTwoPunctureMappedTwoGridReducesSparseResidual() {
   using tensorium_mlir::runtime::spectralSparseResidual;
   using tensorium_mlir::runtime::spectralVectorEuclideanNorm;
 
-  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(7),
-                      SpectralAxis::chebyshevZeros(7),
-                      SpectralAxis::fourierPeriodic(12));
+  SpectralGrid3D grid(SpectralAxis::chebyshevZeros(14),
+                      SpectralAxis::chebyshevZeros(14),
+                      SpectralAxis::fourierPeriodic(24));
   const std::array<double, 1> coordinateParameters{1.4};
   const std::array<double, 3> unknownMapParameters{0.0, 1.0, 1.0};
   SpectralResidualProblem problem;
@@ -5927,8 +5930,10 @@ static bool testTwoPunctureMappedTwoGridReducesSparseResidual() {
   std::vector<double> state(grid.size(), 0.0);
   if (!buildSpectralScalarPreconditioner(problem, state, options,
                                          preconditioner) ||
-      preconditioner.multigridBlocks.size() != 1) {
-    std::cerr << "FAIL: two-puncture mapped two-grid setup failed\n";
+      preconditioner.multigridBlocks.size() != 1 ||
+      preconditioner.multigridBlocks[0].levels.size() != 3 ||
+      preconditioner.multigridBlocks[0].levels.back().matrix.size != 96) {
+    std::cerr << "FAIL: two-puncture recursive multigrid setup failed\n";
     return false;
   }
 
@@ -5943,7 +5948,8 @@ static bool testTwoPunctureMappedTwoGridReducesSparseResidual() {
       }
     }
   }
-  const auto &fineMatrix = preconditioner.multigridBlocks[0].fineMatrix;
+  const auto &fineMatrix =
+      preconditioner.multigridBlocks[0].levels.front().matrix;
   std::vector<double> rhs;
   if (!applySpectralSparseMatrix(fineMatrix, exact, rhs))
     return false;
@@ -5951,7 +5957,7 @@ static bool testTwoPunctureMappedTwoGridReducesSparseResidual() {
   std::vector<double> correction = rhs;
   if (!applySpectralPreconditioner(preconditioner, correction,
                                    options.preconditionerPivotTolerance)) {
-    std::cerr << "FAIL: two-puncture mapped two-grid V-cycle failed\n";
+    std::cerr << "FAIL: two-puncture recursive multigrid V-cycle failed\n";
     return false;
   }
   std::vector<double> residual;
@@ -5960,7 +5966,7 @@ static bool testTwoPunctureMappedTwoGridReducesSparseResidual() {
   const double residualRatio =
       spectralVectorEuclideanNorm(residual) / initialNorm;
   if (!std::isfinite(residualRatio) || residualRatio > 0.7) {
-    std::cerr << "FAIL: two-puncture mapped two-grid residual ratio="
+    std::cerr << "FAIL: two-puncture mapped multigrid residual ratio="
               << residualRatio << "\n";
     return false;
   }
@@ -7969,10 +7975,10 @@ int main() {
        &testSpectralLocalReactionDiagonal},
       {"testSpectralTwoGridTransferPreservesResolvedModes",
        &testSpectralTwoGridTransferPreservesResolvedModes},
-      {"testSpectralMappedTwoGridReducesSparseResidual",
-       &testSpectralMappedTwoGridReducesSparseResidual},
-      {"testTwoPunctureMappedTwoGridReducesSparseResidual",
-       &testTwoPunctureMappedTwoGridReducesSparseResidual},
+      {"testSpectralMappedMultigridReducesSparseResidual",
+       &testSpectralMappedMultigridReducesSparseResidual},
+      {"testTwoPunctureMappedMultigridReducesSparseResidual",
+       &testTwoPunctureMappedMultigridReducesSparseResidual},
       {"testSpectralFlexibleGMRESStoresPreconditionedBasis",
        &testSpectralFlexibleGMRESStoresPreconditionedBasis},
       {"testSpectralAxisBufferedDerivativeReuse",

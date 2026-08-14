@@ -183,11 +183,15 @@ struct SpectralTensorGridTransfer3D {
   std::array<std::vector<double>, 3> prolongationMatrices;
 };
 
-struct SpectralTwoGridPreconditionerBlock {
-  SpectralSparseMatrix fineMatrix;
-  std::vector<double> coarseDenseMatrix;
-  SpectralDenseLUFactorization coarseFactorization;
-  SpectralTensorGridTransfer3D transfer;
+struct SpectralMultigridPreconditionerLevel {
+  SpectralSparseMatrix matrix;
+  SpectralTensorGridTransfer3D transferToCoarse;
+};
+
+struct SpectralMultigridPreconditionerBlock {
+  std::vector<SpectralMultigridPreconditionerLevel> levels;
+  std::vector<double> coarsestDenseMatrix;
+  SpectralDenseLUFactorization coarsestFactorization;
 };
 
 inline bool spectralPreconditionerRequested(
@@ -201,7 +205,7 @@ struct SpectralLinearPreconditioner {
   std::vector<std::vector<double>> denseBlocks;
   std::vector<std::vector<double>> modalBlocks;
   std::vector<SpectralSparseMatrix> sparseBlocks;
-  std::vector<SpectralTwoGridPreconditionerBlock> multigridBlocks;
+  std::vector<SpectralMultigridPreconditionerBlock> multigridBlocks;
   std::size_t blockSize = 0;
   std::size_t modalBlockSize = 0;
   std::array<std::size_t, 3> modalExtents{0, 0, 0};
@@ -851,41 +855,203 @@ inline bool solveSpectralSparseRelaxation(const SpectralSparseMatrix &matrix,
                                     pivotTolerance, solution);
 }
 
-inline bool applySpectralTwoGridVCycle(
-    const SpectralTwoGridPreconditionerBlock &multigrid,
-    std::span<const double> rhs, int preSweeps, int postSweeps, double omega,
-    double pivotTolerance, std::vector<double> &solution) {
-  const std::size_t coarseSize =
-      multigrid.transfer.coarseExtents[0] *
-      multigrid.transfer.coarseExtents[1] *
-      multigrid.transfer.coarseExtents[2];
-  if (rhs.size() != multigrid.fineMatrix.size || preSweeps <= 0 ||
-      postSweeps <= 0 ||
-      multigrid.coarseFactorization.size != coarseSize)
+inline bool applySpectralMultigridOperatorAtLevel(
+    const SpectralMultigridPreconditionerBlock &multigrid,
+    std::size_t levelIndex, std::span<const double> values,
+    std::vector<double> &result) {
+  if (levelIndex >= multigrid.levels.size() ||
+      values.size() != multigrid.levels[levelIndex].matrix.size)
+    return false;
+  if (levelIndex == 0) {
+    return applySpectralSparseMatrix(multigrid.levels.front().matrix, values,
+                                     result);
+  }
+
+  const auto &transfer =
+      multigrid.levels[levelIndex - 1].transferToCoarse;
+  const std::vector<double> fineValues =
+      prolongSpectralField(transfer, values);
+  std::vector<double> fineResult;
+  if (!applySpectralMultigridOperatorAtLevel(
+          multigrid, levelIndex - 1, fineValues, fineResult))
+    return false;
+  result = restrictSpectralField(transfer, fineResult);
+  return spectralVectorIsFinite(result);
+}
+
+// Repeated spectral restriction can make a rediscretized coarse relaxation
+// direction poorly scaled. Use a one-dimensional minimum-residual step on the
+// matrix-free Galerkin operator so every intermediate smoothing step is
+// non-increasing in the coarse residual norm.
+inline bool relaxSpectralGalerkinLevel(
+    const SpectralMultigridPreconditionerBlock &multigrid,
+    std::size_t levelIndex, std::span<const double> rhs, int sweeps,
+    bool resetSolution, std::vector<double> &solution) {
+  if (levelIndex == 0 || levelIndex >= multigrid.levels.size() ||
+      rhs.size() != multigrid.levels[levelIndex].matrix.size || sweeps <= 0)
+    return false;
+  if (resetSolution)
+    solution.assign(rhs.size(), 0.0);
+  if (solution.size() != rhs.size())
     return false;
 
-  if (!solveSpectralSparseRelaxation(multigrid.fineMatrix, rhs, preSweeps,
-                                     omega, pivotTolerance, solution))
+  std::vector<double> applied;
+  if (!applySpectralMultigridOperatorAtLevel(multigrid, levelIndex, solution,
+                                              applied))
     return false;
+  std::vector<double> residual(rhs.size(), 0.0);
+  for (std::size_t point = 0; point < rhs.size(); ++point)
+    residual[point] = rhs[point] - applied[point];
+
+  for (int sweep = 0; sweep < sweeps; ++sweep) {
+    const std::vector<double> correction = residual;
+    std::vector<double> appliedCorrection;
+    if (!applySpectralMultigridOperatorAtLevel(
+            multigrid, levelIndex, correction, appliedCorrection))
+      return false;
+    const double denominator =
+        spectralVectorDot(appliedCorrection, appliedCorrection);
+    if (!(denominator > 0.0) || !std::isfinite(denominator))
+      return false;
+    const double step =
+        spectralVectorDot(residual, appliedCorrection) / denominator;
+    if (!std::isfinite(step))
+      return false;
+    for (std::size_t point = 0; point < solution.size(); ++point)
+      solution[point] += step * correction[point];
+    for (std::size_t point = 0; point < residual.size(); ++point)
+      residual[point] -= step * appliedCorrection[point];
+    if (!spectralVectorIsFinite(solution) ||
+        !spectralVectorIsFinite(residual))
+      return false;
+  }
+  return true;
+}
+
+inline bool applySpectralMultigridVCycleAtLevel(
+    const SpectralMultigridPreconditionerBlock &multigrid,
+    std::size_t levelIndex, std::span<const double> rhs, int preSweeps,
+    int postSweeps, double omega, double pivotTolerance,
+    std::vector<double> &solution) {
+  if (levelIndex >= multigrid.levels.size())
+    return false;
+  const auto &level = multigrid.levels[levelIndex];
+  if (rhs.size() != level.matrix.size)
+    return false;
+
+  const bool isCoarsest = levelIndex + 1 == multigrid.levels.size();
+  if (isCoarsest) {
+    if (multigrid.coarsestFactorization.size != level.matrix.size)
+      return false;
+    return solveFactorizedDenseLinearSystem(
+        multigrid.coarsestFactorization, rhs, pivotTolerance, solution);
+  }
+  if (preSweeps <= 0 || postSweeps <= 0)
+    return false;
+
+  if (levelIndex == 0) {
+    if (!solveSpectralSparseRelaxation(level.matrix, rhs, preSweeps, omega,
+                                       pivotTolerance, solution))
+      return false;
+  } else if (!relaxSpectralGalerkinLevel(
+                 multigrid, levelIndex, rhs, preSweeps, true, solution)) {
+    return false;
+  }
   std::vector<double> fineResidual;
-  if (!spectralSparseResidual(multigrid.fineMatrix, solution, rhs,
-                              fineResidual))
+  std::vector<double> fineApplied;
+  if (!applySpectralMultigridOperatorAtLevel(multigrid, levelIndex, solution,
+                                              fineApplied))
     return false;
+  fineResidual.resize(rhs.size());
+  for (std::size_t point = 0; point < rhs.size(); ++point)
+    fineResidual[point] = rhs[point] - fineApplied[point];
   const std::vector<double> coarseRhs =
-      restrictSpectralField(multigrid.transfer, fineResidual);
+      restrictSpectralField(level.transferToCoarse, fineResidual);
   std::vector<double> coarseCorrection;
-  if (!solveFactorizedDenseLinearSystem(multigrid.coarseFactorization,
-                                        coarseRhs, pivotTolerance,
-                                        coarseCorrection))
+  if (!applySpectralMultigridVCycleAtLevel(
+          multigrid, levelIndex + 1, coarseRhs, preSweeps, postSweeps, omega,
+          pivotTolerance, coarseCorrection))
     return false;
   const std::vector<double> fineCorrection =
-      prolongSpectralField(multigrid.transfer, coarseCorrection);
+      prolongSpectralField(level.transferToCoarse, coarseCorrection);
   if (fineCorrection.size() != solution.size())
     return false;
+  double correctionStep = 1.0;
+  if (multigrid.levels.size() > 2) {
+    std::vector<double> appliedCorrection;
+    if (!applySpectralMultigridOperatorAtLevel(
+            multigrid, levelIndex, fineCorrection, appliedCorrection))
+      return false;
+    const double correctionDenominator =
+        spectralVectorDot(appliedCorrection, appliedCorrection);
+    if (!(correctionDenominator > 0.0) ||
+        !std::isfinite(correctionDenominator))
+      return false;
+    correctionStep = spectralVectorDot(fineResidual, appliedCorrection) /
+                     correctionDenominator;
+    if (!std::isfinite(correctionStep))
+      return false;
+  }
   for (std::size_t point = 0; point < solution.size(); ++point)
-    solution[point] += fineCorrection[point];
-  return relaxSpectralSparseInPlace(multigrid.fineMatrix, rhs, postSweeps,
-                                    omega, pivotTolerance, solution);
+    solution[point] += correctionStep * fineCorrection[point];
+  if (levelIndex == 0) {
+    return relaxSpectralSparseInPlace(level.matrix, rhs, postSweeps, omega,
+                                      pivotTolerance, solution);
+  }
+  return relaxSpectralGalerkinLevel(multigrid, levelIndex, rhs, postSweeps,
+                                    false, solution);
+}
+
+inline bool applySpectralMultigridVCycle(
+    const SpectralMultigridPreconditionerBlock &multigrid,
+    std::span<const double> rhs, int preSweeps, int postSweeps, double omega,
+    double pivotTolerance, std::vector<double> &solution) {
+  if (multigrid.levels.empty())
+    return false;
+  if (multigrid.levels.size() == 2) {
+    return applySpectralMultigridVCycleAtLevel(
+        multigrid, 0, rhs, preSweeps, postSweeps, omega, pivotTolerance,
+        solution);
+  }
+  // Deep spectral hierarchies can expose nearly-null transferred modes. FGMRES
+  // permits a variable preconditioner, so retain the recursive correction only
+  // when it beats the already validated fine sparse relaxation.
+  std::vector<double> multigridSolution;
+  const bool multigridSucceeded = applySpectralMultigridVCycleAtLevel(
+      multigrid, 0, rhs, preSweeps, postSweeps, omega, pivotTolerance,
+      multigridSolution);
+
+  std::vector<double> smoothedSolution;
+  if (!solveSpectralSparseRelaxation(
+          multigrid.levels.front().matrix, rhs, preSweeps + postSweeps, omega,
+          pivotTolerance, smoothedSolution))
+    return false;
+  std::vector<double> smoothedResidual;
+  if (!spectralSparseResidual(multigrid.levels.front().matrix,
+                              smoothedSolution, rhs, smoothedResidual))
+    return false;
+  const double smoothedNorm =
+      spectralVectorEuclideanNorm(smoothedResidual);
+
+  if (!multigridSucceeded) {
+    solution = std::move(smoothedSolution);
+    return true;
+  }
+  std::vector<double> multigridResidual;
+  if (!spectralSparseResidual(multigrid.levels.front().matrix,
+                              multigridSolution, rhs,
+                              multigridResidual)) {
+    solution = std::move(smoothedSolution);
+    return true;
+  }
+  const double multigridNorm =
+      spectralVectorEuclideanNorm(multigridResidual);
+  if (!std::isfinite(multigridNorm) || multigridNorm > smoothedNorm) {
+    solution = std::move(smoothedSolution);
+  } else {
+    solution = std::move(multigridSolution);
+  }
+  return spectralVectorIsFinite(solution);
 }
 
 inline bool applySpectralPreconditioner(
@@ -942,7 +1108,7 @@ inline bool applySpectralPreconditioner(
          block < preconditioner.multigridBlocks.size(); ++block) {
       const std::size_t offset = block * preconditioner.blockSize;
       std::vector<double> solution;
-      if (!applySpectralTwoGridVCycle(
+      if (!applySpectralMultigridVCycle(
               preconditioner.multigridBlocks[block],
               std::span<const double>(&values[offset],
                                       preconditioner.blockSize),
@@ -1124,6 +1290,11 @@ inline std::vector<double> estimateSpectralLocalReactionDiagonal(
   if (problem.unknownMap.transform) {
     assembled = applySpectralUnknownMap(grid, assembled, problem.unknownMap,
                                         problem.unknownMapParams);
+  }
+  if (problem.fieldProjector.projectDerivatives) {
+    problem.fieldProjector.projectDerivatives(
+        &grid, &assembled, problem.fieldProjector.userData);
+    validateSpectralDerivativeBundle(grid, assembled);
   }
   if (problem.derivativeMap.transform) {
     assembled = applySpectralDerivativeMap(
@@ -1322,7 +1493,7 @@ inline SpectralAxis coarsenSpectralMultigridAxis(const SpectralAxis &fine) {
   }
 
   const std::size_t coarseSize =
-      std::min(fine.size(), std::max<std::size_t>(3, (fine.size() + 1) / 2));
+      std::min(fine.size(), std::max<std::size_t>(4, (fine.size() + 1) / 2));
   if (fine.size() < 2)
     throw std::runtime_error(
         "spectral multigrid Chebyshev axis requires at least two points");
@@ -1349,58 +1520,110 @@ makeSpectralMultigridCoarseGrid(const SpectralGrid3D &fine) {
   return coarse;
 }
 
-inline std::vector<double> buildSpectralGalerkinCoarseMatrix(
-    const SpectralSparseMatrix &fineMatrix,
-    const SpectralTensorGridTransfer3D &transfer) {
-  const std::size_t coarseSize = transfer.coarseExtents[0] *
-                                 transfer.coarseExtents[1] *
-                                 transfer.coarseExtents[2];
-  if (fineMatrix.size != transfer.fineExtents[0] * transfer.fineExtents[1] *
-                             transfer.fineExtents[2] ||
-      coarseSize == 0)
-    throw std::runtime_error("spectral Galerkin transfer size mismatch");
-
-  std::vector<double> dense(coarseSize * coarseSize, 0.0);
-  std::vector<double> coarseBasis(coarseSize, 0.0);
-  for (std::size_t column = 0; column < coarseSize; ++column) {
-    coarseBasis[column] = 1.0;
-    const std::vector<double> fineBasis =
-        prolongSpectralField(transfer, coarseBasis);
-    std::vector<double> fineApplied;
-    if (!applySpectralSparseMatrix(fineMatrix, fineBasis, fineApplied))
-      throw std::runtime_error("spectral Galerkin fine operator failed");
-    const std::vector<double> coarseApplied =
-        restrictSpectralField(transfer, fineApplied);
-    for (std::size_t row = 0; row < coarseSize; ++row)
-      dense[row * coarseSize + column] = coarseApplied[row];
-    coarseBasis[column] = 0.0;
-  }
-  if (!spectralVectorIsFinite(dense))
-    throw std::runtime_error("spectral Galerkin operator is nonfinite");
-  return dense;
+inline bool canCoarsenSpectralMultigridGrid(const SpectralGrid3D &grid) {
+  const std::size_t coarseSize =
+      coarsenSpectralMultigridAxis(grid.axis(0)).size() *
+      coarsenSpectralMultigridAxis(grid.axis(1)).size() *
+      coarsenSpectralMultigridAxis(grid.axis(2)).size();
+  return coarseSize < grid.size();
 }
 
-inline SpectralTwoGridPreconditionerBlock
-buildSpectralMappedFiniteDifferenceTwoGrid(
+inline void appendSpectralMappedFiniteDifferenceMultigridLevel(
+    const SpectralResidualProblem &problem, double shift,
+    double pivotTolerance, std::span<const double> localReactionDiagonal,
+    int maxLevels, std::size_t coarsestPoints,
+    SpectralMultigridPreconditionerBlock &multigrid) {
+  const SpectralGrid3D &grid = requireSpectralResidualGrid(problem);
+  SpectralMultigridPreconditionerLevel level;
+  level.matrix = buildSpectralMappedFiniteDifferenceLaplacianShift(
+      problem, shift, pivotTolerance, localReactionDiagonal);
+
+  const bool reachedLevelLimit =
+      multigrid.levels.size() + 1 >= static_cast<std::size_t>(maxLevels);
+  const bool terminal = level.matrix.size <= coarsestPoints ||
+                        reachedLevelLimit ||
+                        !canCoarsenSpectralMultigridGrid(grid);
+  if (terminal) {
+    multigrid.levels.push_back(std::move(level));
+    return;
+  }
+
+  SpectralGrid3D coarseGrid = makeSpectralMultigridCoarseGrid(grid);
+  level.transferToCoarse =
+      buildSpectralTensorGridTransfer(grid, coarseGrid);
+  std::vector<double> coarseReaction;
+  if (!localReactionDiagonal.empty()) {
+    coarseReaction =
+        restrictSpectralField(level.transferToCoarse, localReactionDiagonal);
+  }
+  multigrid.levels.push_back(std::move(level));
+
+  SpectralResidualProblem coarseProblem = problem;
+  coarseProblem.grid = &coarseGrid;
+  appendSpectralMappedFiniteDifferenceMultigridLevel(
+      coarseProblem, shift, pivotTolerance, coarseReaction, maxLevels,
+      coarsestPoints, multigrid);
+}
+
+inline SpectralMultigridPreconditionerBlock
+buildSpectralMappedFiniteDifferenceMultigrid(
     const SpectralResidualProblem &problem, double shift,
     double pivotTolerance,
-    std::span<const double> localReactionDiagonal = {}) {
-  const SpectralGrid3D &fineGrid = requireSpectralResidualGrid(problem);
-  SpectralGrid3D coarseGrid = makeSpectralMultigridCoarseGrid(fineGrid);
-
-  SpectralTwoGridPreconditionerBlock multigrid;
-  multigrid.fineMatrix =
-      buildSpectralMappedFiniteDifferenceLaplacianShift(problem, shift,
-                                                         pivotTolerance,
-                                                         localReactionDiagonal);
-  multigrid.transfer =
-      buildSpectralTensorGridTransfer(fineGrid, coarseGrid);
-  multigrid.coarseDenseMatrix = buildSpectralGalerkinCoarseMatrix(
-      multigrid.fineMatrix, multigrid.transfer);
-  if (!factorDenseLinearSystem(multigrid.coarseDenseMatrix, pivotTolerance,
-                               multigrid.coarseFactorization))
+    std::span<const double> localReactionDiagonal = {}, int maxLevels = 8,
+    std::size_t coarsestPoints = 512) {
+  if (maxLevels <= 0 || coarsestPoints == 0)
+    throw std::runtime_error("spectral multigrid hierarchy limit is invalid");
+  SpectralMultigridPreconditionerBlock multigrid;
+  appendSpectralMappedFiniteDifferenceMultigridLevel(
+      problem, shift, pivotTolerance, localReactionDiagonal, maxLevels,
+      coarsestPoints, multigrid);
+  const SpectralSparseMatrix &coarsestMatrix =
+      multigrid.levels.back().matrix;
+  const std::size_t coarsestSize = coarsestMatrix.size;
+  multigrid.coarsestDenseMatrix.assign(coarsestSize * coarsestSize, 0.0);
+  // Preserve the original exact Galerkin solve for a two-level hierarchy.
+  // Repeated spectral RAP develops numerically dangerous near-null directions,
+  // so deeper hierarchies terminate with the mapped sparse rediscretization.
+  if (multigrid.levels.size() == 2) {
+    std::vector<double> basis(coarsestSize, 0.0);
+    for (std::size_t column = 0; column < coarsestSize; ++column) {
+      basis[column] = 1.0;
+      std::vector<double> applied;
+      if (!applySpectralMultigridOperatorAtLevel(multigrid, 1, basis,
+                                                  applied)) {
+        throw std::runtime_error(
+            "spectral multigrid two-level Galerkin operator failed");
+      }
+      for (std::size_t row = 0; row < coarsestSize; ++row) {
+        multigrid.coarsestDenseMatrix[row * coarsestSize + column] =
+            applied[row];
+      }
+      basis[column] = 0.0;
+    }
+  } else {
+    for (std::size_t row = 0; row < coarsestSize; ++row) {
+      if (coarsestMatrix.rowOffsets[row] >
+              coarsestMatrix.rowOffsets[row + 1] ||
+          coarsestMatrix.rowOffsets[row + 1] > coarsestMatrix.values.size()) {
+        throw std::runtime_error(
+            "spectral multigrid coarsest sparse row is invalid");
+      }
+      for (std::size_t entry = coarsestMatrix.rowOffsets[row];
+           entry < coarsestMatrix.rowOffsets[row + 1]; ++entry) {
+        const std::size_t column = coarsestMatrix.columns[entry];
+        if (column >= coarsestSize)
+          throw std::runtime_error(
+              "spectral multigrid coarsest sparse column is invalid");
+        multigrid.coarsestDenseMatrix[row * coarsestSize + column] +=
+            coarsestMatrix.values[entry];
+      }
+    }
+  }
+  if (!factorDenseLinearSystem(multigrid.coarsestDenseMatrix, pivotTolerance,
+                               multigrid.coarsestFactorization)) {
     throw std::runtime_error(
-        "spectral multigrid coarse factorization failed");
+        "spectral multigrid coarsest factorization failed");
+  }
   return multigrid;
 }
 
@@ -1530,9 +1753,11 @@ inline bool buildSpectralScalarPreconditioner(
                                                     options.jvpOptions)
             : std::vector<double>{};
     preconditioner.multigridBlocks.push_back(
-        buildSpectralMappedFiniteDifferenceTwoGrid(
+        buildSpectralMappedFiniteDifferenceMultigrid(
             problem, options.preconditionerLaplacianShift,
-            options.preconditionerPivotTolerance, localReaction));
+            options.preconditionerPivotTolerance, localReaction,
+            options.preconditionerMultigridMaxLevels,
+            options.preconditionerMultigridCoarsestPoints));
     return true;
   }
   if (options.gmresPreconditioner ==
@@ -2093,11 +2318,13 @@ inline bool buildSpectralSystemPreconditioner(
                     options.jvpOptions)
               : std::vector<double>{};
       preconditioner.multigridBlocks[equation.unknownIndex] =
-          buildSpectralMappedFiniteDifferenceTwoGrid(
+          buildSpectralMappedFiniteDifferenceMultigrid(
               equation.problem,
               spectralPreconditionerShiftForBlock(options,
                                                   equation.unknownIndex),
-              options.preconditionerPivotTolerance, localReaction);
+              options.preconditionerPivotTolerance, localReaction,
+              options.preconditionerMultigridMaxLevels,
+              options.preconditionerMultigridCoarsestPoints);
     }
     return true;
   }
@@ -2390,7 +2617,9 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       (options.gmresPreconditioner ==
            SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid &&
        (options.preconditionerMultigridPreSweeps <= 0 ||
-        options.preconditionerMultigridPostSweeps <= 0))) {
+        options.preconditionerMultigridPostSweeps <= 0 ||
+        options.preconditionerMultigridMaxLevels <= 0 ||
+        options.preconditionerMultigridCoarsestPoints == 0))) {
     result.status = SpectralEllipticSolveStatus::InvalidInput;
     return result;
   }
@@ -2545,7 +2774,9 @@ inline SpectralEllipticSolveResult solveSpectralNewton(
       (options.gmresPreconditioner ==
            SpectralPreconditionerKind::MappedFiniteDifferenceMultigrid &&
        (options.preconditionerMultigridPreSweeps <= 0 ||
-        options.preconditionerMultigridPostSweeps <= 0))) {
+        options.preconditionerMultigridPostSweeps <= 0 ||
+        options.preconditionerMultigridMaxLevels <= 0 ||
+        options.preconditionerMultigridCoarsestPoints == 0))) {
     result.status = SpectralEllipticSolveStatus::InvalidInput;
     return result;
   }

@@ -77,7 +77,7 @@ binary-black-hole puncture data:
 - an exact forward-mode Jacobian-vector kernel generated from the same DSL
   residual, with finite differences retained as a runtime fallback;
 - bounded-memory matrix-free Newton-FGMRES with mapped sparse one-level and
-  Jacobian-aware geometric two-grid preconditioners;
+  Jacobian-aware recursive geometric multigrid preconditioners;
 - refinement, ADM, puncture-mass, symmetry, and axis-regularity diagnostics;
 - an unequal-mass published-data comparison and Cartesian BSSN handoff;
 - a fully declarative spectral case: physical parameters, resolution, maps,
@@ -86,7 +86,7 @@ binary-black-hole puncture data:
   flexible-GMRES updates.
 
 The provided QC0 case converges on its validated `14 x 14 x 24` spectral grid
-with the geometric two-grid preconditioner and exports a Cartesian `z=0` BSSN
+with the geometric multigrid preconditioner and exports a Cartesian `z=0` BSSN
 slice. A `16 x 16 x 28` solve also reaches the raw and projected acceptance
 criteria, but is retained as a convergence probe rather than the default. This
 is a genuine nonlinear physical solve, not a manufactured Poisson example.
@@ -101,9 +101,12 @@ checkpoint.
   `16 x 16 x 28`, the projected-out L2 norm is below `5e-13`. The projected
   residual floor still rises at the two finest probes, so convergence beyond
   this range and every puncture/axis regularity mode remain to be established.
-- The geometric preconditioner is still a two-grid method with a dense coarse
-  LU. A recursive or matrix-free coarse hierarchy is required before grids in
-  the `32 x 32 x 48` range are practical.
+- The geometric preconditioner now builds a recursive hierarchy and limits the
+  dense LU to a terminal grid of at most 512 points. This removes the first
+  coarse-memory barrier, but a `20 x 20 x 32` probe currently reaches the
+  16-step Newton limit at a `9.3e-8` residual because of the puncture accuracy
+  floor, not the linear solver. Production-resolution continuation is
+  therefore still incomplete.
 - High-resolution convergence, Fourier-mode regularity at axes/punctures, and
   spinning/unequal-mass validation are incomplete.
 - Apparent-horizon masses and independent surface-integral charge checks are
@@ -258,7 +261,7 @@ spectral solves, physical benchmarks, and handoff checks. Files containing
 The next priorities are:
 
 1. Make the three-dimensional solve robust at production-oriented resolutions
-   with a recursive coarse hierarchy, tighter puncture regularity control, and
+   with coarse-to-fine continuation, tighter puncture regularity control, and
    convergence studies beyond `16 x 16 x 28`.
 2. Add independent physical validation: production-resolution unequal-mass
    and spinning cases, apparent horizons, and surface-integral diagnostics.
